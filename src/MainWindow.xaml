@@ -1,0 +1,545 @@
+<Window x:Class="GamerTool.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:GamerTool.ViewModels"
+        Title="Gamer Tool"
+        Width="1000" Height="660"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        AllowsTransparency="False"
+        Background="{StaticResource BackgroundBrush}"
+        WindowStartupLocation="CenterScreen"
+        PreviewKeyDown="Window_PreviewKeyDown">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="36"/>
+            <RowDefinition Height="48"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="26"/>
+        </Grid.RowDefinitions>
+
+        <!-- ===================== TITLE BAR ===================== -->
+        <Grid Grid.Row="0" Background="{StaticResource CardBrush}" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="GAMER TOOL" Foreground="{StaticResource NeonCyanBrush}"
+                       FontFamily="Segoe UI Variable, Segoe UI" FontWeight="Bold" FontSize="13"
+                       VerticalAlignment="Center" Margin="14,0,0,0"/>
+            <Button Grid.Column="1" Content="_" Style="{StaticResource TitleBarGlyphButtonStyle}" Click="MinimizeButton_Click"/>
+            <Button Grid.Column="2" Content="&#x2715;" Style="{StaticResource TitleBarCloseButtonStyle}" Click="CloseButton_Click"/>
+        </Grid>
+
+        <!-- ===================== NAV TABS ===================== -->
+        <Border Grid.Row="1" Background="{StaticResource BackgroundBrush}" BorderBrush="{StaticResource BorderBrush2}" BorderThickness="0,0,0,1">
+            <StackPanel Orientation="Horizontal">
+                <Button Content="DISPLAY" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppTab.Display}">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource NavTabButtonBaseStyle}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Display}">
+                                    <Setter Property="Foreground" Value="{StaticResource NeonCyanBrush}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+                <Button Content="AUDIO" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppTab.Audio}">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource NavTabButtonBaseStyle}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Audio}">
+                                    <Setter Property="Foreground" Value="{StaticResource NeonCyanBrush}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+                <Button Content="COMBOS" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppTab.Combos}">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource NavTabButtonBaseStyle}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Combos}">
+                                    <Setter Property="Foreground" Value="{StaticResource NeonCyanBrush}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+                <Button Content="SETTINGS" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppTab.Settings}">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource NavTabButtonBaseStyle}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Settings}">
+                                    <Setter Property="Foreground" Value="{StaticResource NeonCyanBrush}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+            </StackPanel>
+        </Border>
+
+        <!-- ===================== TAB CONTENT ===================== -->
+        <Grid Grid.Row="2" Margin="20">
+
+            <!-- ---------- DISPLAY TAB ---------- -->
+            <Grid x:Name="DisplayTabContent">
+                <Grid.Style>
+                    <Style TargetType="Grid">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Display}">
+                                <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Grid.Style>
+
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="300"/>
+                    <ColumnDefinition Width="20"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Preset cards -->
+                <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <TextBlock Text="DISPLAY PRESETS" Style="{StaticResource HeaderTextStyle}"/>
+                        <TextBlock Style="{StaticResource BodyTextStyle}" Margin="0,0,0,10">
+                            <Run Text="Active: "/><Run Text="{Binding SelectedDisplayPreset.Name, Mode=OneWay}" FontWeight="Bold" Foreground="{StaticResource ActiveGreenBrush}"/>
+                        </TextBlock>
+                        <ItemsControl ItemsSource="{Binding DisplayPresets}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource CardBorderStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Name}" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,8"/>
+                                            <StackPanel Orientation="Horizontal">
+                                                <Button Content="Select" Style="{StaticResource NeonButtonStyle}" Padding="10,4" FontSize="11"
+                                                        Command="{Binding DataContext.SelectDisplayPresetCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}" Margin="0,0,6,0"/>
+                                                <Button Content="Test" Style="{StaticResource SecondaryButtonStyle}"
+                                                        Command="{Binding DataContext.TestDisplayPresetCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}" Margin="0,0,6,0"/>
+                                                <Button Content="Hotkey" Style="{StaticResource SecondaryButtonStyle}"
+                                                        Command="{Binding DataContext.RecordDisplayHotkeyCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"/>
+                                            </StackPanel>
+                                            <TextBlock Margin="0,6,0,0" FontSize="10">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}"/>
+                                                        <Setter Property="Text" Value="No hotkey bound"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding HotkeyId}" Value="{x:Null}">
+                                                                <Setter Property="Text" Value="No hotkey bound"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Sliders + preview -->
+                <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <TextBlock Text="LIVE PREVIEW" Style="{StaticResource HeaderTextStyle}"/>
+                        <Border Style="{StaticResource CardBorderStyle}" Padding="4" HorizontalAlignment="Left">
+                            <Image x:Name="PreviewImage" Width="512" Height="288" Stretch="Uniform" SnapsToDevicePixels="True"/>
+                        </Border>
+
+                        <TextBlock Text="ADJUSTMENTS" Style="{StaticResource HeaderTextStyle}" Margin="0,10,0,8"/>
+                        <Border Style="{StaticResource CardBorderStyle}">
+                            <StackPanel>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="120"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="50"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Gamma" Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center"/>
+                                    <Slider Grid.Column="1" Style="{StaticResource GlowSliderStyle}" Minimum="0.5" Maximum="3.0" Value="{Binding Gamma, Mode=TwoWay}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding Gamma, StringFormat={}{0:0.00}}" Style="{StaticResource ValueTextStyle}" VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="120"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="50"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Contrast" Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center"/>
+                                    <Slider Grid.Column="1" Style="{StaticResource GlowSliderStyle}" Minimum="0.5" Maximum="2.0" Value="{Binding Contrast, Mode=TwoWay}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding Contrast, StringFormat={}{0:0.00}}" Style="{StaticResource ValueTextStyle}" VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="120"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="50"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Shadow Lift" Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center"/>
+                                    <Slider Grid.Column="1" Style="{StaticResource GlowSliderStyle}" Minimum="0.0" Maximum="0.5" Value="{Binding ShadowLift, Mode=TwoWay}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding ShadowLift, StringFormat={}{0:0.00}}" Style="{StaticResource ValueTextStyle}" VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="120"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="50"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Brightness" Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center"/>
+                                    <Slider Grid.Column="1" Style="{StaticResource GlowSliderStyle}" Minimum="-0.25" Maximum="0.25" Value="{Binding BrightnessOffset, Mode=TwoWay}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding BrightnessOffset, StringFormat={}{0:0.00}}" Style="{StaticResource ValueTextStyle}" VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="120"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="50"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Red Gain" Foreground="#FF5C5C" FontSize="13" VerticalAlignment="Center"/>
+                                    <Slider Grid.Column="1" Style="{StaticResource GlowSliderStyle}" Minimum="0.0" Maximum="1.5" Value="{Binding GainRed, Mode=TwoWay}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding GainRed, StringFormat={}{0:0.00}}" Style="{StaticResource ValueTextStyle}" VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="120"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="50"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Green Gain" Foreground="#5CFF5C" FontSize="13" VerticalAlignment="Center"/>
+                                    <Slider Grid.Column="1" Style="{StaticResource GlowSliderStyle}" Minimum="0.0" Maximum="1.5" Value="{Binding GainGreen, Mode=TwoWay}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding GainGreen, StringFormat={}{0:0.00}}" Style="{StaticResource ValueTextStyle}" VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="120"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="50"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Blue Gain" Foreground="#5C9CFF" FontSize="13" VerticalAlignment="Center"/>
+                                    <Slider Grid.Column="1" Style="{StaticResource GlowSliderStyle}" Minimum="0.0" Maximum="1.5" Value="{Binding GainBlue, Mode=TwoWay}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding GainBlue, StringFormat={}{0:0.00}}" Style="{StaticResource ValueTextStyle}" VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Button Content="Save Preset" Style="{StaticResource NeonButtonStyle}" HorizontalAlignment="Left" Margin="0,10,0,0"
+                                        Command="{Binding SaveDisplayPresetCommand}"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+
+            <!-- ---------- AUDIO TAB ---------- -->
+            <Grid x:Name="AudioTabContent">
+                <Grid.Style>
+                    <Style TargetType="Grid">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Audio}">
+                                <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Grid.Style>
+
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="300"/>
+                    <ColumnDefinition Width="20"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Preset cards -->
+                <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <TextBlock Text="AUDIO PRESETS" Style="{StaticResource HeaderTextStyle}"/>
+                        <TextBlock Style="{StaticResource BodyTextStyle}" Margin="0,0,0,6">
+                            <Run Text="Active: "/><Run Text="{Binding SelectedAudioPreset.Name, Mode=OneWay}" FontWeight="Bold" Foreground="{StaticResource ActiveGreenBrush}"/>
+                        </TextBlock>
+                        <TextBlock Margin="0,0,0,10">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock" BasedOn="{StaticResource BodyTextStyle}">
+                                    <Setter Property="Text" Value="EqualizerAPO not detected - using native Windows loudness EQ only."/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsEqualizerApoDetected}" Value="True">
+                                            <Setter Property="Text" Value="EqualizerAPO detected - full 10-band parametric EQ is active."/>
+                                            <Setter Property="Foreground" Value="{StaticResource ActiveGreenBrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <ItemsControl ItemsSource="{Binding AudioPresets}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource CardBorderStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Name}" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,8"/>
+                                            <StackPanel Orientation="Horizontal">
+                                                <Button Content="Select" Style="{StaticResource NeonButtonStyle}" Padding="10,4" FontSize="11"
+                                                        Command="{Binding DataContext.SelectAudioPresetCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}" Margin="0,0,6,0"/>
+                                                <Button Content="Test" Style="{StaticResource SecondaryButtonStyle}"
+                                                        Command="{Binding DataContext.TestAudioPresetCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}" Margin="0,0,6,0"/>
+                                                <Button Content="Hotkey" Style="{StaticResource SecondaryButtonStyle}"
+                                                        Command="{Binding DataContext.RecordAudioHotkeyCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- 10-band EQ + zone legend -->
+                <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <TextBlock Text="10-BAND GRAPHIC EQ" Style="{StaticResource HeaderTextStyle}"/>
+                        <Border Style="{StaticResource CardBorderStyle}">
+                            <StackPanel>
+                                <ItemsControl ItemsSource="{Binding BandGains}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <UniformGrid Rows="1" Columns="10" Height="220"/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="4,0">
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="*"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                </Grid.RowDefinitions>
+
+                                                <TextBlock Grid.Row="0" Text="{Binding GainDb, StringFormat={}{0:+0.0;-0.0;0.0}}"
+                                                           HorizontalAlignment="Center" FontSize="10" Foreground="{StaticResource NeonCyanBrush}" FontFamily="Consolas"/>
+
+                                                <Border Grid.Row="1" CornerRadius="3" Opacity="0.22">
+                                                    <Border.Background>
+                                                        <SolidColorBrush Color="{Binding ZoneColorHex}"/>
+                                                    </Border.Background>
+                                                    <Slider Style="{StaticResource VerticalGlowSliderStyle}" Minimum="-12" Maximum="12"
+                                                            Value="{Binding GainDb, Mode=TwoWay}" Margin="0,6"/>
+                                                </Border>
+
+                                                <TextBlock Grid.Row="2" Text="{Binding FrequencyLabel}" HorizontalAlignment="Center"
+                                                           FontSize="10" Foreground="{StaticResource MutedTextBrush}" Margin="0,4,0,0"/>
+                                                <TextBlock Grid.Row="3" Text="{Binding ZoneLabel}" HorizontalAlignment="Center"
+                                                           FontSize="9" Foreground="{StaticResource MutedTextBrush}" FontStyle="Italic"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                                    <TextBlock Text="Native Loudness Equalization" Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <ToggleButton Style="{StaticResource ToggleSwitchStyle}" IsChecked="{Binding EnableNativeLoudness, Mode=TwoWay}"/>
+                                </StackPanel>
+
+                                <Button Content="Save Preset" Style="{StaticResource NeonButtonStyle}" HorizontalAlignment="Left" Margin="0,14,0,0"
+                                        Command="{Binding SaveAudioPresetCommand}"/>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="FREQUENCY ZONES" Style="{StaticResource HeaderTextStyle}" Margin="0,16,0,8"/>
+                        <Border Style="{StaticResource CardBorderStyle}">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                    <Ellipse Width="10" Height="10" Fill="#FF4136" Margin="0,0,8,0"/>
+                                    <TextBlock Style="{StaticResource BodyTextStyle}" Text="Sub-Bass (20-60 Hz) - Explosions &amp; Physical Screen Shake"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                    <Ellipse Width="10" Height="10" Fill="#FF851B" Margin="0,0,8,0"/>
+                                    <TextBlock Style="{StaticResource BodyTextStyle}" Text="Bass (60-250 Hz) - Gunfire Thud &amp; Engine Roars"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                    <Ellipse Width="10" Height="10" Fill="#FFDC00" Margin="0,0,8,0"/>
+                                    <TextBlock Style="{StaticResource BodyTextStyle}" Text="Low-Mids (250-500 Hz) - Sound Warmth &amp; Environmental Body"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                    <Ellipse Width="10" Height="10" Fill="#2ECC40" Margin="0,0,8,0"/>
+                                    <TextBlock Style="{StaticResource BodyTextStyle}" Text="Mids (500-2000 Hz) - Teammate Voice Chat &amp; Game Dialogue"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                    <Ellipse Width="10" Height="10" Fill="#00E5FF" Margin="0,0,8,0"/>
+                                    <TextBlock Style="{StaticResource BodyTextStyle}" Text="Presence (2000-6000 Hz) - Footsteps, Crawling &amp; Pin Pulls"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <Ellipse Width="10" Height="10" Fill="#B10DC9" Margin="0,0,8,0"/>
+                                    <TextBlock Style="{StaticResource BodyTextStyle}" Text="Treble (6000-16000 Hz) - Bullet Snaps &amp; Breaking Glass"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+
+            <!-- ---------- COMBOS TAB ---------- -->
+            <Grid x:Name="CombosTabContent">
+                <Grid.Style>
+                    <Style TargetType="Grid">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Combos}">
+                                <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Grid.Style>
+
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel MaxWidth="640">
+                        <TextBlock Text="CREATE A COMBO" Style="{StaticResource HeaderTextStyle}"/>
+                        <TextBlock Style="{StaticResource BodyTextStyle}" Margin="0,0,0,10"
+                                   Text="Pair one Display preset with one Audio preset behind a single master hotkey."/>
+                        <Border Style="{StaticResource CardBorderStyle}">
+                            <StackPanel>
+                                <TextBlock Text="Combo Name" Style="{StaticResource BodyTextStyle}" Margin="0,0,0,4"/>
+                                <TextBox Style="{StaticResource DarkTextBoxStyle}" Text="{Binding NewComboName, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,10"/>
+
+                                <TextBlock Text="Display Preset" Style="{StaticResource BodyTextStyle}" Margin="0,0,0,4"/>
+                                <ComboBox Style="{StaticResource DarkComboBoxStyle}" ItemsSource="{Binding DisplayPresets}" DisplayMemberPath="Name"
+                                          SelectedItem="{Binding NewComboDisplayPreset, Mode=TwoWay}" Margin="0,0,0,10"/>
+
+                                <TextBlock Text="Audio Preset" Style="{StaticResource BodyTextStyle}" Margin="0,0,0,4"/>
+                                <ComboBox Style="{StaticResource DarkComboBoxStyle}" ItemsSource="{Binding AudioPresets}" DisplayMemberPath="Name"
+                                          SelectedItem="{Binding NewComboAudioPreset, Mode=TwoWay}" Margin="0,0,0,10"/>
+
+                                <Button Content="Create Combo" Style="{StaticResource NeonButtonStyle}" HorizontalAlignment="Left"
+                                        Command="{Binding CreateComboCommand}"/>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="YOUR COMBOS" Style="{StaticResource HeaderTextStyle}" Margin="0,20,0,8"/>
+                        <ItemsControl ItemsSource="{Binding ComboPresets}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource CardBorderStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Name}" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,4"/>
+                                            <TextBlock Style="{StaticResource BodyTextStyle}" Margin="0,0,0,8">
+                                                <Run Text="Display: "/><Run Text="{Binding DisplayPresetName, Mode=OneWay}" Foreground="{StaticResource PrimaryTextBrush}"/>
+                                                <Run Text="   Audio: "/><Run Text="{Binding AudioPresetName, Mode=OneWay}" Foreground="{StaticResource PrimaryTextBrush}"/>
+                                            </TextBlock>
+                                            <StackPanel Orientation="Horizontal">
+                                                <Button Content="Activate" Style="{StaticResource NeonButtonStyle}" Padding="10,4" FontSize="11"
+                                                        Command="{Binding DataContext.ActivateComboCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}" Margin="0,0,6,0"/>
+                                                <Button Content="Hotkey" Style="{StaticResource SecondaryButtonStyle}"
+                                                        Command="{Binding DataContext.RecordComboHotkeyCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}" Margin="0,0,6,0"/>
+                                                <Button Content="Delete" Style="{StaticResource DangerButtonStyle}"
+                                                        Command="{Binding DataContext.DeleteComboCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+
+            <!-- ---------- SETTINGS TAB ---------- -->
+            <Grid x:Name="SettingsTabContent">
+                <Grid.Style>
+                    <Style TargetType="Grid">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Settings}">
+                                <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Grid.Style>
+
+                <StackPanel MaxWidth="560" HorizontalAlignment="Left">
+                    <TextBlock Text="GENERAL" Style="{StaticResource HeaderTextStyle}"/>
+                    <Border Style="{StaticResource CardBorderStyle}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Run on Windows Startup" Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <ToggleButton Style="{StaticResource ToggleSwitchStyle}" IsChecked="{Binding RunOnStartup, Mode=TwoWay}"/>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="EMERGENCY RESET" Style="{StaticResource HeaderTextStyle}" Margin="0,16,0,8"/>
+                    <Border Style="{StaticResource CardBorderStyle}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource BodyTextStyle}" Margin="0,0,0,10"
+                                       Text="Instantly restores factory display gamma and clears any active audio EQ. This hotkey is always active, even while GamerTool is minimized to the tray, and cannot be reassigned."/>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Panic Hotkey:" Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <TextBlock Text="{Binding PanicHotkeyLabel}" Style="{StaticResource ValueTextStyle}" VerticalAlignment="Center" Margin="0,0,20,0"/>
+                                <Button Content="Reset Now" Style="{StaticResource DangerButtonStyle}" Command="{Binding PanicResetCommand}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="FALLBACK &amp; DIAGNOSTICS" Style="{StaticResource HeaderTextStyle}" Margin="0,16,0,8"/>
+                    <Border Style="{StaticResource CardBorderStyle}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource BodyTextStyle}" Margin="0,0,0,6"
+                                       Text="Your factory gamma ramp is captured at every launch and stored at %LocalAppData%\GamerTool\factory_ramp.bin. If GamerTool exits unexpectedly while a preset is active, it is restored automatically the next time GamerTool starts."/>
+                            <TextBlock Style="{StaticResource BodyTextStyle}"
+                                       Text="Diagnostic logs for crash-recovery events are written to %LocalAppData%\GamerTool\diagnostics.log."/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+
+        </Grid>
+
+        <!-- ===================== HOTKEY RECORDING OVERLAY ===================== -->
+        <Border Grid.Row="0" Grid.RowSpan="4" Background="#CC000000"
+                Visibility="{Binding IsRecordingHotkey, Converter={StaticResource BoolToVisConverter}}">
+            <Border Style="{StaticResource CardBorderStyle}" HorizontalAlignment="Center" VerticalAlignment="Center" Width="380">
+                <StackPanel>
+                    <TextBlock Text="RECORDING HOTKEY" Style="{StaticResource HeaderTextStyle}" HorizontalAlignment="Center"/>
+                    <TextBlock Text="{Binding RecordingTargetLabel}" Style="{StaticResource ValueTextStyle}" HorizontalAlignment="Center" Margin="0,0,0,10"/>
+                    <TextBlock Style="{StaticResource BodyTextStyle}" TextAlignment="Center" Margin="0,0,0,14"
+                               Text="Press a modifier (Ctrl / Alt / Shift / Win) plus a key. Press Escape or click Cancel to stop."/>
+                    <Button Content="Cancel" Style="{StaticResource SecondaryButtonStyle}" HorizontalAlignment="Center" Click="CancelHotkeyRecording_Click"/>
+                </StackPanel>
+            </Border>
+        </Border>
+
+        <!-- ===================== TEST MODE BANNER ===================== -->
+        <Border Grid.Row="1" Background="{StaticResource ActiveGreenBrush}" Opacity="0.9"
+                Visibility="{Binding IsTestModeActive, Converter={StaticResource BoolToVisConverter}}"
+                HorizontalAlignment="Right" Margin="0,0,20,0" Padding="10,4" CornerRadius="4">
+            <TextBlock Foreground="Black" FontWeight="Bold" FontSize="11">
+                <Run Text="TESTING - reverting in "/><Run Text="{Binding TestModeSecondsRemaining, Mode=OneWay}"/><Run Text="s"/>
+            </TextBlock>
+        </Border>
+
+        <!-- ===================== STATUS BAR ===================== -->
+        <Border Grid.Row="3" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush2}" BorderThickness="0,1,0,0">
+            <TextBlock Text="{Binding StatusMessage}" Foreground="{StaticResource MutedTextBrush}" FontSize="11"
+                       VerticalAlignment="Center" Margin="14,0,0,0"/>
+        </Border>
+
+    </Grid>
+</Window>

@@ -1,0 +1,62 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Zero-dependency, single-file, self-contained WPF executable.
+    No PackageReference entries anywhere in this file, by design - every native
+    capability (gamma ramp, hotkeys, tray icon, CoreAudio, registry) is reached
+    via raw P/Invoke / COM interop in Core/NativeMethods.cs, not third-party
+    NuGet wrappers.
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>GamerTool</AssemblyName>
+    <RootNamespace>GamerTool</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- Single-file, self-contained publish target -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+
+    <!--
+      COM interop (IMMDeviceEnumerator / IPropertyStore / IPolicyConfig) does not
+      trim-safely - explicitly disabled and documented here rather than silently
+      omitted, so a future contributor never has to rediscover this the hard way
+      when native loudness-EQ silently stops activating in a trimmed build.
+    -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishReadyToRun>false</PublishReadyToRun>
+
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ApplicationIcon>Assets\Icons\app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <Version>1.0.0</Version>
+    <Authors>GamerTool</Authors>
+    <Product>Gamer Tool</Product>
+  </PropertyGroup>
+
+  <!--
+    These are Content (copied next to the published exe), not Resource
+    (embedded inside the assembly as pack URIs) - TrayManager.cs loads
+    tray_idle.ico/tray_active.ico from a real filesystem path via the raw
+    LoadImage P/Invoke at runtime, which requires the .ico files to physically
+    exist on disk alongside GamerTool.exe after publish, not be baked into
+    the assembly's resource stream.
+  -->
+  <ItemGroup>
+    <Content Include="Assets\Icons\tray_active.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\Icons\tray_idle.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\Icons\ui\*.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\PreviewScenes\*.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,95 @@
+name: Build and Release
+
+# Builds a single-file, self-contained win-x64 GamerTool.exe on every push to
+# main and republishes it as the "latest" GitHub release, overwriting whatever
+# was there before. Can also be triggered manually from the Actions tab.
+
+on:
+  push:
+    branches: [ "main" ]
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # required to delete/create releases and tags with GITHUB_TOKEN
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  PROJECT_PATH: 'GamerTool.csproj'
+  RUNTIME_ID: 'win-x64'
+  CONFIGURATION: 'Release'
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }} SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore dependencies
+        # GamerTool ships zero NuGet packages, but "dotnet restore" still
+        # resolves the SDK/runtime pack references for the win-x64 self-contained
+        # publish below, so this step is not a no-op.
+        run: dotnet restore "${{ env.PROJECT_PATH }}"
+
+      - name: Publish single-file self-contained executable
+        run: >
+          dotnet publish "${{ env.PROJECT_PATH }}"
+          -c ${{ env.CONFIGURATION }}
+          -r ${{ env.RUNTIME_ID }}
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:PublishTrimmed=false
+          -o publish
+
+      - name: Verify build output
+        shell: pwsh
+        run: |
+          $exePath = Join-Path "publish" "GamerTool.exe"
+          if (-not (Test-Path $exePath)) {
+            Write-Error "Expected build output not found at $exePath"
+            exit 1
+          }
+          $sizeMb = [math]::Round((Get-Item $exePath).Length / 1MB, 1)
+          Write-Host "Built GamerTool.exe ($sizeMb MB)"
+
+      - name: Stage release asset
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          Copy-Item "publish/GamerTool.exe" "release-assets/GamerTool.exe"
+
+      - name: Upload build artifact (CI history)
+        uses: actions/upload-artifact@v4
+        with:
+          name: GamerTool-${{ github.sha }}
+          path: publish/GamerTool.exe
+          retention-days: 14
+
+      - name: Remove previous "latest" release and tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || echo "No previous 'latest' release to remove - continuing."
+
+      - name: Create "latest" release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create latest \
+            release-assets/GamerTool.exe \
+            --title "Gamer Tool (latest build)" \
+            --notes "Automated build from commit ${{ github.sha }} on branch ${{ github.ref_name }}. This release is overwritten on every push to main - see the commit history for what changed." \
+            --target "${{ github.sha }}"
