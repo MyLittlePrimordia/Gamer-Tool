@@ -6,6 +6,7 @@
 #include <ObjBase.h>
 #include <Unknwn.h>
 #include <mmreg.h>
+#include <ks.h>
 #include <ksmedia.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
