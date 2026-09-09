@@ -1,127 +1,76 @@
 # Gamer Tool
 
-A free, single-file Windows utility for tweaking display gamma/contrast and
-in-game audio EQ on the fly, with global hotkeys that work even while a game
-has exclusive fullscreen focus. No installer, no background services beyond
-the app itself, no third-party runtime dependencies - just one `.exe` that
-sits in your system tray.
+A zero-dependency, single-file Windows utility for gamers: display presets,
+system-wide audio EQ presets, one-hotkey combos, and global hotkeys - built
+as one standalone `GamerTool.exe` you can place anywhere and run.
 
-Think of it as a lightweight, open alternative to the color/audio panels
-bundled with gaming peripherals (Razer Synapse, Logitech G HUB), minus the
-account login, the extra background processes, and the hardware lock-in.
+## What's inside
 
-## What it does
+- **Display presets** - gamma / contrast / shadow-lift / RGB gain via the
+  GDI gamma ramp (restored automatically on exit, crash, or panic hotkey)
+- **Audio presets** - 10-band system-wide EQ powered by GamerTool's own
+  native APO (`GamerToolAPO.dll`) that runs inside the Windows audio engine
+  (audiodg.exe). No external apps to install.
+- **Combos** - pair any Display + Audio preset behind one master hotkey
+- **Global hotkeys** - per-preset and per-combo bindings that work while a
+  game has exclusive fullscreen focus
+- **Tray-first** - close-to-tray, tray menu, optional run-on-startup
+- **Crash safety** - factory gamma is captured at launch and restored by
+  watchdog hooks on any exit path; panic hotkey `Ctrl+Alt+R` always works
 
-**Display**
-- Adjusts gamma, contrast, shadow lift, brightness, and per-channel RGB gain
-  by writing directly to your monitor's hardware gamma ramp (the same
-  mechanism f.lux and Windows Night Light use) - no overlay, no GPU shader,
-  no compatibility issues with anti-cheat.
-- 7 built-in presets: Default, Dark Scenes, Footstep / Enemy Spotter,
-  Cinematic & Story, Vibrant World, Night Eye Comfort, and Bright Room /
-  Sunlight.
-- A live preview box shows the effect on a sample dark scene before (and as)
-  you commit to it.
-- Whatever you had before Gamer Tool touched your display is always
-  recoverable - see **Safety net**, below.
+## How the built-in EQ works
 
-**Audio**
-- A 10-band graphic EQ (31 Hz - 16 kHz), color-coded into six gamer-labeled
-  frequency zones (Sub-Bass through Treble) so it's obvious which slider
-  affects footsteps versus explosions versus voice chat.
-- If [Equalizer APO](https://sourceforge.net/projects/equalizerapo/) is
-  installed, Gamer Tool drives it directly for true parametric EQ. If it
-  isn't, Gamer Tool falls back to toggling Windows' own native "Loudness
-  Equalization" endpoint enhancement.
-- 7 built-in presets: Default, Footsteps & Movement, Explosion Damper, Late
-  Night (Quiet Mode), Dialogue & Voice, Heavy Bass & Rumble, and Crisp
-  Treble.
+Windows processes all system audio in `audiodg.exe`, which only loads
+registered Audio Processing Objects (APOs). Gamer Tool ships its own tiny
+APO (10 peaking biquads, one per ISO band) and embeds it inside the exe:
 
-**Hotkeys & Combos**
-- Every preset (Display or Audio) can be bound to its own global hotkey,
-  recorded right in the app, with live conflict detection against hotkeys
-  already claimed by other running applications.
-- "Combos" pair one Display preset with one Audio preset behind a single
-  hotkey, so e.g. "Competitive Mode" can flip both your monitor and your
-  headset in one keystroke.
-- **Emergency Reset** (`Ctrl + Alt + R`) instantly restores factory display
-  gamma and clears any active audio EQ. It's always active - even while
-  Gamer Tool is minimized to the tray - and it isn't reassignable.
+1. First run: click **Enable Built-in EQ** (one UAC prompt)
+2. GamerTool extracts the APO to `%ProgramData%\GamerTool\GamerToolAPO.dll`,
+   registers it, wires it into every active playback device, and restarts
+   the audio service
+3. From then on, preset changes publish to a shared-memory section the APO
+   reads on the real-time audio thread - instant, system-wide, zero polling
 
-**Runs in the background**
-- Minimizes to the tray, not the taskbar. Near-zero CPU and well under
-  25 MB of RAM at idle.
-- Optional "Run on Windows Startup" toggle (adds a per-user, no-admin-needed
-  entry to `HKCU\...\Run` - nothing system-wide, nothing that needs
-  elevation).
+To uninstall the engine: Settings -> Built-in Equalizer -> Disable (also a
+one-time UAC prompt). The endpoint's original APO chain is restored.
 
-## Safety net
+> Note: the APO is unsigned (no EV code-signing certificate), so enablement
+> also sets the Windows `DisableProtectedAudioDG` flag - the same mechanism
+> Equalizer APO uses. Antivirus software may ask you to trust GamerTool once.
 
-Gamma ramps are a property of your display driver, not of Gamer Tool's
-process - so if Gamer Tool ever crashed while a custom ramp was active and
-did nothing about it, your desktop would stay color-shifted until something
-else fixed it. Gamer Tool is built around not letting that happen:
+## Building
 
-- Your factory gamma ramp is captured the moment Gamer Tool starts, before
-  any preset can touch it, and backed up to
-  `%LocalAppData%\GamerTool\factory_ramp.bin`.
-- A restore is wired to *every* way the process can end: normal exit,
-  unhandled exceptions on any thread, Windows shutdown/logoff/restart, and a
-  few defense-in-depth edge cases besides.
-- If Gamer Tool is ever killed hard enough to skip all of that (e.g. Task
-  Manager "End Task" mid-crash), it detects the dirty session on next launch
-  and restores your factory ramp automatically before doing anything else.
-- Diagnostic notes about when/why a restore fired are logged to
-  `%LocalAppData%\GamerTool\diagnostics.log`, purely for troubleshooting.
+Requires .NET 8 SDK; the native APO needs MSVC (VS 2022 Build Tools with the
+C++ workload and Windows SDK) - GitHub Actions builds both automatically
+via `.github/workflows/build.yml`.
 
-## Installing
-
-Grab `GamerTool.exe` from the
-[latest release](../../releases/tag/latest) - it's a single, self-contained
-file. No installer, no admin rights required. Run it and it lands in your
-system tray.
-
-Supported on Windows 10 and Windows 11 (Home, Pro, Enterprise, and LTSC).
-
-## Building from source
-
-Requirements: [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
-on Windows.
+Local build with full engine:
 
 ```powershell
-git clone https://github.com/<your-org>/gamer-tool.git
-cd gamer-tool
-dotnet publish GamerTool.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+msbuild app\src\Native\GamerToolAPO\GamerToolAPO.vcxproj /p:Configuration=Release /p:Platform=x64
+New-Item -ItemType Directory -Force app\src\Native\GamerToolAPO\prebuilt
+Copy-Item app\src\Native\GamerToolAPO\x64\Release\GamerToolAPO.dll app\src\Native\GamerToolAPO\prebuilt\
+dotnet publish app\GamerTool.csproj -c Release -r win-x64 --self-contained `
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 ```
 
-The published `GamerTool.exe` lands in
-`bin\Release\net8.0-windows\win-x64\publish\`. The GitHub Actions workflow in
-`.github/workflows/build.yml` runs this exact command on every push to `main`
-and republishes the result as the "latest" release.
+UI-only development without the C++ toolchain:
 
-There is nothing to `dotnet restore` from NuGet - every native capability
-(gamma ramps, global hotkeys, the tray icon, CoreAudio, the registry) is
-reached through raw P/Invoke and COM interop in `src/Core/NativeMethods.cs`,
-not third-party wrapper packages.
+```powershell
+dotnet build app\GamerTool.csproj -p:EmbedNativeApo=false
+```
 
-## A couple of honest caveats
+## Repository layout
 
-- **Native "Loudness Equalization" toggling relies on an undocumented
-  per-endpoint driver property.** It's not a stable, published Microsoft
-  contract, and it can simply be unsupported on some audio drivers. When
-  that happens, Gamer Tool degrades gracefully - the EQ bands still work via
-  Equalizer APO if you have it installed, and the toggle itself just reports
-  "unavailable" rather than doing something wrong silently.
-- **Two copies of Gamer Tool won't run side by side.** A single-instance
-  check prevents a second launch from fighting the first one over the same
-  gamma ramp and hotkeys; right now a duplicate launch just quietly exits
-  rather than bringing the first window to the front (a nicer version of
-  that hand-off is on the list).
-- **The in-app preview scene is drawn procedurally**, not loaded from
-  artwork - so it's a simple placeholder dark room and silhouette rather
-  than a polished game screenshot. It reflects your actual gamma math
-  pixel-for-pixel, just with programmer art.
+```
+.github/workflows/build.yml   CI: builds native APO + single-file exe, releases
+app/GamerTool.csproj         the app project (WPF, net8.0-windows)
+app/src/                     C# source (Core/, Models/, ViewModels/, Services/)
+app/src/Native/GamerToolAPO/ native C++ APO source (MSVC vcxproj)
+app/Assets/                  icons, tray glyphs, preview scenes
+```
 
 ## License
 
-Add your preferred license here before publishing (e.g. MIT).
+GPL-2.0-or-later for the APO (biquad/COM structure informed by
+EqualizerAPO by Jonas Thedering). The C# app is MIT.

@@ -1,26 +1,35 @@
 # Build output
-bin/
-obj/
+[Bb]in/
+[Oo]bj/
 publish/
-release-assets/
-*.pdb
-
-# Visual Studio / Rider / VS Code
-.vs/
-.vscode/
 *.user
 *.suo
-*.userosscache
-*.sln.docstates
+
+# Native build output
+app/src/Native/GamerToolAPO/x64/
+app/src/Native/GamerToolAPO/Release/
+app/src/Native/GamerToolAPO/Debug/
+app/src/Native/GamerToolAPO/prebuilt/
+app/src/Native/GamerToolAPO/*.aps
+app/src/Native/GamerToolAPO/*.pdb
+app/src/Native/GamerToolAPO/ipch/
+
+# VS/VS Code
+.vs/
+.vscode/
+*.ide
+
+# Rider
 .idea/
 
-# GamerTool runtime files (never commit a developer's local factory ramp,
-# settings, or diagnostics log)
-factory_ramp.bin
-session.lock
-settings.json
-diagnostics.log
+# Test artifacts
+TestResults/
 
-# OS cruft
+# OS junk
 Thumbs.db
-.DS_Store
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Logs
+*.log

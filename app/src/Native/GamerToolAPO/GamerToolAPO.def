@@ -1,0 +1,9 @@
+; GamerToolAPO.def - exports for audiodg.exe COM loading + bootstrap helpers
+LIBRARY GamerToolAPO
+EXPORTS
+    DllCanUnloadNow     PRIVATE
+    DllGetClassObject   PRIVATE
+    DllRegisterServer   PRIVATE
+    DllUnregisterServer PRIVATE
+    GamerToolApoRegister   PRIVATE
+    GamerToolApoUnregister PRIVATE

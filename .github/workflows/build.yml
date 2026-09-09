@@ -1,95 +1,64 @@
 name: Build and Release
 
-# Builds a single-file, self-contained win-x64 GamerTool.exe on every push to
-# main and republishes it as the "latest" GitHub release, overwriting whatever
-# was there before. Can also be triggered manually from the Actions tab.
-
 on:
   push:
-    branches: [ "main" ]
-    paths-ignore:
-      - '**.md'
-  workflow_dispatch: {}
-
-permissions:
-  contents: write   # required to delete/create releases and tags with GITHUB_TOKEN
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
 
 env:
   DOTNET_VERSION: '8.0.x'
-  PROJECT_PATH: 'GamerTool.csproj'
-  RUNTIME_ID: 'win-x64'
-  CONFIGURATION: 'Release'
+  CONFIGURATION: Release
+  RUNTIME_ID: win-x64
 
 jobs:
   build-and-release:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Setup .NET ${{ env.DOTNET_VERSION }} SDK
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Restore dependencies
-        # GamerTool ships zero NuGet packages, but "dotnet restore" still
-        # resolves the SDK/runtime pack references for the win-x64 self-contained
-        # publish below, so this step is not a no-op.
-        run: dotnet restore "${{ env.PROJECT_PATH }}"
+    - name: Add MSVC to PATH
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
 
-      - name: Publish single-file self-contained executable
-        run: >
-          dotnet publish "${{ env.PROJECT_PATH }}"
-          -c ${{ env.CONFIGURATION }}
-          -r ${{ env.RUNTIME_ID }}
-          --self-contained true
-          -p:PublishSingleFile=true
-          -p:IncludeNativeLibrariesForSelfExtract=true
-          -p:PublishTrimmed=false
+    - name: Build native GamerToolAPO
+      run: |
+        msbuild "app\src\Native\GamerToolAPO\GamerToolAPO.vcxproj" /p:Configuration=Release /p:Platform=x64 /m
+        New-Item -ItemType Directory -Force -Path "app\src\Native\GamerToolAPO\prebuilt"
+        Copy-Item "app\src\Native\GamerToolAPO\x64\Release\GamerToolAPO.dll" "app\src\Native\GamerToolAPO\prebuilt\GamerToolAPO.dll"
+        Get-FileHash "app\src\Native\GamerToolAPO\prebuilt\GamerToolAPO.dll" -Algorithm SHA256
+
+    - name: Publish Gamer Tool (single-file exe with embedded APO)
+      run: |
+        dotnet publish "app\GamerTool.csproj" -c $env:CONFIGURATION -r $env:RUNTIME_ID --self-contained true `
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false `
           -o publish
+      shell: pwsh
 
-      - name: Verify build output
-        shell: pwsh
-        run: |
-          $exePath = Join-Path "publish" "GamerTool.exe"
-          if (-not (Test-Path $exePath)) {
-            Write-Error "Expected build output not found at $exePath"
-            exit 1
-          }
-          $sizeMb = [math]::Round((Get-Item $exePath).Length / 1MB, 1)
-          Write-Host "Built GamerTool.exe ($sizeMb MB)"
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: GamerTool-win-x64
+        path: publish/
+        if-no-files-found: error
 
-      - name: Stage release asset
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
-          Copy-Item "publish/GamerTool.exe" "release-assets/GamerTool.exe"
-
-      - name: Upload build artifact (CI history)
-        uses: actions/upload-artifact@v4
-        with:
-          name: GamerTool-${{ github.sha }}
-          path: publish/GamerTool.exe
-          retention-days: 14
-
-      - name: Remove previous "latest" release and tag
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release delete latest --yes --cleanup-tag || echo "No previous 'latest' release to remove - continuing."
-
-      - name: Create "latest" release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create latest \
-            release-assets/GamerTool.exe \
-            --title "Gamer Tool (latest build)" \
-            --notes "Automated build from commit ${{ github.sha }} on branch ${{ github.ref_name }}. This release is overwritten on every push to main - see the commit history for what changed." \
-            --target "${{ github.sha }}"
+    - name: Create release (on tag-less main pushes, attach exe)
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v${{ github.run_number }}
+        name: Gamer Tool Build ${{ github.run_number }}
+        draft: false
+        prerelease: true
+        files: publish/GamerTool.exe
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
