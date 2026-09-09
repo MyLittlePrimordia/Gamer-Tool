@@ -62,7 +62,7 @@
                     <StackPanel Grid.Row="1">
                         <Button x:Name="TabDisplay" Tag="#FF00E676"
                                 Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppTab.Display}"
-                                ToolTip="Display presets" Style="{StaticResource SidebarNavButtonStyle}">
+                                ToolTip="Display presets">
                             <StackPanel>
                                 <TextBlock Text="&#x1F5A5;" FontSize="18" HorizontalAlignment="Center"/>
                                 <TextBlock Text="DISPLAY" FontSize="8" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,3,0,0"/>
@@ -95,7 +95,7 @@
 
                         <Button x:Name="TabAudio" Tag="#FF00B0FF"
                                 Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppTab.Audio}"
-                                ToolTip="Audio EQ presets" Style="{StaticResource SidebarNavButtonStyle}">
+                                ToolTip="Audio EQ presets">
                             <StackPanel>
                                 <TextBlock Text="&#x1F3A7;" FontSize="18" HorizontalAlignment="Center"/>
                                 <TextBlock Text="AUDIO" FontSize="8" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,3,0,0"/>
@@ -128,7 +128,7 @@
 
                         <Button x:Name="TabCombos" Tag="#FFFFC400"
                                 Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppTab.Combos}"
-                                ToolTip="Combos (one hotkey, two presets)" Style="{StaticResource SidebarNavButtonStyle}">
+                                ToolTip="Combos (one hotkey, two presets)">
                             <StackPanel>
                                 <TextBlock Text="&#x26A1;" FontSize="18" HorizontalAlignment="Center"/>
                                 <TextBlock Text="COMBOS" FontSize="8" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,3,0,0"/>
@@ -161,7 +161,7 @@
 
                         <Button x:Name="TabSettings" Tag="#FFB388FF"
                                 Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppTab.Settings}"
-                                ToolTip="Settings" Style="{StaticResource SidebarNavButtonStyle}">
+                                ToolTip="Settings">
                             <StackPanel>
                                 <TextBlock Text="&#x2699;" FontSize="18" HorizontalAlignment="Center"/>
                                 <TextBlock Text="SETTINGS" FontSize="8" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,3,0,0"/>
