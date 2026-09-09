@@ -9,6 +9,7 @@
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 #include <audioenginebaseapo.h>
+#include <audiomediatype.h>
 #include <BaseAudioProcessingObject.h>
 #include <new>
 #include <math.h>

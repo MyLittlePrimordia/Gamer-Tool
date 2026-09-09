@@ -25,30 +25,26 @@ const CRegAPOProperties<1> GamerToolAPO::regProperties(
 // ---------------------------------------------------------------------------
 // CBaseAudioProcessingObject requires these helpers.
 // ---------------------------------------------------------------------------
-STDAPI CreateGamerToolAPO(IUnknown* pUnkOuter, IUnknown** ppOut)
+HRESULT __stdcall CreateGamerToolAPO(IUnknown* pUnkOuter, IUnknown** ppOut)
 {
     if (ppOut == NULL)
         return E_POINTER;
+    *ppOut = NULL;
     if (pUnkOuter != NULL)
-    {
-        // Aggregation is requested: the caller wants our non-delegating unknown.
-        *ppOut = static_cast<IUnknown*>(new (std::nothrow) GamerToolAPO(pUnkOuter));
-    }
-    else
-    {
-        *ppOut = static_cast<IUnknown*>(new (std::nothrow) GamerToolAPO(NULL));
-    }
-    if (*ppOut == NULL)
+        return CLASS_E_NOAGGREGATION;
+    GamerToolAPO* obj = new (std::nothrow) GamerToolAPO();
+    if (obj == NULL)
         return E_OUTOFMEMORY;
+    // Ctor refs at 1; hand that reference to the caller, cast via the single
+    // unambiguous IAudioProcessingObject path.
+    *ppOut = static_cast<IAudioProcessingObject*>(obj);
     return S_OK;
 }
 
-GamerToolAPO::GamerToolAPO(IUnknown* pUnkOuter)
+GamerToolAPO::GamerToolAPO()
     : CBaseAudioProcessingObject(regProperties)
 {
-    refCount = 1;
-    this->pUnkOuter = pUnkOuter != NULL ? pUnkOuter
-        : reinterpret_cast<IUnknown*>(static_cast<INonDelegatingUnknownBase*>(this));
+    m_refCount = 1;
 
     mappingHandle = NULL;
     sharedConfig = NULL;
@@ -69,27 +65,44 @@ GamerToolAPO::~GamerToolAPO()
 }
 
 // ---------------------------------------------------------------------------
-// IUnknown - delegating (aggregation-compatible, same as EqualizerAPO)
+// IUnknown - plain refcount; every branch casts through exactly one base
+// path, so no ambiguity arises from the double IUnknown inheritance.
 // ---------------------------------------------------------------------------
 HRESULT __stdcall GamerToolAPO::QueryInterface(const IID& iid, void** ppv)
 {
-    return pUnkOuter->QueryInterface(iid, ppv);
+    if (ppv == NULL)
+        return E_POINTER;
+    *ppv = NULL;
+
+    if (iid == __uuidof(IUnknown))
+        *ppv = static_cast<IAudioProcessingObject*>(this);
+    else if (iid == __uuidof(IAudioProcessingObject))
+        *ppv = static_cast<IAudioProcessingObject*>(this);
+    else if (iid == __uuidof(IAudioProcessingObjectRT))
+        *ppv = static_cast<IAudioProcessingObjectRT*>(this);
+    else if (iid == __uuidof(IAudioProcessingObjectConfiguration))
+        *ppv = static_cast<IAudioProcessingObjectConfiguration*>(this);
+    else if (iid == __uuidof(IAudioSystemEffects))
+        *ppv = static_cast<IAudioSystemEffects*>(this);
+    else
+        return E_NOINTERFACE;
+
+    AddRef();
+    return S_OK;
 }
 
 ULONG __stdcall GamerToolAPO::AddRef()
 {
-    return pUnkOuter->AddRef();
+    return (ULONG)InterlockedIncrement(&m_refCount);
 }
 
 ULONG __stdcall GamerToolAPO::Release()
 {
-    return pUnkOuter->Release();
+    LONG remaining = InterlockedDecrement(&m_refCount);
+    if (remaining == 0)
+        delete this;
+    return (ULONG)remaining;
 }
-
-// Non-delegating unknown implemented via the macro from the APO base header.
-IMPLEMENT_APO_NON_DELEGATING_UNKNOWN(GamerToolAPO)
-
-// Class factory (CoCreateInstance target) is defined in ClassFactory.cpp.
 
 // ---------------------------------------------------------------------------
 // Config plumbing (non-RT)
@@ -177,7 +190,7 @@ HRESULT __stdcall GamerToolAPO::LockForProcess(UINT32 u32NumInputConnections,
 
     // Snapshot the format so APOProcess knows the channel layout/rate.
     APO_CONNECTION_DESCRIPTOR* inConn = ppInputConnections[0];
-    UNCOMPRESSED_AUDIO_FORMAT fmt;
+    UNCOMPRESSEDAUDIOFORMAT fmt;
     IAudioMediaType* mt = inConn->pFormat;
     if (mt != NULL && SUCCEEDED(mt->GetUncompressedAudioFormat(&fmt)))
     {
@@ -204,11 +217,11 @@ void GamerToolAPO::ResetFilters()
     ZeroMemory(filters, sizeof(filters));
 }
 
-void GamerToolAPO::DesignBiquad(Biquad& b, float freqHz, float gainDb, float q, int sampleRate) const
+void GamerToolAPO::DesignBiquad(Biquad& b, float freqHz, float gainDb, float q, int rateHz) const
 {
     // RBJ peaking EQ cookbook formula (direct form 1, normalized a0).
     float A = powf(10.0f, gainDb / 40.0f);
-    float w0 = 6.28318530717958647692f * freqHz / sampleRate;
+    float w0 = 6.28318530717958647692f * freqHz / rateHz;
     float cw = cosf(w0);
     float sw = sinf(w0);
     float alpha = sw / (2.0f * q);

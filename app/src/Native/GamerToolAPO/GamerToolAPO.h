@@ -27,6 +27,7 @@
 #include <windows.h>
 #include <audioclient.h>
 #include <audioenginebaseapo.h>
+#include <audiomediatype.h>
 #include <BaseAudioProcessingObject.h>
 #include <mmdeviceapi.h>
 #include <mmreg.h>
@@ -68,10 +69,13 @@ struct Biquad
 class GamerToolAPO : public CBaseAudioProcessingObject, public IAudioSystemEffects
 {
 public:
-    GamerToolAPO(IUnknown* pUnkOuter);
+    GamerToolAPO();
     virtual ~GamerToolAPO();
 
-    // IUnknown (delegating - aggregation-compatible, same pattern as EqualizerAPO)
+    // IUnknown - plain refcount. audiodg.exe does not aggregate LFX APOs, and
+    // ClassFactory rejects aggregation (CLASS_E_NOAGGREGATION), so no
+    // delegating/non-delegating split is needed. Each QI branch below uses a
+    // single-inheritance-path cast, which is unambiguous.
     HRESULT __stdcall QueryInterface(const IID& iid, void** ppv) override;
     ULONG __stdcall AddRef() override;
     ULONG __stdcall Release() override;
@@ -98,8 +102,7 @@ public:
     static const CRegAPOProperties<1> regProperties;
 
 private:
-    long        refCount;
-    IUnknown*   pUnkOuter;
+    LONG m_refCount;
 
     // Opened once at Initialize (not RT), read-only mapping thereafter.
     HANDLE      mappingHandle;
@@ -117,13 +120,14 @@ private:
     int         appliedEnabled;
 
     void ApplyConfigSnapshot(const float* gainsDb, int enabled);
-    void DesignBiquad(Biquad& b, float freqHz, float gainDb, float q, int sampleRate) const;
+    void DesignBiquad(Biquad& b, float freqHz, float gainDb, float q, int rateHz) const;
     void ProcessFrames(float* input, float* output, UINT32 frameCount, int channels);
     void ResetFilters();
 
     HANDLE OpenSharedConfig();
-
-    // Non-delegating IUnknown for aggregation (macro from BaseAudioProcessingObject.h).
-    BEGIN_APO_OBJECT_MAP()
-    END_APO_OBJECT_MAP()
 };
+
+// ClassFactory entry point (ClassFactory.cpp): aggregation is rejected with
+// CLASS_E_NOAGGREGATION, matching what audiodg.exe expects from LFX APOs.
+// Plain C++ linkage (internal only, not a DLL export).
+HRESULT __stdcall CreateGamerToolAPO(IUnknown* pUnkOuter, IUnknown** ppOut);
