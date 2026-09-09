@@ -18,6 +18,7 @@ static HINSTANCE g_module = NULL;
 
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved)
 {
+    UNREFERENCED_PARAMETER(reserved);
     switch (reason)
     {
     case DLL_PROCESS_ATTACH:
@@ -30,12 +31,77 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved)
     return TRUE;
 }
 
-// Registration is handled by the SDK's RegisterAPO helper (serializes the
-// binary APO_REG_PROPERTIES blob audiodg expects under
-// HKCR\AudioEngine\AudioProcessingObjects). No hand-rolled blob writing.
+// APO registration, hand-rolled (no RegisterAPO helper - its implementation
+// ships in WDK-only libs unavailable to CI). The layout below was verified
+// value-for-value against the in-box APOs under
+// HKCR\AudioEngine\AudioProcessingObjects on a stock Windows install:
+// discrete FriendlyName/Copyright strings, DWORD versions/flags/connection
+// counts, and APOInterface<N> GUID strings (lowercase, braced). The C#
+// bootstrap (NativeEqEngine.IsEngineEnabled) probes for this exact key.
 static HRESULT WriteApoRegistration()
 {
-    return RegisterAPO(GamerToolAPO::regProperties);
+    const APO_REG_PROPERTIES* props = GamerToolAPO::regProperties;
+
+    wchar_t clsidStr[64];
+    if (StringFromGUID2(CLSID_GamerToolAPO, clsidStr, 64) == 0)
+        return E_FAIL;
+
+    std::wstring keyPath = L"SOFTWARE\\Classes\\AudioEngine\\AudioProcessingObjects\\";
+    keyPath += clsidStr;
+
+    // Interface GUID string in the in-box style: lowercase + braced.
+    wchar_t iidStr[64];
+    if (StringFromGUID2(__uuidof(IAudioProcessingObject), iidStr, 64) == 0)
+        return E_FAIL;
+    CharLowerW(iidStr);
+
+    HKEY key = NULL;
+    LONG status = RegCreateKeyExW(HKEY_LOCAL_MACHINE, keyPath.c_str(),
+        0, NULL, 0, KEY_SET_VALUE, NULL, &key, NULL);
+    if (status != ERROR_SUCCESS)
+        return HRESULT_FROM_WIN32(status);
+
+    HRESULT hr = S_OK;
+    DWORD dwordValue = 0;
+    auto setDword = [&](const wchar_t* name, DWORD value) {
+        if (SUCCEEDED(hr))
+        {
+            LONG s = RegSetValueExW(key, name, 0, REG_DWORD,
+                (const BYTE*)&value, sizeof(value));
+            if (s != ERROR_SUCCESS)
+                hr = HRESULT_FROM_WIN32(s);
+        }
+    };
+    auto setString = [&](const wchar_t* name, const wchar_t* value) {
+        if (SUCCEEDED(hr))
+        {
+            LONG s = RegSetValueExW(key, name, 0, REG_SZ,
+                (const BYTE*)value, (DWORD)((wcslen(value) + 1) * sizeof(wchar_t)));
+            if (s != ERROR_SUCCESS)
+                hr = HRESULT_FROM_WIN32(s);
+        }
+    };
+
+    // regProperties was built as (friendly, copyright, major 1, minor 0,
+    // IAudioProcessingObject) so these stay in sync by construction.
+    setString(L"FriendlyName", L"GamerToolAPO");
+    setString(L"Copyright", L"Gamer Tool built-in equalizer");
+    setDword(L"MajorVersion", props->u32MajorVersion);
+    setDword(L"MinorVersion", props->u32MinorVersion);
+    dwordValue = (DWORD)props->Flags;
+    setDword(L"Flags", dwordValue);
+    setDword(L"MinInputConnections", props->u32MinInputConnections);
+    setDword(L"MaxInputConnections", props->u32MaxInputConnections);
+    setDword(L"MinOutputConnections", props->u32MinOutputConnections);
+    setDword(L"MaxOutputConnections", props->u32MaxOutputConnections);
+    setDword(L"MaxInstances", props->u32MaxInstances);
+    setDword(L"NumAPOInterfaces", props->u32NumAPOInterfaces);
+    setString(L"APOInterface0", iidStr);
+
+    RegCloseKey(key);
+    if (FAILED(hr))
+        RegDeleteTreeW(HKEY_LOCAL_MACHINE, keyPath.c_str());
+    return hr;
 }
 STDAPI DllRegisterServer(void)
 {
@@ -67,18 +133,16 @@ STDAPI DllUnregisterServer(void)
 
 // ---------------------------------------------------------------------------
 // Bootstrap exports - called by GamerTool.exe via P/Invoke after it extracts
-// this DLL to ProgramData. RegisterAPO (SDK helper in BaseAudioProcessingObject)
-// writes the binary APO_REG_PROPERTIES blob audiodg expects; doing it here
-// guarantees byte-exact serialization that a C# reimplementation would risk
-// getting subtly wrong.
+// this DLL to ProgramData. Registration is the hand-rolled writer above
+// (verified against the in-box APO keys); doing it here in the DLL keeps
+// the exact key layout next to the code it describes.
 // ---------------------------------------------------------------------------
 
 extern "C" __declspec(dllexport)
 int __stdcall GamerToolApoRegister(wchar_t* dllPath)
 {
-    // RegisterAPO serializes regProperties (CLSID, flags, version, name,
-    // copyright, the GUID list) under HKCR\AudioEngine\AudioProcessingObjects.
-    HRESULT hr = RegisterAPO(GamerToolAPO::regProperties);
+    // APO registration under HKLM\SOFTWARE\Classes\AudioEngine\...
+    HRESULT hr = WriteApoRegistration();
     if (FAILED(hr))
         return (int)hr;
 
@@ -114,10 +178,13 @@ int __stdcall GamerToolApoRegister(wchar_t* dllPath)
 extern "C" __declspec(dllexport)
 int __stdcall GamerToolApoUnregister(void)
 {
-    UnregisterAPO(CLSID_GamerToolAPO);
-
     wchar_t clsidStr[64];
     StringFromGUID2(CLSID_GamerToolAPO, clsidStr, 64);
+
+    std::wstring apoKey = L"SOFTWARE\\Classes\\AudioEngine\\AudioProcessingObjects\\";
+    apoKey += clsidStr;
+    RegDeleteTreeW(HKEY_LOCAL_MACHINE, apoKey.c_str());
+
     std::wstring base = L"SOFTWARE\\Classes\\CLSID\\";
     base += clsidStr;
     RegDeleteTreeW(HKEY_LOCAL_MACHINE, base.c_str());

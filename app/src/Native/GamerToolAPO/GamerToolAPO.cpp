@@ -5,6 +5,10 @@
 */
 
 #include "stdafx.h"
+// initguid.h makes the DEFINE_GUID(CLSID_GamerToolAPO, ...) in GamerToolAPO.h
+// allocate storage in exactly this translation unit (without it the GUID is
+// a mere extern declaration and the link fails with LNK2001).
+#include <initguid.h>
 #include "GamerToolAPO.h"
 #include "ClassFactory.h"
 #include <Unknwn.h>
@@ -23,7 +27,7 @@ const CRegAPOProperties<1> GamerToolAPO::regProperties(
     (APO_FLAG)(APO_FLAG_FRAMESPERSECOND_MUST_MATCH | APO_FLAG_BITSPERSAMPLE_MUST_MATCH | APO_FLAG_INPLACE));
 
 // ---------------------------------------------------------------------------
-// CBaseAudioProcessingObject requires these helpers.
+// Object creation (ClassFactory.cpp entry point).
 // ---------------------------------------------------------------------------
 HRESULT __stdcall CreateGamerToolAPO(IUnknown* pUnkOuter, IUnknown** ppOut)
 {
@@ -42,9 +46,10 @@ HRESULT __stdcall CreateGamerToolAPO(IUnknown* pUnkOuter, IUnknown** ppOut)
 }
 
 GamerToolAPO::GamerToolAPO()
-    : CBaseAudioProcessingObject(regProperties)
 {
     m_refCount = 1;
+    m_initialized = false;
+    m_locked = false;
 
     mappingHandle = NULL;
     sharedConfig = NULL;
@@ -145,10 +150,12 @@ HRESULT __stdcall GamerToolAPO::Initialize(UINT32 cbDataSize, BYTE* pbyData)
                     mappingHandle, FILE_MAP_READ, 0, 0, sizeof(EqConfig));
             }
         }
+        m_initialized = true;
         return S_OK;
     }
 
     // Fallback for raw/generic init blobs: don't fail the graph.
+    m_initialized = true;
     return S_OK;
 }
 
@@ -156,19 +163,76 @@ HRESULT __stdcall GamerToolAPO::GetLatency(HNSTIME* pTime)
 {
     if (!pTime)
         return E_POINTER;
-    if (!m_bIsLocked)
+    if (!m_locked)
         return APOERR_ALREADY_UNLOCKED;
     *pTime = 0; // biquad is pure feedforward state, adds no latency
+    return S_OK;
+}
+
+HRESULT __stdcall GamerToolAPO::GetRegistrationProperties(APO_REG_PROPERTIES** ppRegProps)
+{
+    if (ppRegProps == NULL)
+        return E_POINTER;
+    *ppRegProps = NULL;
+
+    // Single-interface registration: the struct ends after iidAPOInterfaceList[0].
+    const APO_REG_PROPERTIES* src = regProperties;
+    APO_REG_PROPERTIES* copy = (APO_REG_PROPERTIES*)CoTaskMemAlloc(sizeof(APO_REG_PROPERTIES));
+    if (copy == NULL)
+        return E_OUTOFMEMORY;
+    memcpy(copy, src, sizeof(APO_REG_PROPERTIES));
+    *ppRegProps = copy;
+    return S_OK;
+}
+
+// Accept only 32-bit float - the one format the engine offers LFX APOs and
+// the one our biquads process in place.
+static HRESULT CheckFloat32Format(IAudioMediaType* pRequestedFormat, IAudioMediaType** ppSupportedFormat)
+{
+    if (pRequestedFormat == NULL || ppSupportedFormat == NULL)
+        return E_POINTER;
+    *ppSupportedFormat = NULL;
+
+    UNCOMPRESSEDAUDIOFORMAT fmt;
+    ZeroMemory(&fmt, sizeof(fmt));
+    HRESULT hr = pRequestedFormat->GetUncompressedAudioFormat(&fmt);
+    if (FAILED(hr))
+        return APOERR_FORMAT_NOT_SUPPORTED;
+
+    if (fmt.guidFormatType != KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
+        return APOERR_FORMAT_NOT_SUPPORTED;
+
+    pRequestedFormat->AddRef();
+    *ppSupportedFormat = pRequestedFormat;
     return S_OK;
 }
 
 HRESULT __stdcall GamerToolAPO::IsInputFormatSupported(IAudioMediaType* pOutputFormat,
     IAudioMediaType* pRequestedInputFormat, IAudioMediaType** ppSupportedInputFormat)
 {
-    // The engine calls the base-class helper, which applies the flags we
-    // declared (sample rate + bits must match). We accept anything float32.
-    return CBaseAudioProcessingObject::IsInputFormatSupported(
-        pOutputFormat, pRequestedInputFormat, ppSupportedInputFormat);
+    UNREFERENCED_PARAMETER(pOutputFormat);
+    if (pRequestedInputFormat == NULL || ppSupportedInputFormat == NULL)
+        return E_POINTER;
+    return CheckFloat32Format(pRequestedInputFormat, ppSupportedInputFormat);
+}
+
+HRESULT __stdcall GamerToolAPO::IsOutputFormatSupported(IAudioMediaType* pInputFormat,
+    IAudioMediaType* pRequestedOutputFormat, IAudioMediaType** ppSupportedOutputFormat)
+{
+    UNREFERENCED_PARAMETER(pInputFormat);
+    if (pRequestedOutputFormat == NULL || ppSupportedOutputFormat == NULL)
+        return E_POINTER;
+    return CheckFloat32Format(pRequestedOutputFormat, ppSupportedOutputFormat);
+}
+
+HRESULT __stdcall GamerToolAPO::GetInputChannelCount(UINT32* pu32ChannelCount)
+{
+    if (pu32ChannelCount == NULL)
+        return E_POINTER;
+    if (!m_initialized)
+        return APOERR_NOT_INITIALIZED;
+    *pu32ChannelCount = (UINT32)(channelCount > 0 ? channelCount : 0);
+    return S_OK;
 }
 
 HRESULT __stdcall GamerToolAPO::Reset()
@@ -178,34 +242,59 @@ HRESULT __stdcall GamerToolAPO::Reset()
     return S_OK;
 }
 
+UINT32 __stdcall GamerToolAPO::CalcInputFrames(UINT32 u32OutputFrameCount)
+{
+    return u32OutputFrameCount; // 1:1 inplace processing
+}
+
+UINT32 __stdcall GamerToolAPO::CalcOutputFrames(UINT32 u32InputFrameCount)
+{
+    return u32InputFrameCount; // 1:1 inplace processing
+}
+
 HRESULT __stdcall GamerToolAPO::LockForProcess(UINT32 u32NumInputConnections,
     APO_CONNECTION_DESCRIPTOR** ppInputConnections, UINT32 u32NumOutputConnections,
     APO_CONNECTION_DESCRIPTOR** ppOutputConnections)
 {
-    HRESULT hr = CBaseAudioProcessingObject::LockForProcess(
-        u32NumInputConnections, ppInputConnections,
-        u32NumOutputConnections, ppOutputConnections);
-    if (FAILED(hr))
-        return hr;
+    UNREFERENCED_PARAMETER(ppOutputConnections);
+    if (!m_initialized)
+        return APOERR_NOT_INITIALIZED;
+    if (u32NumInputConnections == 0 || u32NumOutputConnections == 0
+        || ppInputConnections == NULL || ppOutputConnections == NULL)
+        return APOERR_NUM_CONNECTIONS_INVALID;
 
     // Snapshot the format so APOProcess knows the channel layout/rate.
     APO_CONNECTION_DESCRIPTOR* inConn = ppInputConnections[0];
+    if (inConn == NULL || inConn->pFormat == NULL)
+        return APOERR_FORMAT_NOT_SUPPORTED;
+
     UNCOMPRESSEDAUDIOFORMAT fmt;
-    IAudioMediaType* mt = inConn->pFormat;
-    if (mt != NULL && SUCCEEDED(mt->GetUncompressedAudioFormat(&fmt)))
-    {
-        channelCount = (int)fmt.dwSamplesPerFrame;
-        if (channelCount > MaxChannels)
-            channelCount = MaxChannels;
-        sampleRate = (int)fmt.fFramesPerSecond;
-    }
+    ZeroMemory(&fmt, sizeof(fmt));
+    if (FAILED(inConn->pFormat->GetUncompressedAudioFormat(&fmt)))
+        return APOERR_FORMAT_NOT_SUPPORTED;
+    if (fmt.guidFormatType != KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
+        return APOERR_FORMAT_NOT_SUPPORTED;
+
+    channelCount = (int)fmt.dwSamplesPerFrame;
+    if (channelCount > MaxChannels)
+        channelCount = MaxChannels;
+    if (channelCount <= 0)
+        return APOERR_FORMAT_NOT_SUPPORTED;
+    sampleRate = (int)fmt.fFramesPerSecond;
+    if (sampleRate <= 0)
+        return APOERR_FORMAT_NOT_SUPPORTED;
+
+    m_locked = true;
     return S_OK;
 }
 
 HRESULT __stdcall GamerToolAPO::UnlockForProcess(void)
 {
+    if (!m_locked)
+        return APOERR_ALREADY_UNLOCKED;
     channelCount = 0;
-    return CBaseAudioProcessingObject::UnlockForProcess();
+    m_locked = false;
+    return S_OK;
 }
 
 // ---------------------------------------------------------------------------

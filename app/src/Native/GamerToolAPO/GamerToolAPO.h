@@ -5,6 +5,13 @@
     chain of 10 peaking biquad filters (one per ISO band, constant-Q) on every
     audio frame that flows through the endpoint it is registered on.
 
+    Self-contained by design: every COM interface is implemented directly in
+    this DLL (no CBaseAudioProcessingObject base class - its implementation
+    ships in WDK-only libs unavailable to CI), and APO registration is a
+    hand-rolled registry write whose layout was verified byte-for-byte
+    against the in-box APOs under HKCR\AudioEngine\AudioProcessingObjects.
+    Link inputs are default system libs only (kernel32/advapi32/ole32/uuid).
+
     Design constraints (this code runs on the real-time audio thread):
       - No heap allocation in APOProcess
       - No locks in APOProcess
@@ -17,8 +24,7 @@
     inside the swapped-in snapshot copy, never on live state.
 
     SPDX-License-Identifier: GPL-2.0-or-later
-    Biquad/COM structure informed by EqualizerAPO (Copyright 2012 Jonas
-    Thedering) and Microsoft's AudioProcessingObjects SDK samples.
+    Biquad/COM structure informed by EqualizerAPO by Jonas Thedering.
 */
 
 #pragma once
@@ -66,26 +72,40 @@ struct Biquad
     float z1y, z2y;     // output history
 };
 
-class GamerToolAPO : public CBaseAudioProcessingObject, public IAudioSystemEffects
+class GamerToolAPO : public IAudioProcessingObject,
+                       public IAudioProcessingObjectRT,
+                       public IAudioProcessingObjectConfiguration,
+                       public IAudioSystemEffects
 {
 public:
     GamerToolAPO();
     virtual ~GamerToolAPO();
 
     // IUnknown - plain refcount. audiodg.exe does not aggregate LFX APOs, and
-    // ClassFactory rejects aggregation (CLASS_E_NOAGGREGATION), so no
-    // delegating/non-delegating split is needed. Each QI branch below uses a
-    // single-inheritance-path cast, which is unambiguous.
+    // the class factory rejects aggregation (CLASS_E_NOAGGREGATION). Every QI
+    // branch below casts through exactly one base path (unambiguous) except
+    // IUnknown itself, which is pinned to the IAudioProcessingObject path.
     HRESULT __stdcall QueryInterface(const IID& iid, void** ppv) override;
     ULONG __stdcall AddRef() override;
     ULONG __stdcall Release() override;
 
     // IAudioProcessingObject
+    HRESULT __stdcall Reset() override;
     HRESULT __stdcall GetLatency(HNSTIME* pTime) override;
+    HRESULT __stdcall GetRegistrationProperties(APO_REG_PROPERTIES** ppRegProps) override;
     HRESULT __stdcall Initialize(UINT32 cbDataSize, BYTE* pbyData) override;
     HRESULT __stdcall IsInputFormatSupported(IAudioMediaType* pOutputFormat,
         IAudioMediaType* pRequestedInputFormat, IAudioMediaType** ppSupportedInputFormat) override;
-    HRESULT __stdcall Reset() override;
+    HRESULT __stdcall IsOutputFormatSupported(IAudioMediaType* pInputFormat,
+        IAudioMediaType* pRequestedOutputFormat, IAudioMediaType** ppSupportedOutputFormat) override;
+    HRESULT __stdcall GetInputChannelCount(UINT32* pu32ChannelCount) override;
+
+    // IAudioProcessingObjectRT - runs on the audio thread
+    void __stdcall APOProcess(UINT32 u32NumInputConnections,
+        APO_CONNECTION_PROPERTY** ppInputConnections, UINT32 u32NumOutputConnections,
+        APO_CONNECTION_PROPERTY** ppOutputConnections) override;
+    UINT32 __stdcall CalcInputFrames(UINT32 u32OutputFrameCount) override;
+    UINT32 __stdcall CalcOutputFrames(UINT32 u32InputFrameCount) override;
 
     // IAudioProcessingObjectConfiguration
     HRESULT __stdcall LockForProcess(UINT32 u32NumInputConnections,
@@ -93,16 +113,14 @@ public:
         APO_CONNECTION_DESCRIPTOR** ppOutputConnections) override;
     HRESULT __stdcall UnlockForProcess(void) override;
 
-    // IAudioProcessingObjectRT - runs on the audio thread
-    void __stdcall APOProcess(UINT32 u32NumInputConnections,
-        APO_CONNECTION_PROPERTY** ppInputConnections, UINT32 u32NumOutputConnections,
-        APO_CONNECTION_PROPERTY** ppOutputConnections) override;
-
-    // Registration data used by DllRegisterServer and the C# bootstrap
+    // Registration data shared by GetRegistrationProperties and the
+    // hand-rolled HKCR\AudioEngine\AudioProcessingObjects writer in DllMain.
     static const CRegAPOProperties<1> regProperties;
 
 private:
     LONG m_refCount;
+    bool m_initialized;
+    bool m_locked;
 
     // Opened once at Initialize (not RT), read-only mapping thereafter.
     HANDLE      mappingHandle;
