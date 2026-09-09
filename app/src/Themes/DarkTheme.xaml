@@ -593,4 +593,126 @@
         </Style.Triggers>
     </Style>
 
+    <!-- A fixed-size card for the Combos horizontal strip - never taller
+         than its content so the strip never needs vertical scrolling. -->
+    <Style x:Key="ComboCardBorderStyle" TargetType="Border" BasedOn="{StaticResource CardBorderStyle}">
+        <Setter Property="Width" Value="216"/>
+        <Setter Property="Margin" Value="0,0,10,0"/>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- ============================== SIDEBAR NAVIGATION ============================== -->
+    <!--
+      Left icon rail (Razer Synapse / Logitech G Hub pattern): replaces the
+      old centered pill-tab row + giant hero emoji. Each button carries its
+      own accent via Tag (set in MainWindow.xaml); the active item gets a
+      left accent bar + tinted icon/caption instead of a filled color pill,
+      so it reads as "selected" rather than "a big colorful sticker".
+    -->
+    <Style x:Key="SidebarNavButtonStyle" TargetType="Button">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Height" Value="58"/>
+        <Setter Property="Margin" Value="0,0,0,2"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid Background="{TemplateBinding Background}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="3"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Border x:Name="AccentBar" Grid.Column="0" Background="Transparent"/>
+                        <ContentPresenter Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="{StaticResource CardHoverBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Small brand mark at the top of the sidebar. -->
+    <Style x:Key="BrandMarkStyle" TargetType="Border">
+        <Setter Property="Width" Value="34"/>
+        <Setter Property="Height" Value="34"/>
+        <Setter Property="CornerRadius" Value="8"/>
+        <Setter Property="Background" Value="{DynamicResource AccentDimBrush}"/>
+        <Setter Property="HorizontalAlignment" Value="Center"/>
+    </Style>
+
+    <!-- Compact "..." overflow trigger - opens a ContextMenu with the
+         library actions (Rename/Duplicate/Favorite/Clear Hotkey/Delete)
+         that used to be five permanently-visible buttons per preset. -->
+    <Style x:Key="OverflowButtonStyle" TargetType="Button" BasedOn="{StaticResource GlyphButtonStyle}">
+        <Setter Property="FontSize" Value="16"/>
+        <Setter Property="Padding" Value="8,2"/>
+        <Setter Property="ToolTip" Value="More actions"/>
+    </Style>
+
+    <!-- ============================== DARK CONTEXT MENU ============================== -->
+    <Style x:Key="DarkContextMenuStyle" TargetType="ContextMenu">
+        <Setter Property="Background" Value="{StaticResource CardBrush}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush2}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="4"/>
+        <Setter Property="HasDropShadow" Value="True"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContextMenu">
+                    <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6"
+                            Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                        <StackPanel IsItemsHost="True"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="DarkMenuItemStyle" TargetType="MenuItem">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}"/>
+        <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Padding" Value="10,7"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="MenuItem">
+                    <Border x:Name="Bg" Background="{TemplateBinding Background}" CornerRadius="4"
+                            Padding="{TemplateBinding Padding}" MinWidth="150">
+                        <ContentPresenter ContentSource="Header" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="Bg" Property="Background" Value="{StaticResource CardHoverBrush}"/>
+                            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.4"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="DarkDangerMenuItemStyle" TargetType="MenuItem" BasedOn="{StaticResource DarkMenuItemStyle}">
+        <Setter Property="Foreground" Value="{StaticResource DangerRedBrush}"/>
+    </Style>
+
+    <Style x:Key="DarkSeparatorStyle" TargetType="Separator">
+        <Setter Property="Background" Value="{StaticResource BorderBrush2}"/>
+        <Setter Property="Height" Value="1"/>
+        <Setter Property="Margin" Value="4,4"/>
+    </Style>
+
 </ResourceDictionary>

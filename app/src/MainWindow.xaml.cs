@@ -686,4 +686,24 @@ public partial class MainWindow : Window
     }
 
     #endregion
+
+    #region Overflow ("...") action menus
+
+    /// <summary>
+    /// Opens the "..." button's own ContextMenu on click, so the library
+    /// actions (Rename/Duplicate/Favorite/Clear Hotkey/Delete) that used to
+    /// be five permanently-visible buttons per preset collapse into one
+    /// compact menu - fewer buttons on screen, same number of clicks to
+    /// reach any single action.
+    /// </summary>
+    private void OverflowButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button button && button.ContextMenu is not null)
+        {
+            button.ContextMenu.PlacementTarget = button;
+            button.ContextMenu.IsOpen = true;
+        }
+    }
+
+    #endregion
 }
