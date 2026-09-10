@@ -1,0 +1,69 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  CONFIGURATION: Release
+  RUNTIME_ID: win-x64
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    # Newer repos/orgs default GITHUB_TOKEN to read-only, which makes
+    # softprops/action-gh-release fail with 403 "Resource not accessible
+    # by integration". This grants the one scope that step needs.
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Add MSVC to PATH
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+
+    - name: Build native GamerToolAPO
+      run: |
+        msbuild "app\src\Native\GamerToolAPO\GamerToolAPO.vcxproj" /p:Configuration=Release /p:Platform=x64 /m
+        New-Item -ItemType Directory -Force -Path "app\src\Native\GamerToolAPO\prebuilt"
+        Copy-Item "app\src\Native\GamerToolAPO\x64\Release\GamerToolAPO.dll" "app\src\Native\GamerToolAPO\prebuilt\GamerToolAPO.dll"
+        Get-FileHash "app\src\Native\GamerToolAPO\prebuilt\GamerToolAPO.dll" -Algorithm SHA256
+
+    - name: Publish Gamer Tool (single-file exe with embedded APO)
+      run: |
+        dotnet publish "app\GamerTool.csproj" -c $env:CONFIGURATION -r $env:RUNTIME_ID --self-contained true `
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false `
+          -o publish
+      shell: pwsh
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: GamerTool-win-x64
+        path: publish/
+        if-no-files-found: error
+
+    - name: Create release (on tag-less main pushes, attach exe)
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v${{ github.run_number }}
+        name: Gamer Tool Build ${{ github.run_number }}
+        draft: false
+        prerelease: true
+        files: publish/GamerTool.exe
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

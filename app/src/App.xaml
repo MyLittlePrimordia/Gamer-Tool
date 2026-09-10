@@ -1,0 +1,28 @@
+<Application x:Class="GamerTool.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:GamerTool.ViewModels"
+             ShutdownMode="OnExplicitShutdown">
+    <!--
+        No StartupUri: App.xaml.cs.OnStartup builds the crash-safety
+        subsystem (DisplayManager -> HotkeyManager -> SafetyWatchdog -> panic
+        hotkey) in a specific order BEFORE any window exists, then creates
+        MainWindow manually. ShutdownMode="OnExplicitShutdown" means hiding
+        MainWindow (minimize/close-to-tray) never ends the process - only the
+        tray "Exit" command (App.ExitApplication) calls Shutdown().
+    -->
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/DarkTheme.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- Stock WPF converter (System.Windows.Controls.BooleanToVisibilityConverter) - not a custom class, ships in PresentationFramework. -->
+            <BooleanToVisibilityConverter x:Key="BoolToVisConverter"/>
+            <vm:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisConverter"/>
+            <vm:StringToVisibilityConverter x:Key="StringToVisConverter"/>
+            <vm:SelectedItemMatchConverter x:Key="SelectedItemMatchConverter"/>
+            <vm:IconKeyToImageConverter x:Key="IconKeyToImageConverter"/>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

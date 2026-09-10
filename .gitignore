@@ -1,0 +1,35 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+publish/
+*.user
+*.suo
+
+# Native build output
+app/src/Native/GamerToolAPO/x64/
+app/src/Native/GamerToolAPO/Release/
+app/src/Native/GamerToolAPO/Debug/
+app/src/Native/GamerToolAPO/prebuilt/
+app/src/Native/GamerToolAPO/*.aps
+app/src/Native/GamerToolAPO/*.pdb
+app/src/Native/GamerToolAPO/ipch/
+
+# VS/VS Code
+.vs/
+.vscode/
+*.ide
+
+# Rider
+.idea/
+
+# Test artifacts
+TestResults/
+
+# OS junk
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Logs
+*.log
