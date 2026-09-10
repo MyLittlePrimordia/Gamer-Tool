@@ -246,12 +246,27 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(GainBlue));
     }
 
+    /// <summary>
+    /// Routes ramp application through the selected preset's TargetMonitorId:
+    /// null (the default, and the only option before multi-monitor support)
+    /// keeps the exact original primary-display path with full crash-recovery
+    /// coverage; a specific monitor uses the best-effort per-device path
+    /// instead (see DisplayManager.TryApplyRampToDevice) and falls back to the
+    /// primary path if that device can't be opened (unplugged, driver refusal).
+    /// </summary>
+    private void ApplyRampToTarget(RAMP ramp)
+    {
+        var targetId = SelectedDisplayPreset?.TargetMonitorId;
+        if (string.IsNullOrEmpty(targetId) || !DisplayManager.Instance.TryApplyRampToDevice(ramp, targetId))
+            DisplayManager.Instance.ApplyRamp(ramp);
+    }
+
     private void ApplyDisplayLive()
     {
         var ramp = DisplayManager.Instance.ComputeRamp(
             Gamma, Contrast, ShadowLift, BrightnessOffset, GainRed, GainGreen, GainBlue);
 
-        DisplayManager.Instance.ApplyRamp(ramp);
+        ApplyRampToTarget(ramp);
         PreviewRampChanged?.Invoke(ramp);
     }
 
@@ -268,7 +283,7 @@ public sealed class MainViewModel : ObservableObject
             Gamma, Contrast, ShadowLift, BrightnessOffset, GainRed, GainGreen, GainBlue);
         PreviewRampChanged?.Invoke(ramp);
         if (IsDisplayLive && !IsDisplayBypassed)
-            DisplayManager.Instance.ApplyRamp(ramp);
+            ApplyRampToTarget(ramp);
     }
 
     /// <summary>Explicit "Apply to Screen": pushes the current preview ramp to the monitor.</summary>
@@ -827,13 +842,29 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>True when the built-in APO is installed and registered.</summary>
     public bool IsEqEngineEnabled => NativeEqEngine.Instance.IsEngineEnabled();
 
-    /// <summary>True when at least one render endpoint is wired to our APO.</summary>
-    public bool IsEqEngineAttached => NativeEqEngine.Instance.IsEngineAttachedToAnyDevice();
+    /// <summary>
+    /// True when the render endpoint Windows is CURRENTLY using as the
+    /// default output is wired to our APO (falls back to "any device"
+    /// if the current default can't be resolved).
+    /// </summary>
+    public bool IsEqEngineAttached
+    {
+        get
+        {
+            var endpointGuid = NativeEqEngine.ExtractEndpointGuid(_lastKnownDefaultRenderDeviceId);
+            return endpointGuid is not null
+                ? NativeEqEngine.Instance.IsEngineAttachedToEndpoint(endpointGuid)
+                : NativeEqEngine.Instance.IsEngineAttachedToAnyDevice();
+        }
+    }
 
     /// <summary>
-    /// Plugged in a new USB headset after enabling? The APO is installed but
-    /// no active endpoint carries it - sliders move but nothing audible.
-    /// Unelevated detection only; fix is one more elevated Enable run.
+    /// Switched output device (new USB headset, HDMI monitor, etc.) after
+    /// enabling? The APO is installed but the device you're using right
+    /// now isn't wired to it - sliders move but nothing audible. This is
+    /// only re-evaluated when a real device change is detected (see
+    /// StartEqDeviceWatch), not on every UI refresh, so it doesn't show up
+    /// unless something actually changed. Fix is one more elevated Enable run.
     /// </summary>
     public bool NeedsEqReattach => IsEqEngineEnabled && !IsEqEngineAttached;
 
@@ -842,6 +873,32 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(IsEqEngineEnabled));
         OnPropertyChanged(nameof(IsEqEngineAttached));
         OnPropertyChanged(nameof(NeedsEqReattach));
+    }
+
+    private DispatcherTimer? _eqDeviceWatchTimer;
+    private string? _lastKnownDefaultRenderDeviceId;
+
+    /// <summary>
+    /// Polls the current default render device every few seconds and only
+    /// re-evaluates the reattach banner when it actually changes - this is
+    /// what makes "re-run Enable" a reaction to a real output-device
+    /// change instead of a stale, always-on nag.
+    /// </summary>
+    private void StartEqDeviceWatch()
+    {
+        _lastKnownDefaultRenderDeviceId = AudioManager.Instance.TryGetDefaultRenderEndpointId();
+
+        _eqDeviceWatchTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
+        _eqDeviceWatchTimer.Tick += (_, _) =>
+        {
+            var currentId = AudioManager.Instance.TryGetDefaultRenderEndpointId();
+            if (!string.Equals(currentId, _lastKnownDefaultRenderDeviceId, StringComparison.OrdinalIgnoreCase))
+            {
+                _lastKnownDefaultRenderDeviceId = currentId;
+                RefreshEqEngineUI();
+            }
+        };
+        _eqDeviceWatchTimer.Start();
     }
 
     private bool _isEqBusy;
@@ -981,6 +1038,129 @@ public sealed class MainViewModel : ObservableObject
     public ICommand ToggleComboFavoriteCommand { get; }
     public ICommand ClearComboHotkeyCommand { get; }
     public ICommand DuplicateComboCommand { get; }
+    public ICommand ToggleComboAutoLaunchCommand { get; }
+    public ICommand RefreshRunningProcessesCommand { get; }
+
+    /// <summary>
+    /// Currently running, user-visible apps for the Combos "launch with"
+    /// picker. Populated at startup and on-demand via RefreshRunningProcessesCommand
+    /// (process lists go stale the moment something new launches).
+    /// </summary>
+    public ObservableCollection<string> RunningProcesses { get; } = new();
+
+    /// <summary>One selectable row for the Display tab's monitor picker.</summary>
+    public sealed record MonitorPickerOption(string? DeviceName, string Label);
+
+    /// <summary>
+    /// "Primary Only" (DeviceName == null, the original single-monitor
+    /// behavior) plus one entry per additional detected monitor. Loaded
+    /// once at startup - monitors rarely change mid-session, and this is a
+    /// picker, not a live device-change feed.
+    /// </summary>
+    public ObservableCollection<MonitorPickerOption> AvailableMonitors { get; } = new();
+
+    private void LoadAvailableMonitors()
+    {
+        AvailableMonitors.Clear();
+        AvailableMonitors.Add(new MonitorPickerOption(null, "Primary Only (recommended)"));
+        foreach (var monitor in DisplayManager.EnumerateMonitors())
+        {
+            if (monitor.IsPrimary)
+                continue; // already covered by "Primary Only"
+            AvailableMonitors.Add(new MonitorPickerOption(monitor.DeviceName, monitor.FriendlyName));
+        }
+    }
+
+    private void ExecuteRefreshRunningProcesses()
+    {
+        RunningProcesses.Clear();
+        foreach (var name in GameLaunchWatcher.GetRunningAppProcessNames())
+            RunningProcesses.Add(name);
+    }
+
+    /// <summary>
+    /// Turns auto-launch on/off for a combo, enforcing that each process can
+    /// only be claimed by one combo at a time. IsChecked in the view binds
+    /// OneWay to AutoActivateOnLaunch, so a rejected toggle here simply never
+    /// changes the model and the checkbox visually stays where it was.
+    /// </summary>
+    private void ExecuteToggleComboAutoLaunch(ComboPreset? combo)
+    {
+        if (combo is null)
+            return;
+
+        if (combo.AutoActivateOnLaunch)
+        {
+            combo.AutoActivateOnLaunch = false;
+            StatusMessage = $"Auto-launch turned off for '{combo.Name}'.";
+            _settings.Save();
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(combo.TriggerProcessName))
+        {
+            StatusMessage = "Pick an app first, then turn on auto-launch.";
+            // The CheckBox already flipped its own visual state on click (it's a
+            // ToggleButton) even though IsChecked binds OneWay - re-pushing the
+            // unchanged value forces PropertyChanged so the binding snaps the
+            // visual back to reality instead of showing a checked box that lies.
+            combo.RefreshAutoActivateOnLaunch();
+            return;
+        }
+
+        var conflict = ComboPresets.FirstOrDefault(other =>
+            other != combo && other.AutoActivateOnLaunch &&
+            string.Equals(other.TriggerProcessName, combo.TriggerProcessName, StringComparison.OrdinalIgnoreCase));
+
+        if (conflict is not null)
+        {
+            StatusMessage = $"'{conflict.Name}' already auto-launches with {combo.TriggerProcessName} - clear that one first.";
+            combo.RefreshAutoActivateOnLaunch();
+            return;
+        }
+
+        combo.AutoActivateOnLaunch = true;
+        StatusMessage = $"'{combo.Name}' will auto-activate whenever {combo.TriggerProcessName} is focused.";
+        _settings.Save();
+    }
+
+    private DispatcherTimer? _gameLaunchTimer;
+    private string? _lastActiveGameLaunchComboId;
+
+    /// <summary>
+    /// Polls the foreground window's process every ~1.5s and activates the
+    /// combo registered to it, if any - switching seamlessly back and forth
+    /// as the user alt-tabs between two registered games. Focus on anything
+    /// not registered leaves the last-applied combo alone (does nothing),
+    /// which keeps behavior predictable rather than guessing a "revert to".
+    /// </summary>
+    private void StartGameLaunchWatch()
+    {
+        ExecuteRefreshRunningProcesses();
+
+        _gameLaunchTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
+        _gameLaunchTimer.Tick += (_, _) =>
+        {
+            var foregroundProcess = GameLaunchWatcher.GetForegroundProcessName();
+            if (foregroundProcess is null)
+                return;
+
+            var match = ComboPresets.FirstOrDefault(c =>
+                c.AutoActivateOnLaunch &&
+                string.Equals(c.TriggerProcessName, foregroundProcess, StringComparison.OrdinalIgnoreCase));
+
+            if (match is null || match.Id == _lastActiveGameLaunchComboId)
+                return;
+
+            _lastActiveGameLaunchComboId = match.Id;
+            ApplyDisplayPresetById(match.DisplayPresetId);
+            ApplyAudioPresetById(match.AudioPresetId);
+            StatusMessage = $"Auto-activated '{match.Name}' for {foregroundProcess}.";
+            ShowToast($"⚡ Auto: {match.Name}");
+            ActiveStateChanged?.Invoke();
+        };
+        _gameLaunchTimer.Start();
+    }
 
     /// <summary>
     /// Live-resolves combo member names by Id (fixes stale denormalized names
@@ -1631,6 +1811,8 @@ public sealed class MainViewModel : ObservableObject
         ToggleComboFavoriteCommand = new RelayCommand<ComboPreset>(ExecuteToggleComboFavorite);
         ClearComboHotkeyCommand = new RelayCommand<ComboPreset>(ExecuteClearComboHotkey);
         DuplicateComboCommand = new RelayCommand<ComboPreset>(ExecuteDuplicateCombo);
+        ToggleComboAutoLaunchCommand = new RelayCommand<ComboPreset>(ExecuteToggleComboAutoLaunch);
+        RefreshRunningProcessesCommand = new RelayCommand(ExecuteRefreshRunningProcesses);
 
         PanicResetCommand = new RelayCommand(ExecutePanicReset);
         ConfirmPendingHotkeyCommand = new RelayCommand(ExecuteConfirmPendingHotkey, () => HasPendingHotkey && _pendingModifiers != 0);
@@ -1673,6 +1855,10 @@ public sealed class MainViewModel : ObservableObject
             SelectedDisplayPreset = initialDisplay;
         if (initialAudio is not null)
             SelectedAudioPreset = initialAudio;
+
+        LoadAvailableMonitors();
+        StartEqDeviceWatch();
+        StartGameLaunchWatch();
     }
 
     /// <summary>

@@ -115,11 +115,25 @@ ULONG __stdcall GamerToolAPO::Release()
 HANDLE GamerToolAPO::OpenSharedConfig()
 {
     // Create-or-open: the first APO instance in audiodg creates the section;
-    // GamerTool.exe opens the same name when applying presets. A NULL DACL
-    // lets any integrity-level process map it read/write, but Local\ scoping
-    // confines it to this login session.
+    // GamerTool.exe opens the same name when applying presets. audiodg runs
+    // this APO under a different account (LocalService) than the desktop
+    // app, so passing NULL here (the "default" security descriptor, tied to
+    // the creator's own account) would let whichever side gets here first
+    // silently lock the other one out - the APO would then never see a
+    // real config and just pass audio straight through untouched. A truly
+    // NULL DACL (built explicitly below, not just a NULL parameter) grants
+    // access to any account regardless of creation order.
+    SECURITY_DESCRIPTOR sd;
+    InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
+    SetSecurityDescriptorDacl(&sd, TRUE, NULL, FALSE);
+
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = &sd;
+    sa.bInheritHandle = FALSE;
+
     HANDLE h = CreateFileMappingW(
-        INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
+        INVALID_HANDLE_VALUE, &sa, PAGE_READWRITE,
         0, sizeof(EqConfig), GAMERTOOL_SHARED_MEMORY_NAME);
     if (h != NULL && GetLastError() == ERROR_ALREADY_EXISTS)
     {

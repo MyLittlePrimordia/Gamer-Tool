@@ -97,8 +97,12 @@
     resolves by key.
   -->
   <ItemGroup>
-    <EmbeddedResource Include="Assets\Icons\preset\*_32.png" LogicalName="GamerTool.Resources.icons.%(Filename)" />
-    <EmbeddedResource Include="Assets\Icons\preset\tray\*_20.png" LogicalName="GamerTool.Resources.icons.tray.%(Filename)" />
+    <!-- %(Filename) strips the extension - without %(Extension) every
+         LogicalName below was missing ".png", so IconCatalog's lookup
+         (which appends ".png") never matched anything and every preset
+         icon silently resolved to null. -->
+    <EmbeddedResource Include="Assets\Icons\preset\*_32.png" LogicalName="GamerTool.Resources.icons.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Assets\Icons\preset\tray\*_20.png" LogicalName="GamerTool.Resources.icons.tray.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <!-- UI glyph PNGs remain Content (used by styles/layouts at build time). -->

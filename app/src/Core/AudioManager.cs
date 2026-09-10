@@ -170,5 +170,55 @@ public sealed class AudioManager
         }
     }
 
+    /// <summary>
+    /// The current default render endpoint's device ID string (e.g.
+    /// "{0.0.0.00000000}.{guid}"), or null if it can't be determined.
+    /// Used to detect real output-device changes so the "re-run Enable"
+    /// prompt reflects the device actually in use, not a stale snapshot.
+    /// </summary>
+    public string? TryGetDefaultRenderEndpointId()
+    {
+        object? enumeratorObj = null;
+        IMMDevice? device = null;
+
+        try
+        {
+            var clsid = ComGuids.MMDeviceEnumerator;
+            var iid = ComGuids.IID_IMMDeviceEnumerator;
+
+            int hr = Ole32Native.CoCreateInstance(
+                ref clsid, IntPtr.Zero, Ole32Native.CLSCTX_INPROC_SERVER, ref iid, out var enumeratorPtr);
+
+            if (hr != 0 || enumeratorPtr == IntPtr.Zero)
+                return null;
+
+            enumeratorObj = Marshal.GetObjectForIUnknown(enumeratorPtr);
+            Marshal.Release(enumeratorPtr);
+
+            if (enumeratorObj is not IMMDeviceEnumerator enumerator)
+                return null;
+
+            hr = enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eMultimedia, out var dev);
+            if (hr != 0 || dev is null)
+                return null;
+
+            device = dev;
+
+            hr = device.GetId(out var id);
+            return hr == 0 ? id : null;
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            if (device is not null && Marshal.IsComObject(device))
+                Marshal.ReleaseComObject(device);
+            if (enumeratorObj is not null && Marshal.IsComObject(enumeratorObj))
+                Marshal.ReleaseComObject(enumeratorObj);
+        }
+    }
+
     #endregion
 }

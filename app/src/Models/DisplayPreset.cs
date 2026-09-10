@@ -45,6 +45,13 @@ public sealed class DisplayPreset : INotifyPropertyChanged
     public double GainGreen { get; set; } = 1.0;
     public double GainBlue { get; set; } = 1.0;
 
+    /// <summary>
+    /// Which monitor this preset targets (GDI device name, e.g. "\\.\DISPLAY2"),
+    /// or null for the default/primary path. Null preserves the exact
+    /// original single-monitor behavior for anyone who never touches this.
+    /// </summary>
+    public string? TargetMonitorId { get; set; }
+
     /// <summary>Id returned by HotkeyManager.RegisterHotkey, or null if this preset has no bound hotkey.</summary>
     public int? HotkeyId
     {
@@ -90,6 +97,7 @@ public sealed class DisplayPreset : INotifyPropertyChanged
         GainRed = GainRed,
         GainGreen = GainGreen,
         GainBlue = GainBlue,
+        TargetMonitorId = TargetMonitorId,
         HotkeyId = HotkeyId,
         HotkeyModifiers = HotkeyModifiers,
         HotkeyVirtualKey = HotkeyVirtualKey

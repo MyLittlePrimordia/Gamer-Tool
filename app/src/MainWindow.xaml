@@ -2,16 +2,26 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:GamerTool.ViewModels"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="Gamer Tool"
         Width="980" MinWidth="880" MaxWidth="1400"
         Height="640" MinHeight="580" MaxHeight="900"
         WindowStyle="None"
-        ResizeMode="CanResizeWithGrip"
+        ResizeMode="CanResize"
         AllowsTransparency="False"
         Background="{StaticResource BackgroundBrush}"
         WindowStartupLocation="CenterScreen"
         PreviewKeyDown="Window_PreviewKeyDown"
         PreviewKeyUp="Window_PreviewKeyUp">
+
+    <WindowChrome.WindowChrome>
+        <!-- CaptionHeight=0 + GlassFrameThickness=0 removes the native
+             non-client frame entirely (that's what was showing through as
+             a thin white sliver above our own dark title bar) - our Row 0
+             below becomes the ENTIRE chrome. ResizeBorderThickness keeps
+             edge/corner resize working without a native grip glyph. -->
+        <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0"/>
+    </WindowChrome.WindowChrome>
 
     <Grid>
         <Grid.RowDefinitions>
@@ -26,180 +36,119 @@
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <!-- Window title colors itself with the active tab's accent -->
             <TextBlock Grid.Column="0" Text="GAMER TOOL" Foreground="{DynamicResource AccentBrush}"
                        FontFamily="Segoe UI Variable, Segoe UI" FontWeight="Bold" FontSize="12"
                        VerticalAlignment="Center" Margin="14,0,0,0"/>
-            <Button Grid.Column="1" Content="_" Style="{StaticResource TitleBarGlyphButtonStyle}" Click="MinimizeButton_Click"/>
-            <Button Grid.Column="2" Content="&#x2715;" Style="{StaticResource TitleBarCloseButtonStyle}" Click="CloseButton_Click"/>
+
+            <!-- Emergency reset - same 40x30 footprint as minimize/close, so it
+                 reads as a peer chrome control rather than an undersized icon. -->
+            <Button Grid.Column="1" Style="{StaticResource TitleBarDangerButtonStyle}"
+                    Command="{Binding PanicResetCommand}"
+                    ToolTip="Emergency reset - factory display &amp; flat EQ (Ctrl+Alt+R)">
+                <TextBlock Text="&#x21BA;" FontSize="14"/>
+            </Button>
+            <Button Grid.Column="2" Content="_" Style="{StaticResource TitleBarGlyphButtonStyle}" Click="MinimizeButton_Click"/>
+            <Button Grid.Column="3" Content="&#x2715;" Style="{StaticResource TitleBarCloseButtonStyle}" Click="CloseButton_Click"/>
         </Grid>
 
-        <Grid Grid.Row="1" Margin="20,10,20,10">
+        <!-- ===================== BODY ===================== -->
+        <Grid Grid.Row="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
 
-            <!-- ===================== CENTERED TAB RAIL ===================== -->
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
+            <!-- ===================== TAB BAR ===================== -->
+            <Border Grid.Row="0" HorizontalAlignment="Center" Margin="0,16,0,14"
+                    Background="{StaticResource CardBrush}" CornerRadius="12" Padding="4">
+                <StackPanel Orientation="Horizontal">
 
-                <StackPanel Grid.Row="0" HorizontalAlignment="Center">
-                    <!-- Hero emoji per tab (Cleaner-style identity, swaps with accent) -->
-                    <TextBlock HorizontalAlignment="Center" FontSize="34" Margin="0,2,0,6" IsHitTestVisible="False">
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock">
-                                <Setter Property="Text" Value="&#x1F5A5;"/>
+                    <Button x:Name="TabDisplay" Tag="#FF3ECF8E"
+                            Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppTab.Display}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#x1F5A5;" FontSize="13" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="DISPLAY" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource NavTabButtonStyle}">
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Display}">
-                                        <Setter Property="Text" Value="&#x1F319;"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Audio}">
-                                        <Setter Property="Text" Value="&#x1F3A7;"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Combos}">
-                                        <Setter Property="Text" Value="&#x26A1;"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Settings}">
-                                        <Setter Property="Text" Value="&#x2699;"/>
+                                        <Setter Property="Foreground" Value="{Binding Tag, RelativeSource={RelativeSource Self}}"/>
+                                        <Setter Property="FontWeight" Value="Bold"/>
+                                        <Setter Property="Template" Value="{StaticResource NavTabActiveTemplate}"/>
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
-                        </TextBlock.Style>
-                    </TextBlock>
-                <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush2}"
-                        BorderThickness="1" CornerRadius="16" Padding="4,3" HorizontalAlignment="Center" Margin="0,0,0,14">
-                    <StackPanel Orientation="Horizontal">
-                                                <Button x:Name="TabDisplay" Content="&#x1F5A5; DISPLAY" Tag="#FF00E676"
-                                Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppTab.Display}">
-                            <Button.Style>
-                                <Style TargetType="Button" BasedOn="{StaticResource NavTabButtonStyle}">
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Display}">
-                                            <Setter Property="Foreground" Value="#FF101216"/>
-                                            <Setter Property="FontWeight" Value="Bold"/>
-                                            <Setter Property="Template">
-                                                <Setter.Value>
-                                                    <ControlTemplate TargetType="Button">
-                                                        <Border x:Name="Bg"
-                                                                Background="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"
-                                                                CornerRadius="13"
-                                                                Margin="{TemplateBinding Margin}"
-                                                                Padding="16,7">
-                                                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                        </Border>
-                                                        <ControlTemplate.Triggers>
-                                                            <Trigger Property="IsMouseOver" Value="True">
-                                                                <Setter TargetName="Bg" Property="Opacity" Value="0.85"/>
-                                                            </Trigger>
-                                                        </ControlTemplate.Triggers>
-                                                    </ControlTemplate>
-                                                </Setter.Value>
-                                            </Setter>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
-                        </Button>
-                                                <Button x:Name="TabAudio" Content="&#x1F3A7; AUDIO" Tag="#FF00B0FF"
-                                Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppTab.Audio}">
-                            <Button.Style>
-                                <Style TargetType="Button" BasedOn="{StaticResource NavTabButtonStyle}">
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Audio}">
-                                            <Setter Property="Foreground" Value="#FF101216"/>
-                                            <Setter Property="FontWeight" Value="Bold"/>
-                                            <Setter Property="Template">
-                                                <Setter.Value>
-                                                    <ControlTemplate TargetType="Button">
-                                                        <Border x:Name="Bg"
-                                                                Background="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"
-                                                                CornerRadius="13"
-                                                                Margin="{TemplateBinding Margin}"
-                                                                Padding="16,7">
-                                                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                        </Border>
-                                                        <ControlTemplate.Triggers>
-                                                            <Trigger Property="IsMouseOver" Value="True">
-                                                                <Setter TargetName="Bg" Property="Opacity" Value="0.85"/>
-                                                            </Trigger>
-                                                        </ControlTemplate.Triggers>
-                                                    </ControlTemplate>
-                                                </Setter.Value>
-                                            </Setter>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
-                        </Button>
-                                                <Button x:Name="TabCombos" Content="&#x26A1; COMBOS" Tag="#FFFFC400"
-                                Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppTab.Combos}">
-                            <Button.Style>
-                                <Style TargetType="Button" BasedOn="{StaticResource NavTabButtonStyle}">
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Combos}">
-                                            <Setter Property="Foreground" Value="#FF101216"/>
-                                            <Setter Property="FontWeight" Value="Bold"/>
-                                            <Setter Property="Template">
-                                                <Setter.Value>
-                                                    <ControlTemplate TargetType="Button">
-                                                        <Border x:Name="Bg"
-                                                                Background="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"
-                                                                CornerRadius="13"
-                                                                Margin="{TemplateBinding Margin}"
-                                                                Padding="16,7">
-                                                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                        </Border>
-                                                        <ControlTemplate.Triggers>
-                                                            <Trigger Property="IsMouseOver" Value="True">
-                                                                <Setter TargetName="Bg" Property="Opacity" Value="0.85"/>
-                                                            </Trigger>
-                                                        </ControlTemplate.Triggers>
-                                                    </ControlTemplate>
-                                                </Setter.Value>
-                                            </Setter>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
-                        </Button>
-                                                <Button x:Name="TabSettings" Content="&#x2699; SETTINGS" Tag="#FFB388FF"
-                                Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppTab.Settings}">
-                            <Button.Style>
-                                <Style TargetType="Button" BasedOn="{StaticResource NavTabButtonStyle}">
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Settings}">
-                                            <Setter Property="Foreground" Value="#FF101216"/>
-                                            <Setter Property="FontWeight" Value="Bold"/>
-                                            <Setter Property="Template">
-                                                <Setter.Value>
-                                                    <ControlTemplate TargetType="Button">
-                                                        <Border x:Name="Bg"
-                                                                Background="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"
-                                                                CornerRadius="13"
-                                                                Margin="{TemplateBinding Margin}"
-                                                                Padding="16,7">
-                                                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                        </Border>
-                                                        <ControlTemplate.Triggers>
-                                                            <Trigger Property="IsMouseOver" Value="True">
-                                                                <Setter TargetName="Bg" Property="Opacity" Value="0.85"/>
-                                                            </Trigger>
-                                                        </ControlTemplate.Triggers>
-                                                    </ControlTemplate>
-                                                </Setter.Value>
-                                            </Setter>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
-                        </Button>
-                    </StackPanel>
-                </Border>
+                        </Button.Style>
+                    </Button>
+
+                    <Button x:Name="TabAudio" Tag="#FF4FB8E8"
+                            Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppTab.Audio}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#x1F3A7;" FontSize="13" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="AUDIO" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource NavTabButtonStyle}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Audio}">
+                                        <Setter Property="Foreground" Value="{Binding Tag, RelativeSource={RelativeSource Self}}"/>
+                                        <Setter Property="FontWeight" Value="Bold"/>
+                                        <Setter Property="Template" Value="{StaticResource NavTabActiveTemplate}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+
+                    <Button x:Name="TabCombos" Tag="#FFF2B84B"
+                            Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppTab.Combos}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#x26A1;" FontSize="13" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="COMBOS" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource NavTabButtonStyle}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Combos}">
+                                        <Setter Property="Foreground" Value="{Binding Tag, RelativeSource={RelativeSource Self}}"/>
+                                        <Setter Property="FontWeight" Value="Bold"/>
+                                        <Setter Property="Template" Value="{StaticResource NavTabActiveTemplate}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+
+                    <Button x:Name="TabSettings" Tag="#FFB79CFF"
+                            Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppTab.Settings}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#x2699;" FontSize="13" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="SETTINGS" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource NavTabButtonStyle}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding CurrentTab}" Value="{x:Static vm:AppTab.Settings}">
+                                        <Setter Property="Foreground" Value="{Binding Tag, RelativeSource={RelativeSource Self}}"/>
+                                        <Setter Property="FontWeight" Value="Bold"/>
+                                        <Setter Property="Template" Value="{StaticResource NavTabActiveTemplate}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+
                 </StackPanel>
+            </Border>
+
+            <!-- ===================== CONTENT ===================== -->
+            <Grid Grid.Row="1" Margin="24,0,24,12">
 
                 <!-- ===================== DISPLAY TAB ===================== -->
-                <Grid Grid.Row="1" x:Name="DisplayTabContent">
+                <Grid x:Name="DisplayTabContent">
                     <Grid.Style>
                         <Style TargetType="Grid">
                             <Setter Property="Visibility" Value="Collapsed"/>
@@ -220,7 +169,7 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
 
-                    <!-- Preset cycler - one preset visible, arrows to move -->
+                    <!-- Preset cycler -->
                     <Border Grid.Row="0" Grid.ColumnSpan="2" Style="{StaticResource CardBorderStyle}" Padding="10,8" Margin="0,0,0,12"
                             HorizontalAlignment="Center" Width="420">
                         <Grid>
@@ -237,7 +186,24 @@
                                            Width="24" Height="24" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                     <TextBlock Text="{Binding SelectedDisplayPreset.Name, Mode=OneWay}"
                                                Foreground="{StaticResource PrimaryTextBrush}" FontWeight="SemiBold" FontSize="16"
-                                               VerticalAlignment="Center"/>
+                                               VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <!-- Favorite: an always-tiny inline star, not a labelled button, so it
+                                         carries almost no visual weight next to the preset name. -->
+                                    <Button Command="{Binding ToggleDisplayFavoriteCommand}" ToolTip="Favorite"
+                                            Style="{StaticResource GlyphButtonStyle}" Padding="4,0">
+                                        <TextBlock Text="&#x2605;" FontSize="13">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding SelectedDisplayPreset.IsFavorite}" Value="True">
+                                                            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Button>
                                 </StackPanel>
                                 <TextBlock Text="{Binding SelectedDisplayPreset.HotkeyDisplayLabel, Mode=OneWay, TargetNullValue='No hotkey'}"
                                            Style="{StaticResource BodyTextStyle}" FontSize="10" HorizontalAlignment="Center"/>
@@ -247,29 +213,53 @@
                         </Grid>
                     </Border>
 
-                    <!-- Live preview (preview-only until Apply) -->
+                    <!-- Live preview -->
                     <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,10,0" HorizontalAlignment="Center">
                         <TextBlock Text="LIVE PREVIEW" Style="{StaticResource HeaderTextStyle}" HorizontalAlignment="Center"/>
                         <Border Style="{StaticResource CardBorderStyle}" Padding="4" Margin="0,0,0,6">
                             <Image x:Name="PreviewImage" Width="360" Height="203" Stretch="Uniform" SnapsToDevicePixels="True"/>
                         </Border>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+
+                        <!-- Primary action row - always the same three, always same style/size. -->
+                        <WrapPanel HorizontalAlignment="Center">
                             <Button Content="Apply to Screen" Style="{StaticResource NeonButtonStyle}" Padding="12,5"
-                                    Command="{Binding ApplyDisplayToScreenCommand}" Margin="0,0,6,0"/>
-                            <Button Content="Hotkey" Style="{StaticResource SecondaryButtonStyle}"
-                                    Command="{Binding RecordSelectedDisplayHotkeyCommand}" Margin="0,0,6,0"/>
-                            <Button Content="Compare" Style="{StaticResource SecondaryButtonStyle}" Padding="10,5"
+                                    Command="{Binding ApplyDisplayToScreenCommand}" Margin="0,0,6,4"/>
+                            <Button Content="Hotkey" Style="{StaticResource SecondaryButtonStyle}" Padding="12,5"
+                                    Command="{Binding RecordSelectedDisplayHotkeyCommand}" Margin="0,0,6,4"/>
+                            <Button Content="Compare" Style="{StaticResource SecondaryButtonStyle}" Padding="12,5"
+                                    ToolTip="Hold to preview the factory look"
                                     PreviewMouseLeftButtonDown="CompareButton_PreviewMouseDown"
-                                    PreviewMouseLeftButtonUp="CompareButton_PreviewMouseUp"/>
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,6,0,0">
+                                    PreviewMouseLeftButtonUp="CompareButton_PreviewMouseUp" Margin="0,0,6,4"/>
+                            <Button Content="Duplicate" Style="{StaticResource SecondaryButtonStyle}" Padding="12,5"
+                                    Command="{Binding DuplicateDisplayPresetCommand}" Margin="0,0,6,4"/>
+                        </WrapPanel>
+
+                        <!-- Conditional row - only appears when relevant, instead of a
+                             permanent "..." menu: Rename/Delete only for custom presets,
+                             Clear Hotkey only when a hotkey is actually bound. -->
+                        <WrapPanel HorizontalAlignment="Center" Margin="0,4,0,0">
+                            <Button Content="Rename" Style="{StaticResource SecondaryButtonStyle}" Padding="12,5" Margin="0,0,6,4"
+                                    Command="{Binding RenameDisplayPresetCommand}"
+                                    Visibility="{Binding SelectedDisplayPreset.IsBuiltIn, Converter={StaticResource InverseBoolToVisConverter}}"/>
+                            <Button Content="Clear Hotkey" Style="{StaticResource SecondaryButtonStyle}" Padding="12,5" Margin="0,0,6,4"
+                                    Command="{Binding ClearDisplayHotkeyCommand}"
+                                    Visibility="{Binding SelectedDisplayPreset.HotkeyDisplayLabel, Converter={StaticResource StringToVisConverter}}"/>
+                            <Button Content="Delete" Style="{StaticResource DangerButtonStyle}" Padding="12,5" Margin="0,0,6,4"
+                                    Command="{Binding DeleteDisplayPresetCommand}"
+                                    Visibility="{Binding SelectedDisplayPreset.IsBuiltIn, Converter={StaticResource InverseBoolToVisConverter}}"/>
+                        </WrapPanel>
+
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,0">
                             <CheckBox Content="Live apply" IsChecked="{Binding IsDisplayLive, Mode=TwoWay}"
-                                      Foreground="{StaticResource MutedTextBrush}" FontSize="11" VerticalAlignment="Center"/>
-                            <TextBlock Text="Primary monitor only" Style="{StaticResource BodyTextStyle}" FontSize="10" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                                      Foreground="{StaticResource MutedTextBrush}" FontSize="11" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <TextBlock Text="Monitor:" Style="{StaticResource BodyTextStyle}" FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <ComboBox Style="{StaticResource DarkComboBoxStyle}" MinWidth="150" Padding="6,3"
+                                      ItemsSource="{Binding AvailableMonitors}" DisplayMemberPath="Label" SelectedValuePath="DeviceName"
+                                      SelectedValue="{Binding SelectedDisplayPreset.TargetMonitorId, Mode=TwoWay}"/>
                         </StackPanel>
                     </StackPanel>
 
-                    <!-- Adjustments (edit = preview only; Apply writes the ramp) -->
+                    <!-- Adjustments -->
                     <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource CardBorderStyle}" Margin="0,26,0,0">
                         <StackPanel>
                             <TextBlock Text="ADJUSTMENTS" Style="{StaticResource HeaderTextStyle}"/>
@@ -354,29 +344,14 @@
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,0"
                                         Visibility="{Binding IsDisplayDirty, Converter={StaticResource BoolToVisConverter}}">
                                 <Button Content="Save As New" Style="{StaticResource NeonButtonStyle}"
-                                        Command="{Binding SaveDisplayPresetCommand}" Margin="0,0,6,0"/>
-                                <Button Content="Rename" Style="{StaticResource SecondaryButtonStyle}"
-                                        Command="{Binding RenameDisplayPresetCommand}" Margin="0,0,6,0"
-                                        Visibility="{Binding SelectedDisplayPreset.IsBuiltIn, Converter={StaticResource InverseBoolToVisConverter}}"/>
-                            </StackPanel>
-                            <!-- Always-visible library actions (Sonar-style: Duplicate/Delete/Favorite never hidden) -->
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,6,0,0">
-                                <Button Content="⧉ Duplicate" Style="{StaticResource SecondaryButtonStyle}" Padding="8,4" FontSize="10"
-                                        Command="{Binding DuplicateDisplayPresetCommand}" Margin="0,0,4,0"/>
-                                <Button Content="★" Style="{StaticResource SecondaryButtonStyle}" Padding="8,4" FontSize="10"
-                                        Command="{Binding ToggleDisplayFavoriteCommand}" Margin="0,0,4,0"
-                                        ToolTip="Favorite (shows first in tray)"/>
-                                <Button Content="Delete" Style="{StaticResource SecondaryButtonStyle}" Padding="8,4" FontSize="10"
-                                        Command="{Binding DeleteDisplayPresetCommand}" Margin="0,0,4,0"/>
-                                <Button Content="Clear HK" Style="{StaticResource SecondaryButtonStyle}" Padding="8,4" FontSize="10"
-                                        Command="{Binding ClearDisplayHotkeyCommand}"/>
+                                        Command="{Binding SaveDisplayPresetCommand}"/>
                             </StackPanel>
                         </StackPanel>
                     </Border>
                 </Grid>
 
                 <!-- ===================== AUDIO TAB ===================== -->
-                <Grid Grid.Row="1" x:Name="AudioTabContent">
+                <Grid x:Name="AudioTabContent">
                     <Grid.Style>
                         <Style TargetType="Grid">
                             <Setter Property="Visibility" Value="Collapsed"/>
@@ -397,56 +372,69 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
 
-                    <!-- Engine state lives where the task lives (Apple HIG): no EQ sound without it -->
                     <StackPanel Grid.Row="0" Grid.ColumnSpan="2" HorizontalAlignment="Center" Width="420">
-                    <Border Style="{StaticResource CardBorderStyle}" BorderBrush="#FFFFB74D" BorderThickness="1"
-                            Padding="10,8" Margin="0,0,0,8"
-                            Visibility="{Binding IsEqEngineEnabled, Converter={StaticResource InverseBoolToVisConverter}}">
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="&#x1F507;" FontSize="16" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <TextBlock Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center" TextWrapping="Wrap" Width="240"
-                                       Text="EQ engine off - sliders move but you hear nothing."/>
-                            <Button Content="Enable" Style="{StaticResource NeonButtonStyle}" Padding="12,4" Margin="8,0,0,0"
-                                    Command="{Binding EnableEqEngineCommand}" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource CardBorderStyle}" BorderBrush="#FFFFB74D" BorderThickness="1"
-                            Padding="10,8" Margin="0,0,0,8"
-                            Visibility="{Binding NeedsEqReattach, Converter={StaticResource BoolToVisConverter}}">
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="&#x1F3A7;" FontSize="16" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <TextBlock Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center" TextWrapping="Wrap" Width="240"
-                                       Text="New audio device? Re-run Enable so it gets wired."/>
-                            <Button Content="Re-run Enable" Style="{StaticResource SecondaryButtonStyle}" Padding="10,4" Margin="8,0,0,0"
-                                    Command="{Binding EnableEqEngineCommand}" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Border>
-                    <!-- Preset cycler -->
-                    <Border Style="{StaticResource CardBorderStyle}" Padding="10,8" Margin="0,0,0,12"
-                            HorizontalAlignment="Center" Width="420">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <Button Grid.Column="0" Content="&#x25C0;" Style="{StaticResource GlyphButtonStyle}"
-                                    Command="{Binding CycleAudioPresetBackCommand}" VerticalAlignment="Center"/>
-                            <StackPanel Grid.Column="1" Orientation="Vertical">
-                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                    <Image Source="{Binding SelectedAudioPreset.Icon, Converter={StaticResource IconKeyToImageConverter}, Mode=OneWay}"
-                                           Width="24" Height="24" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                    <TextBlock Text="{Binding SelectedAudioPreset.Name, Mode=OneWay}"
-                                               Foreground="{StaticResource PrimaryTextBrush}" FontWeight="SemiBold" FontSize="16"
-                                               VerticalAlignment="Center"/>
-                                </StackPanel>
-                                <TextBlock Text="{Binding SelectedAudioPreset.HotkeyDisplayLabel, Mode=OneWay, TargetNullValue='No hotkey'}"
-                                           Style="{StaticResource BodyTextStyle}" FontSize="10" HorizontalAlignment="Center"/>
+                        <Border Style="{StaticResource CardBorderStyle}" BorderBrush="#FFFFB74D" BorderThickness="1"
+                                Padding="10,8" Margin="0,0,0,8"
+                                Visibility="{Binding IsEqEngineEnabled, Converter={StaticResource InverseBoolToVisConverter}}">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="&#x1F507;" FontSize="16" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <TextBlock Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center" TextWrapping="Wrap" Width="240"
+                                           Text="EQ engine off - sliders move but you hear nothing."/>
+                                <Button Content="Enable" Style="{StaticResource NeonButtonStyle}" Padding="12,4" Margin="8,0,0,0"
+                                        Command="{Binding EnableEqEngineCommand}" VerticalAlignment="Center"/>
                             </StackPanel>
-                            <Button Grid.Column="2" Content="&#x25B6;" Style="{StaticResource GlyphButtonStyle}"
-                                    Command="{Binding CycleAudioPresetForwardCommand}" VerticalAlignment="Center"/>
-                        </Grid>
-                    </Border>
+                        </Border>
+                        <Border Style="{StaticResource CardBorderStyle}" BorderBrush="#FFFFB74D" BorderThickness="1"
+                                Padding="10,8" Margin="0,0,0,8"
+                                Visibility="{Binding NeedsEqReattach, Converter={StaticResource BoolToVisConverter}}">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="&#x1F3A7;" FontSize="16" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <TextBlock Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center" TextWrapping="Wrap" Width="240"
+                                           Text="Output device changed - re-run Enable so it gets wired."/>
+                                <Button Content="Re-run Enable" Style="{StaticResource SecondaryButtonStyle}" Padding="10,4" Margin="8,0,0,0"
+                                        Command="{Binding EnableEqEngineCommand}" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource CardBorderStyle}" Padding="10,8" Margin="0,0,0,12"
+                                HorizontalAlignment="Center" Width="420">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Button Grid.Column="0" Content="&#x25C0;" Style="{StaticResource GlyphButtonStyle}"
+                                        Command="{Binding CycleAudioPresetBackCommand}" VerticalAlignment="Center"/>
+                                <StackPanel Grid.Column="1" Orientation="Vertical">
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                        <Image Source="{Binding SelectedAudioPreset.Icon, Converter={StaticResource IconKeyToImageConverter}, Mode=OneWay}"
+                                               Width="24" Height="24" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <TextBlock Text="{Binding SelectedAudioPreset.Name, Mode=OneWay}"
+                                                   Foreground="{StaticResource PrimaryTextBrush}" FontWeight="SemiBold" FontSize="16"
+                                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                        <Button Command="{Binding ToggleAudioFavoriteCommand}" ToolTip="Favorite"
+                                                Style="{StaticResource GlyphButtonStyle}" Padding="4,0">
+                                            <TextBlock Text="&#x2605;" FontSize="13">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding SelectedAudioPreset.IsFavorite}" Value="True">
+                                                                <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Button>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding SelectedAudioPreset.HotkeyDisplayLabel, Mode=OneWay, TargetNullValue='No hotkey'}"
+                                               Style="{StaticResource BodyTextStyle}" FontSize="10" HorizontalAlignment="Center"/>
+                                </StackPanel>
+                                <Button Grid.Column="2" Content="&#x25B6;" Style="{StaticResource GlyphButtonStyle}"
+                                        Command="{Binding CycleAudioPresetForwardCommand}" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Border>
                     </StackPanel>
 
                     <!-- EQ curve preview + test loop -->
@@ -455,13 +443,29 @@
                         <Border Style="{StaticResource CardBorderStyle}" Padding="4" Margin="0,0,0,6">
                             <Image x:Name="EqCurveImage" Width="360" Height="203" Stretch="Uniform" SnapsToDevicePixels="True"/>
                         </Border>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+
+                        <WrapPanel HorizontalAlignment="Center">
                             <Button x:Name="TestAudioButton" Content="&#x25B6;  Play Test" Style="{StaticResource NeonButtonStyle}"
-                                    Padding="12,5" Click="TestAudioButton_Click" Margin="0,0,6,0"/>
-                            <Button Content="Hotkey" Style="{StaticResource SecondaryButtonStyle}"
-                                    Command="{Binding RecordSelectedAudioHotkeyCommand}"/>
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,6,0,0">
+                                    Padding="12,5" Click="TestAudioButton_Click" Margin="0,0,6,4"/>
+                            <Button Content="Hotkey" Style="{StaticResource SecondaryButtonStyle}" Padding="12,5"
+                                    Command="{Binding RecordSelectedAudioHotkeyCommand}" Margin="0,0,6,4"/>
+                            <Button Content="Duplicate" Style="{StaticResource SecondaryButtonStyle}" Padding="12,5"
+                                    Command="{Binding DuplicateAudioPresetCommand}" Margin="0,0,6,4"/>
+                        </WrapPanel>
+
+                        <WrapPanel HorizontalAlignment="Center" Margin="0,4,0,0">
+                            <Button Content="Rename" Style="{StaticResource SecondaryButtonStyle}" Padding="12,5" Margin="0,0,6,4"
+                                    Command="{Binding RenameAudioPresetCommand}"
+                                    Visibility="{Binding SelectedAudioPreset.IsBuiltIn, Converter={StaticResource InverseBoolToVisConverter}}"/>
+                            <Button Content="Clear Hotkey" Style="{StaticResource SecondaryButtonStyle}" Padding="12,5" Margin="0,0,6,4"
+                                    Command="{Binding ClearAudioHotkeyCommand}"
+                                    Visibility="{Binding SelectedAudioPreset.HotkeyDisplayLabel, Converter={StaticResource StringToVisConverter}}"/>
+                            <Button Content="Delete" Style="{StaticResource DangerButtonStyle}" Padding="12,5" Margin="0,0,6,4"
+                                    Command="{Binding DeleteAudioPresetCommand}"
+                                    Visibility="{Binding SelectedAudioPreset.IsBuiltIn, Converter={StaticResource InverseBoolToVisConverter}}"/>
+                        </WrapPanel>
+
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,0">
                             <CheckBox Content="Bypass EQ" IsChecked="{Binding IsAudioBypassed, Mode=TwoWay}"
                                       Foreground="{StaticResource MutedTextBrush}" FontSize="11" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <CheckBox Content="Loudness" IsChecked="{Binding EnableNativeLoudness, Mode=TwoWay}"
@@ -470,15 +474,13 @@
                         </StackPanel>
                     </StackPanel>
 
-                    <!-- 10-band EQ (accent-tinted, no rainbow) -->
+                    <!-- 10-band EQ -->
                     <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource CardBorderStyle}" Margin="0,26,0,0">
                         <StackPanel>
                             <TextBlock Text="EQUALIZER" Style="{StaticResource HeaderTextStyle}"/>
                             <ItemsControl ItemsSource="{Binding BandGains}">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>
-                                        <!-- Explicit row height keeps the vertical sliders tall; the
-                                             card grows rather than the sliders shrinking. -->
                                         <UniformGrid Rows="1" Columns="10" Height="150"/>
                                     </ItemsPanelTemplate>
                                 </ItemsControl.ItemsPanel>
@@ -507,22 +509,7 @@
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,0"
                                         Visibility="{Binding IsAudioDirty, Converter={StaticResource BoolToVisConverter}}">
                                 <Button Content="Save As New" Style="{StaticResource NeonButtonStyle}"
-                                        Command="{Binding SaveAudioPresetCommand}" Margin="0,0,6,0"/>
-                                <Button Content="Rename" Style="{StaticResource SecondaryButtonStyle}"
-                                        Command="{Binding RenameAudioPresetCommand}" Margin="0,0,6,0"
-                                        Visibility="{Binding SelectedAudioPreset.IsBuiltIn, Converter={StaticResource InverseBoolToVisConverter}}"/>
-                            </StackPanel>
-                            <!-- Always-visible library actions -->
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,6,0,0">
-                                <Button Content="⧉ Duplicate" Style="{StaticResource SecondaryButtonStyle}" Padding="8,4" FontSize="10"
-                                        Command="{Binding DuplicateAudioPresetCommand}" Margin="0,0,4,0"/>
-                                <Button Content="★" Style="{StaticResource SecondaryButtonStyle}" Padding="8,4" FontSize="10"
-                                        Command="{Binding ToggleAudioFavoriteCommand}" Margin="0,0,4,0"
-                                        ToolTip="Favorite (shows first in tray)"/>
-                                <Button Content="Delete" Style="{StaticResource SecondaryButtonStyle}" Padding="8,4" FontSize="10"
-                                        Command="{Binding DeleteAudioPresetCommand}" Margin="0,0,4,0"/>
-                                <Button Content="Clear HK" Style="{StaticResource SecondaryButtonStyle}" Padding="8,4" FontSize="10"
-                                        Command="{Binding ClearAudioHotkeyCommand}"/>
+                                        Command="{Binding SaveAudioPresetCommand}"/>
                             </StackPanel>
                             <TextBlock Style="{StaticResource BodyTextStyle}" FontSize="10" TextAlignment="Center" Margin="0,8,0,0" TextWrapping="Wrap"
                                        Text="Built-in anti-clip: loud boosts are auto-leveled (turn up volume to compensate)."/>
@@ -531,7 +518,7 @@
                 </Grid>
 
                 <!-- ===================== COMBOS TAB ===================== -->
-                <Grid Grid.Row="1" x:Name="CombosTabContent">
+                <Grid x:Name="CombosTabContent">
                     <Grid.Style>
                         <Style TargetType="Grid">
                             <Setter Property="Visibility" Value="Collapsed"/>
@@ -549,110 +536,142 @@
                     </Grid.RowDefinitions>
 
                     <!-- Create combo -->
-                    <Border Grid.Row="0" Style="{StaticResource CardBorderStyle}" Width="600" HorizontalAlignment="Center">
-                        <StackPanel>
-                            <TextBlock Text="CREATE COMBO" Style="{StaticResource HeaderTextStyle}" HorizontalAlignment="Center"/>
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="2*"/>
-                                    <ColumnDefinition Width="10"/>
-                                    <ColumnDefinition Width="2*"/>
-                                    <ColumnDefinition Width="10"/>
-                                    <ColumnDefinition Width="2*"/>
-                                    <ColumnDefinition Width="10"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
+                    <Border Grid.Row="0" Style="{StaticResource CardBorderStyle}" HorizontalAlignment="Stretch">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="2*"/>
+                                <ColumnDefinition Width="10"/>
+                                <ColumnDefinition Width="2*"/>
+                                <ColumnDefinition Width="10"/>
+                                <ColumnDefinition Width="2*"/>
+                                <ColumnDefinition Width="10"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="6"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
 
-                                <!-- Uniform rows: label + control, all VerticalAlignment=Top -->
-                                <StackPanel Grid.Column="0" VerticalAlignment="Top">
-                                    <TextBlock Text="Name" Style="{StaticResource BodyTextStyle}" Margin="0,0,0,3"/>
-                                    <TextBox Style="{StaticResource DarkTextBoxStyle}" Text="{Binding NewComboName, UpdateSourceTrigger=PropertyChanged}"/>
-                                </StackPanel>
-                                <StackPanel Grid.Column="2" VerticalAlignment="Top">
-                                    <TextBlock Text="Display" Style="{StaticResource BodyTextStyle}" Margin="0,0,0,3"/>
-                                    <ComboBox Style="{StaticResource DarkComboBoxStyle}" ItemsSource="{Binding DisplayPresets}" DisplayMemberPath="Name"
-                                              SelectedItem="{Binding NewComboDisplayPreset, Mode=TwoWay}"/>
-                                </StackPanel>
-                                <StackPanel Grid.Column="4" VerticalAlignment="Top">
-                                    <TextBlock Text="Audio" Style="{StaticResource BodyTextStyle}" Margin="0,0,0,3"/>
-                                    <ComboBox Style="{StaticResource DarkComboBoxStyle}" ItemsSource="{Binding AudioPresets}" DisplayMemberPath="Name"
-                                              SelectedItem="{Binding NewComboAudioPreset, Mode=TwoWay}"/>
-                                </StackPanel>
-                                <Button Grid.Column="6" Content="Create" Style="{StaticResource NeonButtonStyle}"
-                                        VerticalAlignment="Bottom" Command="{Binding CreateComboCommand}"/>
-                            </Grid>
-                        </StackPanel>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Top">
+                                <TextBlock Text="Name" Style="{StaticResource BodyTextStyle}" Margin="0,0,0,3"/>
+                                <TextBox Style="{StaticResource DarkTextBoxStyle}" Text="{Binding NewComboName, UpdateSourceTrigger=PropertyChanged}"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" VerticalAlignment="Top">
+                                <TextBlock Text="Display" Style="{StaticResource BodyTextStyle}" Margin="0,0,0,3"/>
+                                <ComboBox Style="{StaticResource DarkComboBoxStyle}" ItemsSource="{Binding DisplayPresets}" DisplayMemberPath="Name"
+                                          SelectedItem="{Binding NewComboDisplayPreset, Mode=TwoWay}"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="4" VerticalAlignment="Top">
+                                <TextBlock Text="Audio" Style="{StaticResource BodyTextStyle}" Margin="0,0,0,3"/>
+                                <ComboBox Style="{StaticResource DarkComboBoxStyle}" ItemsSource="{Binding AudioPresets}" DisplayMemberPath="Name"
+                                          SelectedItem="{Binding NewComboAudioPreset, Mode=TwoWay}"/>
+                            </StackPanel>
+                            <Button Grid.Column="6" Content="Create" Style="{StaticResource NeonButtonStyle}"
+                                    VerticalAlignment="Bottom" Command="{Binding CreateComboCommand}"/>
+                            <Button Grid.Column="8" Content="&#x21BB;" Style="{StaticResource GlyphButtonStyle}" FontSize="15"
+                                    VerticalAlignment="Bottom" Command="{Binding RefreshRunningProcessesCommand}"
+                                    ToolTip="Rescan currently running apps for the Auto-launch pickers below"/>
+                        </Grid>
                     </Border>
 
-                    <!-- Existing combos -->
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0" Width="620" HorizontalAlignment="Center">
-                        <StackPanel>
-                            <!-- Designed empty state (Apple HIG): illustration + CTA, not blank -->
-                            <Border HorizontalAlignment="Center" Width="560" Margin="0,8,0,0">
-                                <Border.Style>
-                                    <Style TargetType="Border" BasedOn="{StaticResource CardBorderStyle}">
-                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ComboPresets.Count}" Value="0">
-                                                <Setter Property="Visibility" Value="Visible"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                                <StackPanel HorizontalAlignment="Center">
-                                    <TextBlock Text="&#x26A1;" FontSize="32" HorizontalAlignment="Center"/>
-                                    <TextBlock Text="No combos yet" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="SemiBold" FontSize="14" HorizontalAlignment="Center"/>
-                                    <TextBlock Text="Pair a Display preset with an Audio preset for one-hotkey Night Ops. Try: Night Eye + Footsteps."
-                                               Style="{StaticResource BodyTextStyle}" TextAlignment="Center" Margin="0,4,0,8"/>
-                                </StackPanel>
-                            </Border>
-                        <ItemsControl ItemsSource="{Binding ComboPresets}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border Style="{StaticResource PresetCardBorderStyle}">
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding Name}" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="SemiBold" FontSize="13"/>
-                                                <TextBlock Style="{StaticResource BodyTextStyle}" FontSize="10">
+                    <!-- Existing combos: HORIZONTAL strip only - no vertical scrolling, ever. -->
+                    <Grid Grid.Row="1" Margin="0,10,0,0">
+                        <!-- Empty state -->
+                        <Border HorizontalAlignment="Left" VerticalAlignment="Top" Width="420">
+                            <Border.Style>
+                                <Style TargetType="Border" BasedOn="{StaticResource CardBorderStyle}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ComboPresets.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <StackPanel>
+                                <TextBlock Text="&#x26A1;" FontSize="26" HorizontalAlignment="Left"/>
+                                <TextBlock Text="No combos yet" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="SemiBold" FontSize="14"/>
+                                <TextBlock Style="{StaticResource BodyTextStyle}" Margin="0,4,0,0"
+                                           Text="Pair a Display preset with an Audio preset above for one-hotkey switching. Try: Night Eye + Footsteps."/>
+                            </StackPanel>
+                        </Border>
+
+                        <ScrollViewer VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Auto"
+                                      VerticalAlignment="Top" PanningMode="HorizontalOnly">
+                            <ItemsControl ItemsSource="{Binding ComboPresets}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Orientation="Horizontal"/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Style="{StaticResource ComboCardBorderStyle}">
+                                            <StackPanel>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Image Source="{Binding Icon, Converter={StaticResource IconKeyToImageConverter}, Mode=OneWay}"
+                                                           Width="18" Height="18" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                    <TextBlock Text="{Binding Name}" Foreground="{StaticResource PrimaryTextBrush}"
+                                                               FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" Width="150"/>
+                                                    <Button Command="{Binding DataContext.ToggleComboFavoriteCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                            CommandParameter="{Binding}" ToolTip="Favorite"
+                                                            Style="{StaticResource GlyphButtonStyle}" Padding="4,0">
+                                                        <TextBlock Text="&#x2605;" FontSize="12">
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock">
+                                                                    <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsFavorite}" Value="True">
+                                                                            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
+                                                    </Button>
+                                                </StackPanel>
+                                                <TextBlock Style="{StaticResource BodyTextStyle}" FontSize="10" Margin="0,4,0,0" TextWrapping="Wrap" Height="30">
                                                     <Run Text="{Binding DisplayPresetName, Mode=OneWay}"/>
-                                                    <Run Text="  +  "/>
+                                                    <Run Text=" + "/>
                                                     <Run Text="{Binding AudioPresetName, Mode=OneWay}"/>
                                                 </TextBlock>
                                                 <TextBlock Text="{Binding HotkeyDisplayLabel, Mode=OneWay, TargetNullValue='No hotkey'}"
-                                                           Style="{StaticResource BodyTextStyle}" FontSize="10"/>
+                                                           Style="{StaticResource BodyTextStyle}" FontSize="10" Margin="0,0,0,6"/>
+
+                                                <!-- Launch with a game/app -->
+                                                <CheckBox Content="Auto-launch" FontSize="11" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,4"
+                                                          IsChecked="{Binding AutoActivateOnLaunch, Mode=OneWay}"
+                                                          Command="{Binding DataContext.ToggleComboAutoLaunchCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                          CommandParameter="{Binding}"/>
+                                                <ComboBox Style="{StaticResource DarkComboBoxStyle}" Padding="6,3" FontSize="11" Margin="0,0,0,8"
+                                                          ItemsSource="{Binding DataContext.RunningProcesses, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                          SelectedItem="{Binding TriggerProcessName, Mode=TwoWay}"/>
+
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Button Content="Activate" Style="{StaticResource NeonButtonStyle}" Padding="10,4" FontSize="10"
+                                                            Command="{Binding DataContext.ActivateComboCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                            CommandParameter="{Binding}" Margin="0,0,4,0"/>
+                                                    <Button Content="&#x2328;" Style="{StaticResource GlyphButtonStyle}" ToolTip="Set Hotkey" FontSize="13"
+                                                            Command="{Binding DataContext.RecordComboHotkeyCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                            CommandParameter="{Binding}"/>
+                                                    <Button Content="&#x29C9;" Style="{StaticResource GlyphButtonStyle}" ToolTip="Duplicate" FontSize="13"
+                                                            Command="{Binding DataContext.DuplicateComboCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                            CommandParameter="{Binding}"/>
+                                                    <Button Style="{StaticResource GlyphButtonStyle}" ToolTip="Delete"
+                                                            Command="{Binding DataContext.DeleteComboCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                            CommandParameter="{Binding}">
+                                                        <TextBlock Text="&#x1F5D1;" FontSize="12" Foreground="{StaticResource DangerRedBrush}"/>
+                                                    </Button>
+                                                </StackPanel>
                                             </StackPanel>
-                                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                                <Button Content="Activate" Style="{StaticResource NeonButtonStyle}" Padding="8,4" FontSize="10"
-                                                        Command="{Binding DataContext.ActivateComboCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                        CommandParameter="{Binding}" Margin="0,0,4,0"/>
-                                                <Button Content="Hotkey" Style="{StaticResource SecondaryButtonStyle}" Padding="8,4" FontSize="10"
-                                                        Command="{Binding DataContext.RecordComboHotkeyCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                        CommandParameter="{Binding}" Margin="0,0,4,0"/>
-                                                <Button Content="★" Style="{StaticResource SecondaryButtonStyle}" Padding="8,4" FontSize="10"
-                                                        Command="{Binding DataContext.ToggleComboFavoriteCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                        CommandParameter="{Binding}" Margin="0,0,4,0" ToolTip="Favorite"/>
-                                                <Button Content="⧉" Style="{StaticResource SecondaryButtonStyle}" Padding="8,4" FontSize="10"
-                                                        Command="{Binding DataContext.DuplicateComboCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                        CommandParameter="{Binding}" Margin="0,0,4,0" ToolTip="Duplicate"/>
-                                                <Button Content="&#x2715;" Style="{StaticResource GlyphButtonStyle}" FontSize="10"
-                                                        Command="{Binding DataContext.DeleteComboCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                        CommandParameter="{Binding}" ToolTip="Delete combo"/>
-                                            </StackPanel>
-                                        </Grid>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        </StackPanel>
-                    </ScrollViewer>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Grid>
                 </Grid>
 
-                <!-- ===================== SETTINGS TAB ===================== -->
-                <Grid Grid.Row="1" x:Name="SettingsTabContent">
+                <!-- ===================== SETTINGS TAB (2-column, fits without scrolling) ===================== -->
+                <Grid x:Name="SettingsTabContent">
                     <Grid.Style>
                         <Style TargetType="Grid">
                             <Setter Property="Visibility" Value="Collapsed"/>
@@ -664,7 +683,14 @@
                         </Style>
                     </Grid.Style>
 
-                    <StackPanel Width="520" HorizontalAlignment="Center" VerticalAlignment="Top">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="16"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Left column -->
+                    <StackPanel Grid.Column="0" VerticalAlignment="Top">
                         <Border Style="{StaticResource CardBorderStyle}">
                             <StackPanel>
                                 <TextBlock Text="GENERAL" Style="{StaticResource HeaderTextStyle}"/>
@@ -679,6 +705,26 @@
                             </StackPanel>
                         </Border>
 
+                        <Border Style="{StaticResource CardBorderStyle}" BorderBrush="{StaticResource DangerRedBrush}" BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock Text="DANGER ZONE" Style="{StaticResource HeaderTextStyle}" Foreground="{StaticResource DangerRedBrush}"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource BodyTextStyle}" Text="Restore factory display &amp; flat EQ"/>
+                                        <TextBlock Style="{StaticResource BodyTextStyle}" FontSize="10" Text="{Binding PanicHotkeyLabel}"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="Reset Now" Style="{StaticResource DangerButtonStyle}" Command="{Binding PanicResetCommand}"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- Right column -->
+                    <StackPanel Grid.Column="2" VerticalAlignment="Top">
                         <Border Style="{StaticResource CardBorderStyle}">
                             <StackPanel>
                                 <StackPanel Orientation="Horizontal">
@@ -688,13 +734,13 @@
                                                 <Setter Property="Fill" Value="#FFFF4136"/>
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding IsEqEngineEnabled}" Value="True">
-                                                        <Setter Property="Fill" Value="#FF00E676"/>
+                                                        <Setter Property="Fill" Value="#FF3ECF8E"/>
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
                                         </Ellipse.Style>
                                     </Ellipse>
-                                    <TextBlock Text="BUILT-IN EQUALIZER" Style="{StaticResource HeaderTextStyle}" Margin="0,0,0,0"/>
+                                    <TextBlock Text="BUILT-IN EQUALIZER" Style="{StaticResource HeaderTextStyle}"/>
                                 </StackPanel>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
@@ -723,23 +769,6 @@
                                            Visibility="{Binding EqStatusText, Converter={StaticResource StringToVisConverter}}"/>
                             </StackPanel>
                         </Border>
-
-                        <Border Style="{StaticResource CardBorderStyle}" BorderBrush="{StaticResource DangerRedBrush}" BorderThickness="1">
-                            <StackPanel>
-                                <TextBlock Text="DANGER ZONE" Style="{StaticResource HeaderTextStyle}" Foreground="{StaticResource DangerRedBrush}"/>
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                        <TextBlock Style="{StaticResource BodyTextStyle}" Text="Restore factory display &amp; flat EQ"/>
-                                        <TextBlock Style="{StaticResource BodyTextStyle}" FontSize="10" Text="{Binding PanicHotkeyLabel}"/>
-                                    </StackPanel>
-                                    <Button Grid.Column="1" Content="Reset Now" Style="{StaticResource DangerButtonStyle}" Command="{Binding PanicResetCommand}"/>
-                                </Grid>
-                            </StackPanel>
-                        </Border>
                     </StackPanel>
                 </Grid>
 
@@ -760,7 +789,6 @@
                     <TextBlock Text="RECORDING HOTKEY" Style="{StaticResource HeaderTextStyle}" HorizontalAlignment="Center"/>
                     <TextBlock Text="{Binding RecordingTargetLabel}" Style="{StaticResource BodyTextStyle}" HorizontalAlignment="Center" Margin="0,0,0,14"/>
 
-                    <!-- Razer-style keycap pills, live as keys are held -->
                     <ItemsControl ItemsSource="{Binding PendingKeycaps, Mode=OneWay}" HorizontalAlignment="Center" Margin="0,0,0,6">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
@@ -807,7 +835,7 @@
             </Border>
         </Border>
 
-        <!-- ===================== OSD TOAST (Freestyle-style confirm) ===================== -->
+        <!-- ===================== OSD TOAST ===================== -->
         <Border Grid.Row="0" Grid.RowSpan="3" Background="Transparent" IsHitTestVisible="False"
                 Visibility="{Binding IsToastVisible, Converter={StaticResource BoolToVisConverter}}"
                 VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,56,0,0">

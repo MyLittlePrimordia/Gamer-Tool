@@ -32,10 +32,10 @@ public partial class MainWindow : Window
     // ---------------- Accent-per-tab ----------------
     private static readonly Dictionary<AppTab, (Color Accent, Color Dim)> TabAccents = new()
     {
-        [AppTab.Display] = ((Color)ColorConverter.ConvertFromString("#FF00E676"), (Color)ColorConverter.ConvertFromString("#FF0E3B24")),
-        [AppTab.Audio] = ((Color)ColorConverter.ConvertFromString("#FF00B0FF"), (Color)ColorConverter.ConvertFromString("#FF0C2C3F")),
-        [AppTab.Combos] = ((Color)ColorConverter.ConvertFromString("#FFFFC400"), (Color)ColorConverter.ConvertFromString("#FF3F3000")),
-        [AppTab.Settings] = ((Color)ColorConverter.ConvertFromString("#FFB388FF"), (Color)ColorConverter.ConvertFromString("#FF2E2145")),
+        [AppTab.Display] = ((Color)ColorConverter.ConvertFromString("#FF3ECF8E"), (Color)ColorConverter.ConvertFromString("#FF173D2C")),
+        [AppTab.Audio] = ((Color)ColorConverter.ConvertFromString("#FF4FB8E8"), (Color)ColorConverter.ConvertFromString("#FF17313F")),
+        [AppTab.Combos] = ((Color)ColorConverter.ConvertFromString("#FFF2B84B"), (Color)ColorConverter.ConvertFromString("#FF3A2E14")),
+        [AppTab.Settings] = ((Color)ColorConverter.ConvertFromString("#FFB79CFF"), (Color)ColorConverter.ConvertFromString("#FF29213D")),
     };
 
     // ---------------- Audio test player ----------------

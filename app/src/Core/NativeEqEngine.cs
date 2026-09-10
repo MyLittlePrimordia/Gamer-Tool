@@ -98,6 +98,49 @@ public sealed class NativeEqEngine
         return false;
     }
 
+    /// <summary>
+    /// True when GamerToolAPO is specifically wired into the given render
+    /// endpoint (its GUID in braces, e.g. "{a1b2c3d4-...}") - lets the UI
+    /// answer "is my *current* output device covered" instead of "is ANY
+    /// device covered", so the reattach prompt reflects the actual device
+    /// in use rather than a stale, disconnected-from-reality snapshot.
+    /// </summary>
+    public bool IsEngineAttachedToEndpoint(string endpointGuid)
+    {
+        if (string.IsNullOrEmpty(endpointGuid))
+            return false;
+
+        try
+        {
+            using var fx = Registry.LocalMachine.OpenSubKey(
+                $@"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\{endpointGuid}\FxProperties");
+            if (fx is null)
+                return false;
+
+            var clsidString = "{" + ApoClsid.ToString("D").ToUpperInvariant() + "}";
+            var lfx = fx.GetValue("{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1") as string;
+            return string.Equals(lfx, clsidString, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Pulls the "{guid}" endpoint key name out of a full IMMDevice ID
+    /// string (e.g. "{0.0.0.00000000}.{guid}" -> "{guid}"), which is how
+    /// MMDevices\Audio\Render subkeys are named in the registry.
+    /// </summary>
+    public static string? ExtractEndpointGuid(string? deviceId)
+    {
+        if (string.IsNullOrEmpty(deviceId))
+            return null;
+
+        int idx = deviceId.LastIndexOf('{');
+        return idx >= 0 ? deviceId[idx..] : null;
+    }
+
     #endregion
 
     #region Live config publishing
@@ -115,7 +158,24 @@ public sealed class NativeEqEngine
         }
         catch (FileNotFoundException)
         {
-            _mapping = MemoryMappedFile.CreateNew(SharedMemoryName, ConfigSizePacked);
+            // audiodg.exe runs the APO instance under a different account
+            // (LocalService) than this desktop app runs under. A section
+            // created with the default (null) security descriptor is only
+            // reachable by its creator's own account, so whichever side
+            // gets here first silently locks the other one out - the APO
+            // then never sees a real config and just passes audio straight
+            // through untouched (which is exactly "the EQ does nothing").
+            // An explicit "Everyone: full control" rule makes the section
+            // reachable no matter which side creates it first.
+            var security = new MemoryMappedFileSecurity();
+            var everyone = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
+            security.AddAccessRule(new AccessRule<MemoryMappedFileRights>(
+                everyone, MemoryMappedFileRights.FullControl, AccessControlType.Allow));
+
+            _mapping = MemoryMappedFile.CreateNew(
+                SharedMemoryName, ConfigSizePacked, MemoryMappedFileAccess.ReadWrite,
+                MemoryMappedFileOptions.None, security, HandleInheritability.None);
+
             // Initialize to flat/bypass so a freshly-created section is benign.
             using var view = _mapping.CreateViewAccessor();
             view.Write(0, 0L);          // version
