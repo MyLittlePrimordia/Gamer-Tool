@@ -4,8 +4,6 @@ using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Security.AccessControl;
-using System.Security.Principal;
 using Microsoft.Win32;
 
 namespace GamerTool.Core;
@@ -165,25 +163,124 @@ public sealed class NativeEqEngine
             // gets here first silently locks the other one out - the APO
             // then never sees a real config and just passes audio straight
             // through untouched (which is exactly "the EQ does nothing").
-            // An explicit "Everyone: full control" rule makes the section
-            // reachable no matter which side creates it first.
-            var security = new MemoryMappedFileSecurity();
-            var everyone = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
-            security.AddAccessRule(new AccessRule<MemoryMappedFileRights>(
-                everyone, MemoryMappedFileRights.FullControl, AccessControlType.Allow));
+            // The managed MemoryMappedFileSecurity overload of CreateNew is
+            // .NET Framework-only, so mirror the native side's approach via
+            // P/Invoke: CreateFileMappingW with an explicitly NULL DACL
+            // (grants every account access regardless of who created the
+            // section first), then re-open it through the managed API.
+            IntPtr sd = BuildNullDaclDescriptor();
+            if (sd == IntPtr.Zero)
+                return;
 
-            _mapping = MemoryMappedFile.CreateNew(
-                SharedMemoryName, ConfigSizePacked, MemoryMappedFileAccess.ReadWrite,
-                MemoryMappedFileOptions.None, security, HandleInheritability.None);
+            try
+            {
+                var security = new SECURITY_ATTRIBUTES
+                {
+                    nLength = (uint)Marshal.SizeOf<SECURITY_ATTRIBUTES>(),
+                    lpSecurityDescriptor = sd,
+                    bInheritHandle = false
+                };
 
-            // Initialize to flat/bypass so a freshly-created section is benign.
-            using var view = _mapping.CreateViewAccessor();
-            view.Write(0, 0L);          // version
-            view.Write(8, 0);           // enabled = 0
-            for (int i = 0; i < 10; i++)
-                view.Write(12 + i * 4, 0f);
+                IntPtr h = CreateFileMappingW(
+                    INVALID_HANDLE_VALUE, ref security, PAGE_READWRITE,
+                    0, (uint)ConfigSizePacked, SharedMemoryName);
+
+                if (h == IntPtr.Zero)
+                    return;
+
+                try
+                {
+                    // Create-or-open semantics: if audiodg won the race this
+                    // returns a handle to the existing section; either way
+                    // the managed wrapper now owns a usable view of it.
+                    _mapping = MemoryMappedFile.OpenExisting(
+                        SharedMemoryName, MemoryMappedFileRights.ReadWrite);
+                }
+                finally
+                {
+                    CloseHandle(h);
+                }
+
+                // Initialize to flat/bypass so a freshly-created section is benign.
+                using var view = _mapping.CreateViewAccessor();
+                view.Write(0, 0L);          // version
+                view.Write(8, 0);           // enabled = 0
+                for (int i = 0; i < 10; i++)
+                    view.Write(12 + i * 4, 0f);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(sd);
+            }
         }
     }
+
+    /// <summary>
+    /// Builds an absolute-form SECURITY_DESCRIPTOR whose DACL is explicitly
+    /// NULL (not merely absent): "no access restrictions, everyone allowed".
+    /// That is what lets audiodg's LocalService account and this desktop app
+    /// share the section regardless of which side created it first. Mirrors
+    /// the native OpenSharedConfig() in GamerToolAPO.cpp.
+    /// </summary>
+    private static IntPtr BuildNullDaclDescriptor()
+    {
+        IntPtr memory = Marshal.AllocHGlobal(Marshal.SizeOf<SECURITY_DESCRIPTOR>());
+        try
+        {
+            if (!InitializeSecurityDescriptor(memory, SECURITY_DESCRIPTOR_REVISION) ||
+                !SetSecurityDescriptorDacl(memory, true, IntPtr.Zero, false))
+            {
+                Marshal.FreeHGlobal(memory);
+                return IntPtr.Zero;
+            }
+
+            return memory;
+        }
+        catch
+        {
+            Marshal.FreeHGlobal(memory);
+            throw;
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SECURITY_DESCRIPTOR
+    {
+        public byte Revision;
+        public byte Sbz1;
+        public ushort Control;
+        public uint OffsetOwner;
+        public uint OffsetGroup;
+        public uint OffsetSacl;
+        public uint OffsetDacl;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SECURITY_ATTRIBUTES
+    {
+        public uint nLength;
+        public IntPtr lpSecurityDescriptor;
+        public bool bInheritHandle;
+    }
+
+    private const uint SECURITY_DESCRIPTOR_REVISION = 1;
+    private const uint PAGE_READWRITE = 0x04;
+    private static readonly IntPtr INVALID_HANDLE_VALUE = new(-1);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool InitializeSecurityDescriptor(IntPtr pSecurityDescriptor, uint dwRevision);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool SetSecurityDescriptorDacl(
+        IntPtr pSecurityDescriptor, bool bDaclPresent, IntPtr pDacl, bool bDaclDefaulted);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateFileMappingW(
+        IntPtr hFile, ref SECURITY_ATTRIBUTES sa, uint protect,
+        uint dwMaximumSizeHigh, uint dwMaximumSizeLow, string lpName);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
 
     /// <summary>
     /// Publishes a 10-band gain vector to every APO instance. Bump-version
