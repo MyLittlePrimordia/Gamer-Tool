@@ -5,6 +5,7 @@ using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using Microsoft.Win32;
 
 namespace GamerTool.Core;
@@ -557,9 +558,13 @@ public sealed class NativeEqEngine
             if (enable)
             {
                 // 1) Extract embedded APO to ProgramData (permanent home).
-                //    Skipped when the on-disk copy is already byte-identical
-                //    (a File.Create over a DLL audiodg has mapped throws a
-                //    sharing violation and would abort every re-enable).
+                //    Skipped only when the on-disk copy is byte-identical
+                //    (SHA256, not just length - two different builds can
+                //    share a size, and a stale DLL silently kept alive that
+                //    way cost a full debug round). A File.Create over a DLL
+                //    audiodg has mapped throws a sharing violation, so a
+                //    locked target keeps the existing file instead of
+                //    aborting the whole enable.
                 var dir = Path.GetDirectoryName(ApoDllPath)!;
                 Directory.CreateDirectory(dir);
                 using var resource = typeof(NativeEqEngine).Assembly
@@ -570,19 +575,39 @@ public sealed class NativeEqEngine
                     return false;
                 }
 
+                string resourceHash;
+                using (var sha = SHA256.Create())
+                {
+                    resource.Position = 0;
+                    resourceHash = Convert.ToHexString(sha.ComputeHash(resource));
+                    resource.Position = 0;
+                }
+                log.Add($"step1 EXTRACT: embedded sha256={resourceHash.Substring(0, 16)}...");
+
                 bool needExtract = true;
                 try
                 {
-                    var existing = new FileInfo(ApoDllPath);
-                    if (existing.Exists && existing.Length == resource.Length)
+                    if (File.Exists(ApoDllPath))
                     {
-                        needExtract = false;
-                        log.Add($"step1 EXTRACT: skipped, on-disk copy identical ({existing.Length} bytes)");
+                        string diskHash;
+                        using (var sha = SHA256.Create())
+                        using (var disk = File.OpenRead(ApoDllPath))
+                            diskHash = Convert.ToHexString(sha.ComputeHash(disk));
+
+                        if (string.Equals(diskHash, resourceHash, StringComparison.OrdinalIgnoreCase))
+                        {
+                            needExtract = false;
+                            log.Add("step1 EXTRACT: skipped, on-disk copy byte-identical");
+                        }
+                        else
+                        {
+                            log.Add($"step1 EXTRACT: on-disk copy differs (disk sha256={diskHash.Substring(0, 16)}...), replacing");
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    log.Add($"step1 EXTRACT: size check failed ({ex.GetType().Name}), will extract");
+                    log.Add($"step1 EXTRACT: hash check failed ({ex.GetType().Name}), will extract");
                 }
 
                 if (needExtract)
