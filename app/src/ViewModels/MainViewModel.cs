@@ -496,9 +496,9 @@ public sealed class MainViewModel : ObservableObject
 
     private void ExecuteClearDisplayHotkey()
     {
-        if (SelectedDisplayPreset?.HotkeyId.HasValue != true)
+        if (SelectedDisplayPreset?.HotkeyId is not { } hotkeyId)
             return;
-        HotkeyManager.Instance.UnregisterHotkey(SelectedDisplayPreset.HotkeyId.Value);
+        HotkeyManager.Instance.UnregisterHotkey(hotkeyId);
         SelectedDisplayPreset.HotkeyId = null;
         SelectedDisplayPreset.HotkeyModifiers = 0;
         SelectedDisplayPreset.HotkeyVirtualKey = 0;
@@ -563,10 +563,42 @@ public sealed class MainViewModel : ObservableObject
         private set => SetProperty(ref _lastAudioApplyResult, value);
     }
 
+    /// <summary>
+    /// One-line live verdict of the last Apply: which path actually took
+    /// effect. Empty when a wired engine applied the gains cleanly - the
+    /// normal case should be silence, not noise.
+    /// </summary>
+    public string EqLiveStatus
+    {
+        get
+        {
+            if (IsAudioBypassed)
+                return "Bypassed - flat output.";
+
+            if (NativeEqEngine.Instance.IsEngineEnabled())
+                return "Applied to system output.";
+
+            return NativeEqEngine.Instance.IsEngineInstalled()
+                ? "Not wired to your current device - re-run Enable above."
+                : "EQ engine off - Enable above to apply system-wide.";
+        }
+    }
+
+    /// <summary>Explicit Apply button: re-publishes the current slider state to the engine.</summary>
+    private void ExecuteApplyEq()
+    {
+        ApplyAudioLive();
+        OnPropertyChanged(nameof(EqLiveStatus));
+        StatusMessage = LastAudioApplyResult?.NativeEqApplied == true
+            ? "EQ applied to system output."
+            : "EQ not applied - engine off or not wired (see Audio tab).";
+    }
+
 
 
     public ICommand SelectAudioPresetCommand { get; }
     public ICommand SaveAudioPresetCommand { get; }
+    public ICommand ApplyEqCommand { get; }
     public ICommand RecordAudioHotkeyCommand { get; }
     public ICommand TestAudioPresetCommand { get; }
     public ICommand CycleAudioPresetForwardCommand { get; }
@@ -644,11 +676,16 @@ public sealed class MainViewModel : ObservableObject
         {
             LastAudioApplyResult = AudioManager.Instance.ApplyPreset(new double[10], false);
             EqGainsChanged?.Invoke(gains);
-            return;
+        }
+        else
+        {
+            LastAudioApplyResult = AudioManager.Instance.ApplyPreset(gains, EnableNativeLoudness);
+            EqGainsChanged?.Invoke(gains);
         }
 
-        LastAudioApplyResult = AudioManager.Instance.ApplyPreset(gains, EnableNativeLoudness);
-        EqGainsChanged?.Invoke(gains);
+        // Every publish funnels through here, so this is the one place the
+        // live verdict (wired engine vs not) needs re-raising.
+        OnPropertyChanged(nameof(EqLiveStatus));
     }
 
     private void ApplyAudioPresetById(string presetId)
@@ -823,9 +860,9 @@ public sealed class MainViewModel : ObservableObject
 
     private void ExecuteClearAudioHotkey()
     {
-        if (SelectedAudioPreset?.HotkeyId.HasValue != true)
+        if (SelectedAudioPreset?.HotkeyId is not { } hotkeyId)
             return;
-        HotkeyManager.Instance.UnregisterHotkey(SelectedAudioPreset.HotkeyId.Value);
+        HotkeyManager.Instance.UnregisterHotkey(hotkeyId);
         SelectedAudioPreset.HotkeyId = null;
         SelectedAudioPreset.HotkeyModifiers = 0;
         SelectedAudioPreset.HotkeyVirtualKey = 0;
@@ -873,6 +910,7 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(IsEqEngineEnabled));
         OnPropertyChanged(nameof(IsEqEngineAttached));
         OnPropertyChanged(nameof(NeedsEqReattach));
+        OnPropertyChanged(nameof(EqLiveStatus));
     }
 
     private DispatcherTimer? _eqDeviceWatchTimer;
@@ -943,17 +981,23 @@ public sealed class MainViewModel : ObservableObject
             IsEqBusy = true;
             EqStatusText = "Enabling built-in EQ - you may hear audio restart...";
 
-            // Wait in the background for the elevated pass to finish.
+            // Wait in the background for the elevated pass to finish. The
+            // elevated instance exits 0 only when endpoints are actually
+            // wired now (attach verifies a real LFX write, not just files).
             Task.Run(async () =>
             {
                 try { await elevated.WaitForExitAsync(); } catch { }
+                int exitCode = 0;
+                try { exitCode = elevated.ExitCode; } catch { }
                 System.Windows.Application.Current.Dispatcher.Invoke(() =>
                 {
                     IsEqBusy = false;
-                    bool ok = NativeEqEngine.Instance.IsEngineEnabled();
-                    EqStatusText = ok
+                    bool attached = NativeEqEngine.Instance.IsEngineAttachedToAnyDevice();
+                    EqStatusText = exitCode == 0 && attached
                         ? "Built-in EQ active on all playback devices."
-                        : "Enablement failed - try running Gamer Tool as administrator.";
+                        : attached
+                            ? "EQ wired but enablement reported an error - re-run if sliders do nothing."
+                            : "Enablement failed - endpoint wiring was denied. Try running Gamer Tool as administrator.";
                     RefreshEqEngineUI();
                     ApplyAudioLive();
                 });
@@ -992,7 +1036,8 @@ public sealed class MainViewModel : ObservableObject
                 {
                     IsEqBusy = false;
                     RefreshEqEngineUI();
-                    EqStatusText = NativeEqEngine.Instance.IsEngineEnabled()
+                    bool stillEnabled = NativeEqEngine.Instance.IsEngineInstalled();
+                    EqStatusText = stillEnabled
                         ? "Disable failed - try running Gamer Tool as administrator."
                         : "Built-in EQ disabled.";
                 });
@@ -1248,9 +1293,9 @@ public sealed class MainViewModel : ObservableObject
 
     private void ExecuteClearComboHotkey(ComboPreset? combo)
     {
-        if (combo?.HotkeyId.HasValue != true)
+        if (combo?.HotkeyId is not { } hotkeyId)
             return;
-        HotkeyManager.Instance.UnregisterHotkey(combo.HotkeyId.Value);
+        HotkeyManager.Instance.UnregisterHotkey(hotkeyId);
         combo.HotkeyId = null;
         combo.HotkeyModifiers = 0;
         combo.HotkeyVirtualKey = 0;
@@ -1790,6 +1835,7 @@ public sealed class MainViewModel : ObservableObject
 
         SelectAudioPresetCommand = new RelayCommand<AudioPreset>(p => { if (p is not null) SelectedAudioPreset = p; });
         SaveAudioPresetCommand = new RelayCommand(ExecuteSaveAudioPreset);
+        ApplyEqCommand = new RelayCommand(ExecuteApplyEq);
         RecordAudioHotkeyCommand = new RelayCommand<AudioPreset>(p => { if (p is not null) BeginHotkeyRecording(p, HotkeyTargetKind.Audio, p.Name); });
         TestAudioPresetCommand = new RelayCommand<AudioPreset>(ExecuteTestAudioPreset);
         CycleAudioPresetForwardCommand = new RelayCommand(() => CycleAudioPreset(1));

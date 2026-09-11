@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using Microsoft.Win32;
 
 namespace GamerTool.Core;
@@ -45,7 +46,7 @@ public sealed class NativeEqEngine
     #region State
 
     /// <summary>True when the extracted APO file and its registration both exist.</summary>
-    public bool IsEngineEnabled()
+    public bool IsEngineInstalled()
     {
         if (!File.Exists(ApoDllPath))
             return false;
@@ -63,6 +64,18 @@ public sealed class NativeEqEngine
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// True only when the engine is installed AND at least one active render
+    /// endpoint is actually wired to the APO - the state the EQ audibly
+    /// needs. The original version checked only file+CLSID, so a failed
+    /// endpoint-wiring step (see AttachToAllRenderEndpoints) still reported
+    /// "enabled" while audiodg never loaded the APO at all.
+    /// </summary>
+    public bool IsEngineEnabled()
+    {
+        return IsEngineInstalled() && IsEngineAttachedToAnyDevice();
     }
 
     /// <summary>True when at least one active render endpoint has GamerToolAPO wired in.</summary>
@@ -426,48 +439,78 @@ public sealed class NativeEqEngine
     /// Writes our CLSID into the LFX value of every ACTIVE render endpoint.
     /// EqualizerAPO backs up existing values under its own Child APOs key;
     /// we take the same approach so an uninstall can restore the original.
+    ///
+    /// The MMDevices tree is TrustedInstaller-owned: even elevated, Admins
+    /// hold only SetValue+ReadKey rights there. A plain writable:true open
+    /// demands full KEY_WRITE (which includes CreateSubKey, denied) - that
+    /// is exactly why the original version silently wired nothing and the
+    /// EQ "did nothing" despite Enable reporting success. Every open below
+    /// requests only the rights the ACL actually grants.
     /// </summary>
     private static bool AttachToAllRenderEndpoints()
     {
+        int wired = 0;
+        int activeSeen = 0;
+
         try
         {
+            using var renderRoot = OpenRenderRoot();
+            if (renderRoot is null)
+                return false;
+
             var clsidString = "{" + ApoClsid.ToString("D").ToUpperInvariant() + "}";
-            using var renderRoot = Registry.LocalMachine.CreateSubKey(
-                @"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render", writable: true);
 
             foreach (var endpointGuid in renderRoot.GetSubKeyNames())
             {
                 // Only ACTIVE endpoints (state DWORD == 1); plugging in a new
                 // device later re-runs this via the C# side's device watcher.
-                using var endpointKey = renderRoot.OpenSubKey(endpointGuid, writable: true);
-                if (endpointKey is null)
+                int? state;
+                try
+                {
+                    using var endpointKey = renderRoot.OpenSubKey(endpointGuid);
+                    state = endpointKey?.GetValue("DeviceState") as int?;
+                }
+                catch
+                {
                     continue;
+                }
 
-                var state = endpointKey.GetValue("DeviceState") as int?;
                 if (state != 1)
                     continue;
 
-                using var fx = endpointKey.CreateSubKey("FxProperties");
+                activeSeen++;
 
                 // Backup the existing LFX value (or record its absence) so
                 // Disable can restore exactly what was there before us.
-                var existing = fx.GetValue("{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1") as string;
-                using (var backupKey = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\GamerTool\EndpointBackup"))
+                // Best-effort: a denied backup write must not block wiring.
+                try
                 {
-                    if (existing is null)
-                        backupKey.SetValue(endpointGuid, "\0none\0", RegistryValueKind.String);
-                    else
-                        backupKey.SetValue(endpointGuid, existing, RegistryValueKind.String);
+                    var existing = GetEndpointLfxValue(endpointGuid);
+                    using (var backupKey = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\GamerTool\EndpointBackup"))
+                    {
+                        if (existing is null)
+                            backupKey.SetValue(endpointGuid, "\0none\0", RegistryValueKind.String);
+                        else
+                            backupKey.SetValue(endpointGuid, existing, RegistryValueKind.String);
+                    }
+                }
+                catch
+                {
+                    // Backup is best-effort; keep wiring.
                 }
 
-                fx.SetValue("{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1", clsidString, RegistryValueKind.String);
+                if (TrySetEndpointLfxValue(endpointGuid, clsidString))
+                    wired++;
             }
 
-            return true;
+            // At least one active endpoint must actually be wired, otherwise
+            // RunElevatedEnable must NOT report success (that false success
+            // is what made the EQ silently dead while the UI said "active").
+            return activeSeen == 0 || wired > 0;
         }
         catch
         {
-            return false;
+            return wired > 0;
         }
     }
 
@@ -475,34 +518,104 @@ public sealed class NativeEqEngine
     {
         try
         {
-            var clsidString = "{" + ApoClsid.ToString("D").ToUpperInvariant() + "}";
-            using var renderRoot = Registry.LocalMachine.CreateSubKey(
-                @"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render", writable: true);
+            using var renderRoot = OpenRenderRoot();
+            if (renderRoot is null)
+                return;
 
-            using var backupKey = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\GamerTool\EndpointBackup", writable: true);
+            var clsidString = "{" + ApoClsid.ToString("D").ToUpperInvariant() + "}";
 
             foreach (var endpointGuid in renderRoot.GetSubKeyNames())
             {
-                using var fx = renderRoot.OpenSubKey(endpointGuid + @"\FxProperties", writable: true);
-                if (fx is null)
-                    continue;
-
-                var current = fx.GetValue("{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1") as string;
+                var current = GetEndpointLfxValue(endpointGuid);
                 if (!string.Equals(current, clsidString, StringComparison.OrdinalIgnoreCase))
                     continue; // someone else's APO - leave untouched
 
                 // Restore what was there before us (or delete if there was nothing).
-                var backup = backupKey.GetValue(endpointGuid) as string;
-                if (backup is null || backup == "\0none\0")
-                    fx.DeleteValue("{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1", throwOnMissingValue: false);
-                else
-                    fx.SetValue("{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1", backup, RegistryValueKind.String);
+                string? backup = null;
+                try
+                {
+                    using var backupKey = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\GamerTool\EndpointBackup");
+                    backup = backupKey?.GetValue(endpointGuid) as string;
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    if (backup is null || backup == "\0none\0")
+                        TrySetEndpointLfxValue(endpointGuid, null);
+                    else
+                        TrySetEndpointLfxValue(endpointGuid, backup);
+                }
+                catch
+                {
+                    // Best-effort cleanup.
+                }
             }
         }
         catch
         {
             // Best-effort cleanup.
         }
+    }
+
+    private const string LfxValueName = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1";
+
+    /// <summary>Reads an endpoint's current LFX CLSID value (null when absent).</summary>
+    private static string? GetEndpointLfxValue(string endpointGuid)
+    {
+        using var fx = OpenEndpointFxKey(endpointGuid, writable: false);
+        return fx?.GetValue(LfxValueName) as string;
+    }
+
+    /// <summary>
+    /// Writes (or, when clsidString is null, deletes) an endpoint's LFX value
+    /// through a handle restricted to the rights the MMDevices ACL actually
+    /// grants Admins (SetValue+ReadKey). The standard writable:true open is
+    /// denied there (it demands CreateSubKey too), which silently broke the
+    /// original attach.
+    /// </summary>
+    private static bool TrySetEndpointLfxValue(string endpointGuid, string? clsidString)
+    {
+        using var fx = OpenEndpointFxKey(endpointGuid, writable: clsidString is not null);
+        if (fx is null)
+            return false;
+
+        if (clsidString is null)
+        {
+            try
+            {
+                fx.DeleteValue(LfxValueName, throwOnMissingValue: false);
+                return true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+
+        fx.SetValue(LfxValueName, clsidString, RegistryValueKind.String);
+        return true;
+    }
+
+    /// <summary>Read-only open of the Render root (subkey enumeration + DeviceState reads).</summary>
+    private static RegistryKey? OpenRenderRoot()
+    {
+        return RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Default)
+            .OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render");
+    }
+
+    /// <summary>
+    /// Opens an endpoint's FxProperties key requesting only the rights the
+    /// ACL grants: SetValue|ReadKey when writing, plain ReadKey when reading.
+    /// </summary>
+    private static RegistryKey? OpenEndpointFxKey(string endpointGuid, bool writable)
+    {
+        return RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Default)
+            .OpenSubKey(
+                $@"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\{endpointGuid}\FxProperties",
+                writable ? RegistryRights.SetValue | RegistryRights.ReadKey : RegistryRights.ReadKey);
     }
 
     /// <summary>

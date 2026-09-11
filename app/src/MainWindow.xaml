@@ -447,6 +447,9 @@
                         <WrapPanel HorizontalAlignment="Center">
                             <Button x:Name="TestAudioButton" Content="&#x25B6;  Play Test" Style="{StaticResource NeonButtonStyle}"
                                     Padding="12,5" Click="TestAudioButton_Click" Margin="0,0,6,4"/>
+                            <Button Content="Apply EQ" Style="{StaticResource NeonButtonStyle}" Padding="12,5"
+                                    Command="{Binding ApplyEqCommand}" Margin="0,0,6,4"
+                                    ToolTip="Re-publish the current EQ curve to the system output"/>
                             <Button Content="Hotkey" Style="{StaticResource SecondaryButtonStyle}" Padding="12,5"
                                     Command="{Binding RecordSelectedAudioHotkeyCommand}" Margin="0,0,6,4"/>
                             <Button Content="Duplicate" Style="{StaticResource SecondaryButtonStyle}" Padding="12,5"
@@ -511,6 +514,8 @@
                                 <Button Content="Save As New" Style="{StaticResource NeonButtonStyle}"
                                         Command="{Binding SaveAudioPresetCommand}"/>
                             </StackPanel>
+                            <TextBlock Style="{StaticResource BodyTextStyle}" FontSize="10" TextAlignment="Center" Margin="0,6,0,0"
+                                       Text="{Binding EqLiveStatus}"/>
                             <TextBlock Style="{StaticResource BodyTextStyle}" FontSize="10" TextAlignment="Center" Margin="0,8,0,0" TextWrapping="Wrap"
                                        Text="Built-in anti-clip: loud boosts are auto-leveled (turn up volume to compensate)."/>
                         </StackPanel>
