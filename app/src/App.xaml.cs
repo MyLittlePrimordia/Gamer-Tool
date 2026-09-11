@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -12,7 +13,7 @@ namespace GamerTool;
 
 public partial class App : Application
 {
-    private const string MutexName = @"Global\GamerTool_SingleInstance";
+    private const string MutexName = @"Local\GamerTool_SingleInstance";
     private Mutex? _singleInstanceMutex;
 
     private MainViewModel? _viewModel;
@@ -21,6 +22,7 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        StartupTrace($"begin pid={Environment.ProcessId} args=[{string.Join(" ", e.Args)}]");
 
         // --- Elevated bootstrap pass ---
         // The UI relaunches GamerTool with --enable-eq/--disable-eq under the
@@ -39,6 +41,7 @@ public partial class App : Application
 
         // --- Single-instance enforcement ---
         _singleInstanceMutex = new Mutex(initiallyOwned: true, MutexName, out bool createdNew);
+        StartupTrace(createdNew ? "mutex=owner (first instance)" : "mutex=exists (second instance, exiting)");
         if (!createdNew)
         {
             // A second launch while GamerTool is already running. A full
@@ -85,18 +88,50 @@ public partial class App : Application
         TrayManager.Instance.RestoreRequested += ShowMainWindow;
         TrayManager.Instance.TrayIconRightClicked += ShowTrayContextMenu;
 
+        // One-click "restart as admin": the Settings tab offers it when the
+        // app isn't elevated. The mutex is released BEFORE spawning the
+        // elevated copy - the child boots slower than the parent shuts down,
+        // but ordering it this way removes the race entirely instead of
+        // relying on that timing.
+        _viewModel.RestartAsAdminRequested += RestartElevated;
+
         // Live tray: tooltip + preset icon refresh whenever the active
         // display/audio selection or combo changes.
         _viewModel.ActiveStateChanged += RefreshTrayState;
 
         // --- Main window ---
         _mainWindow = new MainWindow(_viewModel);
+        StartupTrace("viewmodel+window constructed");
 
         bool startMinimized = Array.Exists(e.Args, a => string.Equals(a, "--minimized", StringComparison.OrdinalIgnoreCase));
         if (!startMinimized)
             _mainWindow.Show();
 
         RefreshTrayState();
+        StartupTrace("window shown, startup complete");
+    }
+
+    /// <summary>
+    /// Best-effort startup breadcrumb log. Diagnoses "double-click does
+    /// nothing" reports (slow single-file cold extraction vs. an early
+    /// crash): every milestone gets a timestamp; if the log stops early we
+    /// know exactly where startup died. User-writable location (LOCALAPPDATA)
+    /// so it works unelevated too.
+    /// </summary>
+    private static void StartupTrace(string message)
+    {
+        try
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GamerTool");
+            Directory.CreateDirectory(dir);
+            File.AppendAllText(
+                Path.Combine(dir, "startup.log"),
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] pid={Environment.ProcessId} {message}{Environment.NewLine}");
+        }
+        catch
+        {
+        }
     }
 
     private void ShowMainWindow()
@@ -107,6 +142,46 @@ public partial class App : Application
         _mainWindow.Show();
         _mainWindow.WindowState = WindowState.Normal;
         _mainWindow.Activate();
+    }
+
+    /// <summary>
+    /// Relaunches this exact exe elevated (plain UI startup, no flags) and
+    /// exits the current instance. The single-instance mutex is released
+    /// first so the elevated copy never trips over it. UAC declined = stay
+    /// put with a status message, nothing else changes.
+    /// </summary>
+    private void RestartElevated()
+    {
+        var exePath = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(exePath) || _viewModel is null)
+            return;
+
+        if (_singleInstanceMutex is not null)
+        {
+            try { _singleInstanceMutex.ReleaseMutex(); } catch (ApplicationException) { }
+            _singleInstanceMutex.Dispose();
+            _singleInstanceMutex = null;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = exePath,
+                UseShellExecute = true,
+                Verb = "runas"
+            });
+        }
+        catch
+        {
+            // UAC declined after we already released the mutex - re-acquire
+            // so a second Restart click still works, and stay running.
+            _singleInstanceMutex = new Mutex(initiallyOwned: true, MutexName, out _);
+            _viewModel.StatusMessage = "Restart cancelled (UAC declined).";
+            return;
+        }
+
+        Shutdown();
     }
 
     private void ShowTrayContextMenu()

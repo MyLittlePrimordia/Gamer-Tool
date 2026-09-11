@@ -769,6 +769,13 @@
                                                 Visibility="{Binding IsEqEngineEnabled, Converter={StaticResource BoolToVisConverter}}"/>
                                     </StackPanel>
                                 </Grid>
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0"
+                                            Visibility="{Binding IsElevated, Converter={StaticResource InverseBoolToVisConverter}}">
+                                    <TextBlock Style="{StaticResource BodyTextStyle}" FontSize="10" VerticalAlignment="Center" Margin="0,0,8,0"
+                                               Text="Not running as admin - the engine install needs one approval:" TextWrapping="Wrap"/>
+                                    <Button Content="Restart as admin" Style="{StaticResource SecondaryButtonStyle}" Padding="12,5"
+                                            Command="{Binding RestartAsAdminCommand}"/>
+                                </StackPanel>
                                 <TextBlock Style="{StaticResource BodyTextStyle}" Foreground="{StaticResource MutedTextBrush}"
                                            Text="{Binding EqStatusText, Mode=OneWay}" TextWrapping="Wrap" Margin="0,8,0,0"
                                            Visibility="{Binding EqStatusText, Converter={StaticResource StringToVisConverter}}"/>

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Linq;
+using System.Security.Principal;
 using System.Threading.Tasks;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -955,6 +956,31 @@ public sealed class MainViewModel : ObservableObject
 
     public ICommand EnableEqEngineCommand { get; }
     public ICommand DisableEqEngineCommand { get; }
+    public ICommand RestartAsAdminCommand { get; }
+
+    /// <summary>
+    /// True when this process is already elevated. The EQ engine's install
+    /// step self-elevates a child process either way, but several flows
+    /// (global hotkeys vs UAC prompts, tray restore quirks) behave better
+    /// elevated, so the Settings tab offers a one-click restart-as-admin
+    /// for users who launched normally and forgot.
+    /// </summary>
+    public bool IsElevated { get; } = new WindowsPrincipal(WindowsIdentity.GetCurrent())
+        .IsInRole(WindowsBuiltInRole.Administrator);
+
+    /// <summary>
+    /// Relaunches this exact exe elevated (no args = normal UI startup),
+    /// then exits the current instance. UAC declined = stay put, toast why.
+    /// The actual handoff (mutex release first, then spawn) lives in App,
+    /// which owns the single-instance mutex - firing the event is all the
+    /// ViewModel does.
+    /// </summary>
+    public event Action? RestartAsAdminRequested;
+
+    private void ExecuteRestartAsAdmin()
+    {
+        RestartAsAdminRequested?.Invoke();
+    }
 
     /// <summary>
     /// One-click enablement: relaunches GamerTool elevated with the
@@ -1871,6 +1897,7 @@ public sealed class MainViewModel : ObservableObject
 
         EnableEqEngineCommand = new RelayCommand(ExecuteEnableEqEngine);
         DisableEqEngineCommand = new RelayCommand(ExecuteDisableEqEngine);
+        RestartAsAdminCommand = new RelayCommand(ExecuteRestartAsAdmin);
 
         // Fire-and-forget: detection + version checks hit the network; the
         // constructor must not block first paint on them.

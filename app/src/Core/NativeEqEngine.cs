@@ -1,22 +1,40 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Security.AccessControl;
 using Microsoft.Win32;
 
 namespace GamerTool.Core;
 
 /// <summary>
-/// Drives the built-in GamerToolAPO engine: writes the live 10-band config
-/// into the shared memory section the APO instances read in audiodg.exe,
-/// and performs one-time enablement (DLL extraction + registry registration
-/// + audio graph reload) through an elevated relaunch of GamerTool itself.
+/// Drives the built-in GamerToolAPO equalizer engine.
 ///
-/// Layout freeze: the native side (GamerToolAPO.h struct EqConfig) mirrors
-/// this exact 4 + 40 + 8-byte shape. Never change one without the other.
+/// Architecture (mirrors EqualizerAPO's proven design, reimplemented):
+///  - A native APO DLL (GamerToolAPO) runs inside audiodg.exe and applies a
+///    10-band biquad chain to system audio.
+///  - This class publishes live gain vectors into a shared-memory section
+///    the APO polls, and performs one-time installation (DLL extraction +
+///    COM registration + per-endpoint FX wiring + audio stack restart)
+///    through an elevated relaunch of GamerTool itself.
+///
+/// Two hard-won platform facts shape every method below:
+///  1. MMDevices registry is TrustedInstaller-owned. Even elevated, Admins
+///     hold only KEY_SET_VALUE there - so ALL writes go through raw
+///     advapi32 calls requesting exactly that right. Both .NET's
+///     writable:true open (demands KEY_CREATE_SUB_KEY) and a
+///     rights-restricted .NET open (whose SetValue re-demands KEY_WRITE
+///     internally) are denied. Verified empirically on 24H2.
+///  2. On Windows 8.1+ the graph builder consumes the SFX slot (,5) and
+///     ignores the Vista-era LFX slot (,1). EqualizerAPO's DeviceAPOInfo
+///     encodes this: SFX/MFX/EFX unless the driver exposes ONLY LFX/GFX.
+///     Writing only ,1 leaves the APO unloadable in audiodg.
+///
+/// Layout freeze: EqConfig below mirrors struct EqConfig in GamerToolAPO.h
+/// byte for byte (#pragma pack(1): LONG64 version + int enabled + 10 floats
+/// = 52 bytes). Never change one without the other.
 /// </summary>
 public sealed class NativeEqEngine
 {
@@ -29,21 +47,21 @@ public sealed class NativeEqEngine
     // Must match GAMERTOOL_SHARED_MEMORY_NAME in GamerToolAPO.cpp.
     private const string SharedMemoryName = "Local\\GamerToolEqConfig";
 
-    private const int ConfigSize = 4 /*version:LONG64*/ + 4 /*enabled:int*/ + 40 /*10 floats*/;
-    // Actually LONG64 = 8 bytes. Version alignment: 8 + 4 + 40 = 52. The
-    // native struct is #pragma pack(1) so no padding - mirror that exactly.
     private const int ConfigSizePacked = 8 + 4 + 40;
 
     private const string ProgramDataDir = @"GamerTool";
+    private const string ApoFileName = "GamerToolAPO.dll";
+    private const string EnableLogFileName = "enable-log.txt";
+
     private static string ApoDllPath =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), ProgramDataDir, "GamerToolAPO.dll");
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), ProgramDataDir, ApoFileName);
 
     private MemoryMappedFile? _mapping;
     private long _lastVersionWritten;
 
     private NativeEqEngine() { }
 
-    #region State
+    #region Installation state
 
     /// <summary>True when the extracted APO file and its registration both exist.</summary>
     public bool IsEngineInstalled()
@@ -57,8 +75,7 @@ public sealed class NativeEqEngine
             if (key is null)
                 return false;
 
-            var clsid = "{" + ApoClsid.ToString("D").ToUpperInvariant() + "}";
-            return key.GetSubKeyNames().Contains(clsid);
+            return key.GetSubKeyNames().Contains(ClsidBraced);
         }
         catch
         {
@@ -68,53 +85,38 @@ public sealed class NativeEqEngine
 
     /// <summary>
     /// True only when the engine is installed AND at least one active render
-    /// endpoint is actually wired to the APO - the state the EQ audibly
-    /// needs. The original version checked only file+CLSID, so a failed
-    /// endpoint-wiring step (see AttachToAllRenderEndpoints) still reported
-    /// "enabled" while audiodg never loaded the APO at all.
+    /// endpoint is wired in a slot the graph actually consumes. A stale
+    /// wiring in an ignored slot does NOT count - that false positive once
+    /// hid the Enable button while the EQ was silently dead.
     /// </summary>
     public bool IsEngineEnabled()
     {
         return IsEngineInstalled() && IsEngineAttachedToAnyDevice();
     }
 
-    /// <summary>True when at least one active render endpoint has GamerToolAPO wired in.</summary>
+    /// <summary>True when at least one render endpoint is wired in its effective slot.</summary>
     public bool IsEngineAttachedToAnyDevice()
     {
         try
         {
-            var renderRoot = Registry.LocalMachine.OpenSubKey(
-                @"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render");
+            using var renderRoot = OpenRenderRoot();
             if (renderRoot is null)
                 return false;
 
-            var clsidString = "{" + ApoClsid.ToString("D").ToUpperInvariant() + "}";
-            foreach (var endpointGuid in renderRoot.GetSubKeyNames())
-            {
-                using var fx = renderRoot.OpenSubKey(endpointGuid + @"\FxProperties");
-                if (fx is null)
-                    continue;
-
-                // LFX slot (pre-mix) is where we install - check the LFX value name.
-                var lfx = fx.GetValue("{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1") as string;
-                if (string.Equals(lfx, clsidString, StringComparison.OrdinalIgnoreCase))
-                    return true;
-            }
+            return renderRoot.GetSubKeyNames().Any(IsEngineAttachedToEndpoint);
         }
         catch
         {
             // Registry perms vary by OS build - "not attached" is the safe answer.
+            return false;
         }
-
-        return false;
     }
 
     /// <summary>
-    /// True when GamerToolAPO is specifically wired into the given render
-    /// endpoint (its GUID in braces, e.g. "{a1b2c3d4-...}") - lets the UI
-    /// answer "is my *current* output device covered" instead of "is ANY
-    /// device covered", so the reattach prompt reflects the actual device
-    /// in use rather than a stale, disconnected-from-reality snapshot.
+    /// True when GamerToolAPO is wired into the given endpoint's effective
+    /// slot (its GUID in braces, e.g. "{a1b2c3d4-...}") - lets the UI answer
+    /// "is my *current* output device covered" instead of "is ANY device
+    /// covered".
     /// </summary>
     public bool IsEngineAttachedToEndpoint(string endpointGuid)
     {
@@ -123,14 +125,14 @@ public sealed class NativeEqEngine
 
         try
         {
-            using var fx = Registry.LocalMachine.OpenSubKey(
-                $@"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\{endpointGuid}\FxProperties");
-            if (fx is null)
+            using var renderRoot = OpenRenderRoot();
+            using var endpointKey = renderRoot?.OpenSubKey(endpointGuid);
+            if (endpointKey is null)
                 return false;
 
-            var clsidString = "{" + ApoClsid.ToString("D").ToUpperInvariant() + "}";
-            var lfx = fx.GetValue("{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1") as string;
-            return string.Equals(lfx, clsidString, StringComparison.OrdinalIgnoreCase);
+            var slot = ChooseInstallSlot(endpointKey);
+            using var fx = endpointKey.OpenSubKey("FxProperties");
+            return IsOurClsid(fx?.GetValue(slot) as string);
         }
         catch
         {
@@ -151,6 +153,187 @@ public sealed class NativeEqEngine
         int idx = deviceId.LastIndexOf('{');
         return idx >= 0 ? deviceId[idx..] : null;
     }
+
+    private static string ClsidBraced => "{" + ApoClsid.ToString("D").ToUpperInvariant() + "}";
+
+    private static bool IsOurClsid(string? value)
+        => !string.IsNullOrEmpty(value)
+        && string.Equals(value, "{" + ApoClsid.ToString("D").ToUpperInvariant() + "}",
+            StringComparison.OrdinalIgnoreCase);
+
+    #endregion
+
+    #region Endpoint FX slots
+
+    // PKEY_FX_*Clsid property-store value names under each endpoint's
+    // FxProperties key: the slots the audio graph builder consumes.
+    private const string LfxSlot = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1"; // PKEY_FX_PreMixClsid (Vista-era LFX)
+    private const string GfxSlot = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},2"; // PKEY_FX_PostMixClsid (GFX)
+    private const string SfxSlot = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},5"; // PKEY_FX_StreamEffectClsid (SFX)
+    private const string MfxSlot = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},6"; // PKEY_FX_ModeEffectClsid (MFX)
+    private const string EfxSlot = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},7"; // PKEY_FX_EndpointEffectClsid (EFX)
+    private const string MultiSfxSlot = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},13";
+    private const string MultiMfxSlot = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},14";
+    private const string MultiEfxSlot = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},15";
+
+    // Forced-disable-enhancements value + SFX processing-modes list.
+    private const string SysFxDisableValueName = "{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5";
+    private const string SfxProcessingModesValueName = "{d3993a3f-99c2-4402-b5ec-a92a0367664b},5";
+    private const string DefaultProcessingMode = "{C18E2F7E-933D-4965-B7D1-1EEF228D2AF3}";
+    private const string NoneMarker = "\0none\0";
+
+    /// <summary>
+    /// Every slot this app can possibly write - used by detach so uninstall
+    /// cleans any slot a previous build may have wired.
+    /// </summary>
+    private static readonly string[] AllInstallSlots =
+    {
+        LfxSlot, GfxSlot, SfxSlot, MfxSlot, EfxSlot
+    };
+
+    private const string RenderRootPath =
+        @"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render";
+    private const string BackupRootPath = @"SOFTWARE\GamerTool\EndpointBackup";
+
+    /// <summary>
+    /// Chooses the ONE FxProperties slot to write for an endpoint, following
+    /// EqualizerAPO's DeviceAPOInfo mode detection:
+    ///
+    ///  - Legacy LFX mode ONLY when the driver supplied just LFX/GFX APOs
+    ///    (no SFX/MFX/EFX/multi slots present) - Windows 8.0-era drivers.
+    ///    Our own stale wiring does NOT count as "driver-supplied".
+    ///  - Otherwise SFX (,5): the modern graph builder consumes ,5/,6/,7 and
+    ///    ignores Vista-era ,1 entirely. Verified on 24H2 (in-box chain at
+    ///    ,5/,6) and against EqualizerAPO's INSTALL_SFX_EFX default.
+    ///
+    /// Exactly ONE slot is ever returned, on purpose: this app has a single
+    /// APO CLSID, so wiring two slots would instantiate the same 10-band
+    /// chain twice and double every gain (EAPO avoids that with a Stage
+    /// filter and two distinct pre/post-mix CLSIDs; a single slot is the
+    /// correct equivalent here).
+    /// </summary>
+    private static string ChooseInstallSlot(RegistryKey endpointKey)
+    {
+        using var fx = endpointKey.OpenSubKey("FxProperties");
+        if (fx is null)
+            return SfxSlot;
+
+        bool DriverHas(string name)
+        {
+            var v = fx.GetValue(name) as string;
+            return !string.IsNullOrEmpty(v) && !IsOurClsid(v);
+        }
+
+        bool legacyOnly = (DriverHas(LfxSlot) || DriverHas(GfxSlot))
+            && !DriverHas(SfxSlot) && !DriverHas(MfxSlot) && !DriverHas(EfxSlot)
+            && !DriverHas(MultiSfxSlot) && !DriverHas(MultiMfxSlot) && !DriverHas(MultiEfxSlot);
+
+        return legacyOnly ? LfxSlot : SfxSlot;
+    }
+
+    /// <summary>Read-only open of the Render root (subkey enumeration).</summary>
+    private static RegistryKey? OpenRenderRoot()
+    {
+        return RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Default)
+            .OpenSubKey(RenderRootPath);
+    }
+
+    /// <summary>Read-only open of an endpoint's FxProperties key (reads are granted to Users).</summary>
+    private static RegistryKey? OpenEndpointFxKey(string endpointGuid)
+    {
+        return RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Default)
+            .OpenSubKey($@"{RenderRootPath}\{endpointGuid}\FxProperties");
+    }
+
+    /// <summary>Reads an endpoint's current CLSID value in the given slot (null when absent).</summary>
+    private static string? GetEndpointSlotValue(string endpointGuid, string slot)
+    {
+        using var fx = OpenEndpointFxKey(endpointGuid);
+        return fx?.GetValue(slot) as string;
+    }
+
+    /// <summary>
+    /// Writes (or, when clsidString is null, deletes) an endpoint's CLSID
+    /// value in the given slot.
+    ///
+    /// Raw advapi32 calls, NOT Microsoft.Win32.RegistryKey: .NET's wrapper
+    /// gates every SetValue/DeleteValue behind an internal IsWritable()
+    /// check that demands full KEY_WRITE regardless of which RegistryRights
+    /// the handle was opened with - and the TrustedInstaller-owned
+    /// MMDevices ACL grants Admins only KEY_SET_VALUE. Verified on a live
+    /// machine: the restricted .NET open succeeds, then SetValue throws
+    /// "Cannot write to the registry key". RegOpenKeyExW(KEY_SET_VALUE) +
+    /// RegSetValueExW exercises exactly the right the ACL grants, nothing
+    /// more.
+    /// </summary>
+    private static bool TrySetEndpointSlotValue(string endpointGuid, string slot, string? clsidString)
+    {
+        string subKey = $@"{RenderRootPath}\{endpointGuid}\FxProperties";
+
+        IntPtr hKey = OpenHlmKey(subKey, KEY_SET_VALUE | KEY_QUERY_VALUE);
+        if (hKey == IntPtr.Zero)
+            return false;
+
+        try
+        {
+            if (clsidString is null)
+            {
+                int hr = RegDeleteValueW(hKey, slot);
+                return hr == 0 || hr == ERROR_FILE_NOT_FOUND;
+            }
+
+            byte[] data = System.Text.Encoding.Unicode.GetBytes(clsidString + "\0");
+            return RegSetValueExW(hKey, slot, 0, REG_SZ, data, (uint)data.Length) == 0;
+        }
+        finally
+        {
+            RegCloseKey(hKey);
+        }
+    }
+
+    /// <summary>Raw byte-value writer (REG_DWORD/REG_BINARY restores); mirrors TrySetEndpointSlotValue.</summary>
+    private static bool TrySetEndpointValueBytes(string endpointGuid, string valueName, byte[] data, uint type)
+    {
+        string subKey = $@"{RenderRootPath}\{endpointGuid}\FxProperties";
+        IntPtr hKey = OpenHlmKey(subKey, KEY_SET_VALUE | KEY_QUERY_VALUE);
+        if (hKey == IntPtr.Zero)
+            return false;
+
+        try
+        {
+            return RegSetValueExW(hKey, valueName, 0, type, data, (uint)data.Length) == 0;
+        }
+        finally
+        {
+            RegCloseKey(hKey);
+        }
+    }
+
+    private const uint KEY_SET_VALUE = 0x0002;
+    private const uint KEY_QUERY_VALUE = 0x0001;
+    private const uint REG_SZ = 1;
+    private const uint REG_MULTI_SZ = 7;
+    private const uint REG_DWORD = 4;
+    private const int ERROR_FILE_NOT_FOUND = 2;
+    private static readonly IntPtr HKEY_LOCAL_MACHINE = new(unchecked((int)0x80000002));
+
+    private static IntPtr OpenHlmKey(string subKey, uint rights)
+    {
+        int hr = RegOpenKeyExW(HKEY_LOCAL_MACHINE, subKey, 0, rights, out IntPtr hKey);
+        return hr == 0 ? hKey : IntPtr.Zero;
+    }
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int RegOpenKeyExW(IntPtr hKey, string lpSubKey, uint ulOptions, uint samDesired, out IntPtr phkResult);
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int RegSetValueExW(IntPtr hKey, string lpValueName, uint Reserved, uint dwType, byte[] lpData, uint cbData);
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int RegDeleteValueW(IntPtr hKey, string lpValueName);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern int RegCloseKey(IntPtr hKey);
 
     #endregion
 
@@ -215,16 +398,35 @@ public sealed class NativeEqEngine
                 }
 
                 // Initialize to flat/bypass so a freshly-created section is benign.
-                using var view = _mapping.CreateViewAccessor();
-                view.Write(0, 0L);          // version
-                view.Write(8, 0);           // enabled = 0
-                for (int i = 0; i < 10; i++)
-                    view.Write(12 + i * 4, 0f);
+                using (var view = _mapping.CreateViewAccessor())
+                {
+                    view.Write(0, 0L);          // version
+                    view.Write(8, 0);           // enabled = 0
+                    for (int i = 0; i < 10; i++)
+                        view.Write(12 + i * 4, 0f);
+                }
             }
             finally
             {
                 Marshal.FreeHGlobal(sd);
             }
+        }
+
+        // Adopt the section's CURRENT version as our baseline. The APO in
+        // audiodg survives app restarts (the audio service keeps running),
+        // so its appliedVersion may hold a stale value from a previous app
+        // session. Restarting our counter at 0 could republish a version the
+        // APO already applied - silently ignored forever ("changed preset
+        // does nothing until reboot"). Adopting the live counter makes every
+        // publish strictly newer from the APO's perspective.
+        try
+        {
+            using var view = _mapping.CreateViewAccessor();
+            _lastVersionWritten = view.ReadInt64(0);
+        }
+        catch
+        {
+            // Unreadable baseline (shouldn't happen) - 0 keeps old behavior.
         }
     }
 
@@ -340,28 +542,64 @@ public sealed class NativeEqEngine
 
     /// <summary>
     /// Runs the elevated enable sequence: extract the embedded APO resource to
-    /// ProgramData, call the DLL's own registration export (byte-exact
-    /// APO_REG_PROPERTIES serialization via the SDK's RegisterAPO), set
+    /// ProgramData, call the DLL's own registration export, set
     /// DisableProtectedAudioDG (unsigned APOs require it), wire every active
-    /// render endpoint's LFX slot, and restart the audio service so the graph
-    /// rebuilds with the APO loaded. MUST run elevated.
+    /// render endpoint's FX slot, and restart the audio stack so the graph
+    /// rebuilds with the APO loaded. MUST run elevated. Returns true only
+    /// when endpoints were actually wired - never a hollow success.
     /// </summary>
     public static bool RunElevatedEnable(bool enable)
     {
+        var log = new List<string> { $"[{DateTime.Now:HH:mm:ss.fff}] enable={enable} begin" };
+        bool result = false;
         try
         {
             if (enable)
             {
                 // 1) Extract embedded APO to ProgramData (permanent home).
+                //    Skipped when the on-disk copy is already byte-identical
+                //    (a File.Create over a DLL audiodg has mapped throws a
+                //    sharing violation and would abort every re-enable).
                 var dir = Path.GetDirectoryName(ApoDllPath)!;
                 Directory.CreateDirectory(dir);
                 using var resource = typeof(NativeEqEngine).Assembly
                     .GetManifestResourceStream("GamerTool.Resources.GamerToolAPO.dll");
                 if (resource is null)
+                {
+                    log.Add("step1 EXTRACT: embedded resource MISSING from exe");
                     return false;
+                }
 
-                using var target = File.Create(ApoDllPath);
-                resource.CopyTo(target);
+                bool needExtract = true;
+                try
+                {
+                    var existing = new FileInfo(ApoDllPath);
+                    if (existing.Exists && existing.Length == resource.Length)
+                    {
+                        needExtract = false;
+                        log.Add($"step1 EXTRACT: skipped, on-disk copy identical ({existing.Length} bytes)");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    log.Add($"step1 EXTRACT: size check failed ({ex.GetType().Name}), will extract");
+                }
+
+                if (needExtract)
+                {
+                    try
+                    {
+                        using var target = File.Create(ApoDllPath);
+                        resource.CopyTo(target);
+                        log.Add($"step1 EXTRACT: ok ({new FileInfo(ApoDllPath).Length} bytes)");
+                    }
+                    catch (IOException ex) when (File.Exists(ApoDllPath))
+                    {
+                        // Target locked (audiodg has a previous copy mapped).
+                        // The existing file is usable - log and continue.
+                        log.Add($"step1 EXTRACT: target locked, keeping existing file ({ex.Message})");
+                    }
+                }
             }
 
             // 2) Register/unregister via the DLL's own export (SDK-exact blob).
@@ -372,13 +610,21 @@ public sealed class NativeEqEngine
 
             if (enable)
             {
-                int hr = register!(ApoDllPath);
+                if (register is null)
+                {
+                    log.Add("step2 REGISTER: GamerToolApoRegister export not found in DLL");
+                    return false;
+                }
+
+                int hr = register(ApoDllPath);
+                log.Add($"step2 REGISTER: hr=0x{hr:X8}");
                 if (hr != 0)
                     return false;
             }
             else
             {
-                unregister!();
+                unregister?.Invoke();
+                log.Add("step2 UNREGISTER: done");
             }
 
             if (enable)
@@ -390,23 +636,49 @@ public sealed class NativeEqEngine
                 {
                     audioKey.SetValue("DisableProtectedAudioDG", 1, RegistryValueKind.DWord);
                 }
+                log.Add("step3 PROTECTED_DG: set");
 
-                // 4) Wire the active render endpoints' LFX slot.
-                if (!AttachToAllRenderEndpoints())
+                // 4) Wire the active render endpoints' FX slots.
+                bool attached = AttachToAllRenderEndpoints(log);
+                log.Add($"step4 ATTACH: {(attached ? "wired >=1 active endpoint" : "wired NOTHING")}");
+                if (!attached)
                     return false;
             }
             else
             {
-                DetachFromAllRenderEndpoints();
+                DetachFromAllRenderEndpoints(log);
+                log.Add("step4 DETACH: done");
             }
 
-            // 5) Restart audio service so the graph rebuilds with/without us.
-            RestartAudioService();
+            // 5) Restart the full audio stack so graphs rebuild with/without
+            //    us. AudioEndpointBuilder owns and caches the endpoint FX
+            //    stores - restarting Audiosrv alone cycles audiodg but the
+            //    builder re-serves its stale cache, so fresh wiring stays
+            //    invisible and the APO never loads. Stop order: Audiosrv
+            //    (depends on the builder) first, then the builder itself.
+            RestartAudioService(log);
+            log.Add("step5 RESTART: audio stack cycled (see svc lines above)");
+
+            result = true;
             return true;
         }
-        catch
+        catch (Exception ex)
         {
+            log.Add($"EXCEPTION: {ex.GetType().Name}: {ex.Message}");
             return false;
+        }
+        finally
+        {
+            log.Add($"[{DateTime.Now:HH:mm:ss.fff}] result={result}");
+            try
+            {
+                File.WriteAllLines(
+                    Path.Combine(Path.GetDirectoryName(ApoDllPath)!, "enable-log.txt"), log);
+            }
+            catch
+            {
+                // Logging is best-effort; never fail enable over it.
+            }
         }
     }
 
@@ -436,18 +708,13 @@ public sealed class NativeEqEngine
     private static extern IntPtr GetProcAddress(IntPtr hModule, string procedureName);
 
     /// <summary>
-    /// Writes our CLSID into the LFX value of every ACTIVE render endpoint.
-    /// EqualizerAPO backs up existing values under its own Child APOs key;
-    /// we take the same approach so an uninstall can restore the original.
-    ///
-    /// The MMDevices tree is TrustedInstaller-owned: even elevated, Admins
-    /// hold only SetValue+ReadKey rights there. A plain writable:true open
-    /// demands full KEY_WRITE (which includes CreateSubKey, denied) - that
-    /// is exactly why the original version silently wired nothing and the
-    /// EQ "did nothing" despite Enable reporting success. Every open below
-    /// requests only the rights the ACL actually grants.
+    /// Writes our CLSID into the effective FX slot of every ACTIVE render
+    /// endpoint (mode-aware: SFX on modern drivers, LFX on legacy ones),
+    /// backing up whatever was there first. Returns true only if at least
+    /// one endpoint was actually wired - a hollow "success" here is what
+    /// once made the EQ silently dead while the UI said "active".
     /// </summary>
-    private static bool AttachToAllRenderEndpoints()
+    private static bool AttachToAllRenderEndpoints(List<string> log)
     {
         int wired = 0;
         int activeSeen = 0;
@@ -456,65 +723,124 @@ public sealed class NativeEqEngine
         {
             using var renderRoot = OpenRenderRoot();
             if (renderRoot is null)
+            {
+                log.Add("  attach: Render root missing");
                 return false;
-
-            var clsidString = "{" + ApoClsid.ToString("D").ToUpperInvariant() + "}";
+            }
 
             foreach (var endpointGuid in renderRoot.GetSubKeyNames())
             {
                 // Only ACTIVE endpoints (state DWORD == 1); plugging in a new
                 // device later re-runs this via the C# side's device watcher.
+                RegistryKey? endpointKey = null;
                 int? state;
                 try
                 {
-                    using var endpointKey = renderRoot.OpenSubKey(endpointGuid);
+                    endpointKey = renderRoot.OpenSubKey(endpointGuid);
                     state = endpointKey?.GetValue("DeviceState") as int?;
                 }
-                catch
+                catch (Exception ex)
                 {
+                    endpointKey?.Dispose();
+                    log.Add($"  attach: {endpointGuid} skipped ({ex.GetType().Name})");
                     continue;
                 }
 
-                if (state != 1)
-                    continue;
-
-                activeSeen++;
-
-                // Backup the existing LFX value (or record its absence) so
-                // Disable can restore exactly what was there before us.
-                // Best-effort: a denied backup write must not block wiring.
-                try
+                using (endpointKey)
                 {
-                    var existing = GetEndpointLfxValue(endpointGuid);
-                    using (var backupKey = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\GamerTool\EndpointBackup"))
+                    if (state != 1 || endpointKey is null)
+                        continue;
+
+                    activeSeen++;
+                    string slot = ChooseInstallSlot(endpointKey);
+
+                    // Backup the slot's current value (or its absence) so
+                    // Disable restores exactly what was there before us.
+                    // Never overwrite an existing backup - re-running Enable
+                    // must keep the ORIGINAL pre-GamerTool value.
+                    // A backup holding OUR OWN CLSID is provably corrupt
+                    // (an older build snapshotted our wiring as "original");
+                    // drop it so it can never restore us over ourselves.
+                    try
                     {
-                        if (existing is null)
-                            backupKey.SetValue(endpointGuid, "\0none\0", RegistryValueKind.String);
-                        else
-                            backupKey.SetValue(endpointGuid, existing, RegistryValueKind.String);
-                    }
-                }
-                catch
-                {
-                    // Backup is best-effort; keep wiring.
-                }
+                        using var backupKey = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\GamerTool\EndpointBackup");
+                        if (backupKey is not null)
+                        {
+                            // Purge poisoned legacy backups: earlier builds
+                            // overwrote the bare-name ,1 backup on every run,
+                            // so it can hold OUR OWN CLSID. A backup is only
+                            // valid if it predates us - drop the corrupt
+                            // entry so it can never restore us over ourselves.
+                            if (backupKey.GetValue(endpointGuid) is string legacy
+                                && IsOurClsid(legacy))
+                            {
+                                try { backupKey.DeleteValue(endpointGuid); } catch { }
+                                log.Add($"  attach: {endpointGuid} dropped poisoned legacy backup");
+                            }
 
-                if (TrySetEndpointLfxValue(endpointGuid, clsidString))
+                            string backupName = endpointGuid + slot;
+                            if (backupKey.GetValue(backupName) is string poisoned && IsOurClsid(poisoned))
+                            {
+                                try { backupKey.DeleteValue(backupName); } catch { }
+                                log.Add($"  attach: {endpointGuid} dropped poisoned backup for {slot}");
+                            }
+
+                            if (backupKey.GetValue(backupName) is null)
+                            {
+                                var existing = GetEndpointSlotValue(endpointGuid, slot);
+                                backupKey.SetValue(backupName, existing ?? "\0none\0", RegistryValueKind.String);
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Backup is best-effort; keep wiring.
+                    }
+
+                    if (!TrySetEndpointSlotValue(endpointGuid, slot, ClsidBraced))
+                    {
+                        log.Add($"  attach: {endpointGuid} slot {slot} WRITE FAILED");
+                        continue;
+                    }
+
+                    // SFX installs need their streaming-modes list; drivers
+                    // normally ship it, but write the DEFAULT mode entry if
+                    // absent - otherwise the graph may skip our APO for every
+                    // stream mode.
+                    if (slot == SfxSlot)
+                        EnsureSfxProcessingModes(endpointGuid, log);
+
+                    // Force-enable enhancements for this endpoint: if the
+                    // PKEY "disable all enhancements" DWORD is present, the
+                    // graph skips every FX APO including ours. Backed up (as
+                    // DWORD bytes) so Disable restores it.
+                    TryForceEnableEnhancements(endpointGuid, log);
+
+                    // Delete our own stale wiring in slots we're NOT using
+                    // (e.g. the old Vista-era LFX write on a modern graph):
+                    // exactly one slot is ever wired, so a legacy graph can
+                    // never see a second instance.
+                    foreach (var other in AllInstallSlots)
+                    {
+                        if (other != slot && IsOurClsid(GetEndpointSlotValue(endpointGuid, other)))
+                            TrySetEndpointSlotValue(endpointGuid, other, null);
+                    }
+
+                    log.Add($"  attach: {endpointGuid} wired slot {slot}");
                     wired++;
+                }
             }
 
-            // At least one active endpoint must actually be wired, otherwise
-            // RunElevatedEnable must NOT report success (that false success
-            // is what made the EQ silently dead while the UI said "active").
             return activeSeen == 0 || wired > 0;
         }
-        catch
+        catch (Exception ex)
         {
+            log.Add($"  attach: fatal {ex.GetType().Name}: {ex.Message}");
             return wired > 0;
         }
     }
 
-    private static void DetachFromAllRenderEndpoints()
+    private static void DetachFromAllRenderEndpoints(List<string> log)
     {
         try
         {
@@ -522,131 +848,408 @@ public sealed class NativeEqEngine
             if (renderRoot is null)
                 return;
 
-            var clsidString = "{" + ApoClsid.ToString("D").ToUpperInvariant() + "}";
-
             foreach (var endpointGuid in renderRoot.GetSubKeyNames())
             {
-                var current = GetEndpointLfxValue(endpointGuid);
-                if (!string.Equals(current, clsidString, StringComparison.OrdinalIgnoreCase))
-                    continue; // someone else's APO - leave untouched
+                foreach (var slot in AllInstallSlots)
+                {
+                    var current = GetEndpointSlotValue(endpointGuid, slot);
+                    if (!IsOurClsid(current))
+                        continue; // someone else's APO (or empty) - leave untouched
 
-                // Restore what was there before us (or delete if there was nothing).
-                string? backup = null;
+                    // Restore what was there before us (or delete if there was
+                    // nothing). Also honors the legacy backup format (bare
+                    // endpoint GUID holding the ,1 value) written by earlier
+                    // builds - unless that legacy entry is poisoned with our
+                    // own CLSID, in which case the slot was originally empty.
+                    string? backup = null;
+                    try
+                    {
+                        using var backupKey = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\GamerTool\EndpointBackup");
+                        backup = backupKey?.GetValue(endpointGuid + slot) as string
+                            ?? (slot == LfxSlot ? backupKey?.GetValue(endpointGuid) as string : null);
+                    }
+                    catch
+                    {
+                    }
+
+                    try
+                    {
+                        if (backup is null || backup == "\0none\0" || IsOurClsid(backup))
+                            TrySetEndpointSlotValue(endpointGuid, slot, null);
+                        else
+                            TrySetEndpointSlotValue(endpointGuid, slot, backup);
+                    }
+                    catch
+                    {
+                        // Best-effort cleanup.
+                    }
+                }
+
+                // Restore a user/driver "disable all enhancements" setting we
+                // may have removed during attach (stored as 4 raw bytes).
                 try
                 {
                     using var backupKey = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\GamerTool\EndpointBackup");
-                    backup = backupKey?.GetValue(endpointGuid) as string;
-                }
-                catch
-                {
-                }
-
-                try
-                {
-                    if (backup is null || backup == "\0none\0")
-                        TrySetEndpointLfxValue(endpointGuid, null);
-                    else
-                        TrySetEndpointLfxValue(endpointGuid, backup);
+                    if (backupKey?.GetValue(endpointGuid + "|sysfx") is byte[] sysfxBackup
+                        && sysfxBackup.Length == 4)
+                    {
+                        TrySetEndpointValueBytes(endpointGuid, SysFxDisableValueName, sysfxBackup, REG_DWORD);
+                    }
                 }
                 catch
                 {
                     // Best-effort cleanup.
                 }
             }
+
+            log.Add("  detach: sweep complete");
+        }
+        catch (Exception ex)
+        {
+            log.Add($"  detach: fatal {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Ensures the SFX streaming-modes list exists (REG_MULTI_SZ holding the
+    /// DEFAULT processing mode), mirroring EqualizerAPO: modes the engine
+    /// doesn't see listed never load the SFX. Never touches an existing
+    /// list - drivers ship their own.
+    /// </summary>
+    private static void EnsureSfxProcessingModes(string endpointGuid, List<string> log)
+    {
+        try
+        {
+            using var fx = OpenEndpointFxKey(endpointGuid);
+            if (fx?.GetValue(SfxProcessingModesValueName) is not null)
+                return;
         }
         catch
         {
-            // Best-effort cleanup.
+            return;
+        }
+
+        string subKey = $@"{RenderRootPath}\{endpointGuid}\FxProperties";
+        IntPtr hKey = OpenHlmKey(subKey, KEY_SET_VALUE | KEY_QUERY_VALUE);
+        if (hKey == IntPtr.Zero)
+        {
+            log.Add($"  attach: {endpointGuid} processing-modes open denied");
+            return;
+        }
+
+        try
+        {
+            // REG_MULTI_SZ: one DEFAULT-mode GUID string, double-NUL terminated.
+            byte[] data = System.Text.Encoding.Unicode.GetBytes(DefaultProcessingMode + "\0\0");
+            if (RegSetValueExW(hKey, SfxProcessingModesValueName, 0, REG_MULTI_SZ, data, (uint)data.Length) != 0)
+                log.Add($"  attach: {endpointGuid} processing-modes write failed");
+        }
+        finally
+        {
+            RegCloseKey(hKey);
         }
     }
 
-    private const string LfxValueName = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1";
-
-    /// <summary>Reads an endpoint's current LFX CLSID value (null when absent).</summary>
-    private static string? GetEndpointLfxValue(string endpointGuid)
-    {
-        using var fx = OpenEndpointFxKey(endpointGuid, writable: false);
-        return fx?.GetValue(LfxValueName) as string;
-    }
-
     /// <summary>
-    /// Writes (or, when clsidString is null, deletes) an endpoint's LFX value
-    /// through a handle restricted to the rights the MMDevices ACL actually
-    /// grants Admins (SetValue+ReadKey). The standard writable:true open is
-    /// denied there (it demands CreateSubKey too), which silently broke the
-    /// original attach.
+    /// Deletes an endpoint's "disable all enhancements" DWORD when present
+    /// (with it set, the graph skips every FX APO including ours), backing
+    /// it up first so Disable restores the user's original setting.
     /// </summary>
-    private static bool TrySetEndpointLfxValue(string endpointGuid, string? clsidString)
+    private static void TryForceEnableEnhancements(string endpointGuid, List<string> log)
     {
-        using var fx = OpenEndpointFxKey(endpointGuid, writable: clsidString is not null);
-        if (fx is null)
-            return false;
-
-        if (clsidString is null)
+        try
         {
+            int? current;
+            using (var fx = OpenEndpointFxKey(endpointGuid))
+            {
+                if (fx?.GetValue(SysFxDisableValueName) is not int v)
+                    return;
+                current = v;
+            }
+
+            using (var backupKey = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\GamerTool\EndpointBackup"))
+            {
+                string backupName = endpointGuid + "|sysfx";
+                if (backupKey is not null && !backupKey.GetValueNames().Contains(backupName))
+                    backupKey.SetValue(backupName, BitConverter.GetBytes(current.Value), RegistryValueKind.Binary);
+            }
+
+            string subKey = $@"{RenderRootPath}\{endpointGuid}\FxProperties";
+            IntPtr hKey = OpenHlmKey(subKey, KEY_SET_VALUE | KEY_QUERY_VALUE);
+            if (hKey == IntPtr.Zero)
+            {
+                log.Add($"  attach: {endpointGuid} sysfx open denied");
+                return;
+            }
+
             try
             {
-                fx.DeleteValue(LfxValueName, throwOnMissingValue: false);
-                return true;
+                RegDeleteValueW(hKey, SysFxDisableValueName);
             }
-            catch (UnauthorizedAccessException)
+            finally
             {
-                return false;
+                RegCloseKey(hKey);
             }
         }
-
-        fx.SetValue(LfxValueName, clsidString, RegistryValueKind.String);
-        return true;
-    }
-
-    /// <summary>Read-only open of the Render root (subkey enumeration + DeviceState reads).</summary>
-    private static RegistryKey? OpenRenderRoot()
-    {
-        return RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Default)
-            .OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render");
+        catch
+        {
+            // Best-effort only.
+        }
     }
 
     /// <summary>
-    /// Opens an endpoint's FxProperties key requesting only the rights the
-    /// ACL grants: SetValue|ReadKey when writing, plain ReadKey when reading.
+    /// Cycle the Windows audio stack so graphs rebuild and pick up the new
+    /// APO wiring. Order matters: AudioEndpointBuilder OWNS and CACHES the
+    /// endpoint FX property stores - restarting only Audiosrv cycles
+    /// audiodg but the builder just re-serves its cached store, so freshly
+    /// written values are invisible and the APO never loads. The builder
+    /// must cycle too. Audiosrv DEPENDS on the builder, so the correct order
+    /// is: stop Audiosrv, stop AudioEndpointBuilder, start
+    /// AudioEndpointBuilder, start Audiosrv.
+    ///
+    /// Done through the Service Control Manager directly, NOT net.exe: net's
+    /// exit codes report dispatch rather than completion, its /yes switch
+    /// is invalid on `start` (exit 2 with the service left stopped - the
+    /// exact failure that once left this machine mute), and it can hang on
+    /// interactive prompts. Here every transition is waited on with a
+    /// timeout and the reached state is logged.
     /// </summary>
-    private static RegistryKey? OpenEndpointFxKey(string endpointGuid, bool writable)
+    private static void RestartAudioService(List<string> log)
     {
-        return RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Default)
-            .OpenSubKey(
-                $@"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\{endpointGuid}\FxProperties",
-                writable ? RegistryRights.SetValue | RegistryRights.ReadKey : RegistryRights.ReadKey);
+        StopService("Audiosrv", log);
+        StopService("AudioEndpointBuilder", log);
+        StartService("AudioEndpointBuilder", log);
+        StartService("Audiosrv", log);
+        log.Add($"step5 RESTART final: Audiosrv={QueryServiceState("Audiosrv")}, AudioEndpointBuilder={QueryServiceState("AudioEndpointBuilder")}");
     }
 
-    /// <summary>
-    /// Cycle the Windows audio endpoints so the graph reloads and picks up the
-    /// new APO. Endpoint-clone/enable dance avoids killing the whole service
-    /// (which Windows 10+ dislikes doing programmatically).
-    /// </summary>
-    private static void RestartAudioService()
-    {
-        // audiodg reloads APOs when an endpoint is disabled/re-enabled. The
-        // PnP approach via the MMDevices registry requires an actual graph
-        // rebuild trigger; the accepted programmatic trigger is restarting
-        // the "Audiosrv" service. Do it via a detached process so the shell
-        // doesn't flap our own audio mid-operation.
-        Process.Start(new ProcessStartInfo
-        {
-            FileName = "net.exe",
-            Arguments = "stop audiosrv",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WindowStyle = ProcessWindowStyle.Hidden
-        })!.WaitForExit();
+    private const uint SC_MANAGER_CONNECT = 0x0001;
+    private const uint SERVICE_QUERY_STATUS = 0x0004;
+    private const uint SERVICE_START = 0x0010;
+    private const uint SERVICE_STOP = 0x0020;
+    private const uint SERVICE_CONTROL_STOP = 0x00000001;
+    private const uint SERVICE_STOPPED = 0x00000001;
+    private const uint SERVICE_START_PENDING = 0x00000002;
+    private const uint SERVICE_STOP_PENDING = 0x00000003;
+    private const uint SERVICE_RUNNING = 0x00000004;
 
-        Process.Start(new ProcessStartInfo
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SERVICE_STATUS
+    {
+        public uint dwServiceType;
+        public uint dwCurrentState;
+        public uint dwControlsAccepted;
+        public uint dwWin32ExitCode;
+        public uint dwServiceSpecificExitCode;
+        public uint dwCheckPoint;
+        public uint dwWaitHint;
+    }
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr OpenSCManagerW(string? machineName, string? databaseName, uint dwDesiredAccess);
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr OpenServiceW(IntPtr hSCManager, string lpServiceName, uint dwDesiredAccess);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool ControlService(IntPtr hService, uint dwControl, ref SERVICE_STATUS lpServiceStatus);
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool StartServiceW(IntPtr hService, uint dwNumServiceArgs, string[]? lpServiceArgVectors);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool QueryServiceStatus(IntPtr hService, ref SERVICE_STATUS lpServiceStatus);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool CloseServiceHandle(IntPtr hSCObject);
+
+    private static string QueryServiceState(string name)
+    {
+        try
         {
-            FileName = "net.exe",
-            Arguments = "start audiosrv",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WindowStyle = ProcessWindowStyle.Hidden
-        })!.WaitForExit();
+            IntPtr scm = OpenSCManagerW(null, null, SC_MANAGER_CONNECT);
+            if (scm == IntPtr.Zero)
+                return "scm denied";
+            try
+            {
+                IntPtr svc = OpenServiceW(scm, name, SERVICE_QUERY_STATUS);
+                if (svc == IntPtr.Zero)
+                    return "open denied";
+                try
+                {
+                    var st = new SERVICE_STATUS();
+                    if (!QueryServiceStatus(svc, ref st))
+                        return "query failed";
+                    return st.dwCurrentState switch
+                    {
+                        SERVICE_STOPPED => "STOPPED",
+                        SERVICE_START_PENDING => "START_PENDING",
+                        SERVICE_STOP_PENDING => "STOP_PENDING",
+                        SERVICE_RUNNING => "RUNNING",
+                        _ => $"state={st.dwCurrentState}"
+                    };
+                }
+                finally
+                {
+                    CloseServiceHandle(svc);
+                }
+            }
+            finally
+            {
+                CloseServiceHandle(scm);
+            }
+        }
+        catch
+        {
+            return "error";
+        }
+    }
+
+    private static bool WaitForServiceState(string name, uint wantState, int timeoutMs, List<string> log)
+    {
+        long deadline = Environment.TickCount64 + timeoutMs;
+        while (Environment.TickCount64 < deadline)
+        {
+            string state = QueryServiceState(name);
+            uint code = state switch
+            {
+                "STOPPED" => SERVICE_STOPPED,
+                "START_PENDING" => SERVICE_START_PENDING,
+                "STOP_PENDING" => SERVICE_STOP_PENDING,
+                "RUNNING" => SERVICE_RUNNING,
+                _ => 0
+            };
+            if (code == wantState)
+                return true;
+            System.Threading.Thread.Sleep(250);
+        }
+
+        log.Add($"  svc {name}: TIMEOUT waiting for state {wantState} (now {QueryServiceState(name)})");
+        return false;
+    }
+
+    private static void StopService(string name, List<string> log)
+    {
+        try
+        {
+            IntPtr scm = OpenSCManagerW(null, null, SC_MANAGER_CONNECT);
+            if (scm == IntPtr.Zero)
+            {
+                log.Add($"  svc stop {name}: scm denied");
+                return;
+            }
+
+            try
+            {
+                IntPtr svc = OpenServiceW(scm, name, SERVICE_STOP | SERVICE_QUERY_STATUS);
+                if (svc == IntPtr.Zero)
+                {
+                    log.Add($"  svc stop {name}: open denied");
+                    return;
+                }
+
+                try
+                {
+                    var st = new SERVICE_STATUS();
+                    if (!QueryServiceStatus(svc, ref st))
+                    {
+                        log.Add($"  svc stop {name}: query failed");
+                        return;
+                    }
+
+                    if (st.dwCurrentState == SERVICE_STOPPED)
+                    {
+                        log.Add($"  svc stop {name}: already stopped");
+                        return;
+                    }
+
+                    if (!ControlService(svc, SERVICE_CONTROL_STOP, ref st))
+                    {
+                        log.Add($"  svc stop {name}: control failed err={Marshal.GetLastWin32Error()}");
+                        return;
+                    }
+
+                    bool ok = WaitForServiceState(name, SERVICE_STOPPED, 30000, log);
+                    log.Add($"  svc stop {name}: {(ok ? "STOPPED" : "stop incomplete")}");
+                }
+                finally
+                {
+                    CloseServiceHandle(svc);
+                }
+            }
+            finally
+            {
+                CloseServiceHandle(scm);
+            }
+        }
+        catch (Exception ex)
+        {
+            log.Add($"  svc stop {name}: EXCEPTION {ex.GetType().Name}");
+        }
+    }
+
+    private static void StartService(string name, List<string> log)
+    {
+        try
+        {
+            IntPtr scm = OpenSCManagerW(null, null, SC_MANAGER_CONNECT);
+            if (scm == IntPtr.Zero)
+            {
+                log.Add($"  svc start {name}: scm denied");
+                return;
+            }
+
+            try
+            {
+                IntPtr svc = OpenServiceW(scm, name, SERVICE_START | SERVICE_QUERY_STATUS);
+                if (svc == IntPtr.Zero)
+                {
+                    log.Add($"  svc start {name}: open denied");
+                    return;
+                }
+
+                try
+                {
+                    var st = new SERVICE_STATUS();
+                    if (!QueryServiceStatus(svc, ref st))
+                    {
+                        log.Add($"  svc start {name}: query failed");
+                        return;
+                    }
+
+                    if (st.dwCurrentState == SERVICE_RUNNING)
+                    {
+                        log.Add($"  svc start {name}: already running");
+                        return;
+                    }
+
+                    if (!StartServiceW(svc, 0, null))
+                    {
+                        int err = Marshal.GetLastWin32Error();
+                        // ERROR_SERVICE_ALREADY_RUNNING (1056) after a racing
+                        // dependency auto-start is fine, anything else is real.
+                        log.Add($"  svc start {name}: start call err={err}");
+                        if (err != 1056)
+                            return;
+                    }
+
+                    bool ok = WaitForServiceState(name, SERVICE_RUNNING, 30000, log);
+                    log.Add($"  svc start {name}: {(ok ? "RUNNING" : "start incomplete")}");
+                }
+                finally
+                {
+                    CloseServiceHandle(svc);
+                }
+            }
+            finally
+            {
+                CloseServiceHandle(scm);
+            }
+        }
+        catch (Exception ex)
+        {
+            log.Add($"  svc start {name}: EXCEPTION {ex.GetType().Name}");
+        }
     }
 
     #endregion

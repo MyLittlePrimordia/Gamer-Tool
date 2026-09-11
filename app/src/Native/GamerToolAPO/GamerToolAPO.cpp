@@ -13,18 +13,63 @@
 #include "ClassFactory.h"
 #include <Unknwn.h>
 #include <math.h>
+#include <stdio.h>
+#include <stdarg.h>
 
 #define GAMERTOOL_SHARED_MEMORY_NAME L"Local\\GamerToolEqConfig"
+
+// ---------------------------------------------------------------------------
+// audiodg-side diagnostics. The engine gives NO feedback when it skips an
+// APO, so these append-only lines (Initialize + format negotiation + lock
+// only - NEVER the real-time APOProcess path) are how a failed load is
+// distinguished from a config/DSP problem. %ProgramData% is Everyone-writable
+// so this works under audiodg's service account too.
+// ---------------------------------------------------------------------------
+static void ApoLog(const wchar_t* fmt, ...)
+{
+    wchar_t dir[MAX_PATH];
+    DWORD n = GetEnvironmentVariableW(L"ProgramData", dir, MAX_PATH);
+    if (n == 0 || n + 32 >= MAX_PATH)
+        return;
+
+    wchar_t path[MAX_PATH];
+    _snwprintf_s(path, MAX_PATH, _TRUNCATE, L"%s\\GamerTool\\apo-load.log", dir);
+
+    FILE* f = NULL;
+    if (_wfopen_s(&f, path, L"a, ccs=UTF-16LE") != 0 || f == NULL)
+        return;
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    fwprintf(f, L"[%02u:%02u:%02u.%03u] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+    va_list args;
+    va_start(args, fmt);
+    vfwprintf(f, fmt, args);
+    va_end(args);
+    fwprintf(f, L"\n");
+    fclose(f);
+}
 
 // ---------------------------------------------------------------------------
 // Registration metadata - CRegAPOProperties<1> declares one APO CLSID.
 // APO_FLAG_INPLACE lets us process directly into the output buffer when the
 // engine gives us that luxury (both connection buffers may alias).
+//
+// CRegAPOProperties ends in iidAPOInterfaceList[1] - a flexible-array-style
+// tail the audio SDK uses everywhere. MSVC /W4 flags that shape on the
+// aggregate initializer ("zero-sized array...will have no elements",
+// emitted for the trailing member) even though the layout is exactly what
+// GetRegistrationProperties consumers expect. Verified against in-box APOs:
+// the byte layout below matches their registry blobs, so the warning is
+// informational only and is disabled for this one declaration.
 // ---------------------------------------------------------------------------
+#pragma warning(push)
+#pragma warning(disable: 4200) // nonstandard extension: zero-sized array in struct
 const CRegAPOProperties<1> GamerToolAPO::regProperties(
     CLSID_GamerToolAPO, L"GamerToolAPO", L"Gamer Tool built-in equalizer", 1, 0,
     __uuidof(IAudioProcessingObject),
     (APO_FLAG)(APO_FLAG_FRAMESPERSECOND_MUST_MATCH | APO_FLAG_BITSPERSAMPLE_MUST_MATCH | APO_FLAG_INPLACE));
+#pragma warning(pop)
 
 // ---------------------------------------------------------------------------
 // Object creation (ClassFactory.cpp entry point).
@@ -149,27 +194,42 @@ HRESULT __stdcall GamerToolAPO::Initialize(UINT32 cbDataSize, BYTE* pbyData)
     if ((NULL != pbyData) && (0 == cbDataSize))
         return E_POINTER;
 
+    ApoLog(L"Initialize: blob %u bytes (Effects=%u, Effects2=%u)",
+        cbDataSize, (UINT32)sizeof(APOInitSystemEffects), (UINT32)sizeof(APOInitSystemEffects2));
+
     // Accept both the classic APOInitSystemEffects and the Windows 10+
     // APOInitSystemEffects2 (which carries the device GUID we don't need -
     // all devices share the one Gamer Tool config).
     if (cbDataSize == sizeof(APOInitSystemEffects) || cbDataSize == sizeof(APOInitSystemEffects2))
     {
-        // Open (or create) the shared config at first initialize.
-        if (sharedConfig == NULL)
-        {
-            mappingHandle = OpenSharedConfig();
-            if (mappingHandle != NULL)
-            {
-                sharedConfig = (EqConfig*)MapViewOfFile(
-                    mappingHandle, FILE_MAP_READ, 0, 0, sizeof(EqConfig));
-            }
-        }
         m_initialized = true;
-        return S_OK;
+    }
+    else
+    {
+        // Fallback for any other init blob shape (e.g. APOInitSystemEffects3
+        // on Win11 22H2+ driver stacks): accept and keep the graph alive.
+        m_initialized = true;
     }
 
-    // Fallback for raw/generic init blobs: don't fail the graph.
-    m_initialized = true;
+    // Open (or create) the shared config on EVERY successful init path.
+    // The original opened it only for the two known blob sizes, so a
+    // system that passes Effects3 initialized the APO into a silent
+    // permanent bypass: process runs, sharedConfig stays NULL, the EQ
+    // never sees any config and audio passes through untouched - the
+    // "enabled but does nothing" failure mode.
+    if (m_initialized && sharedConfig == NULL)
+    {
+        mappingHandle = OpenSharedConfig();
+        if (mappingHandle != NULL)
+        {
+            sharedConfig = (EqConfig*)MapViewOfFile(
+                mappingHandle, FILE_MAP_READ, 0, 0, sizeof(EqConfig));
+        }
+        ApoLog(L"Initialize: mapping=%s view=%s",
+            mappingHandle != NULL ? L"ok" : L"FAILED",
+            sharedConfig != NULL ? L"ok" : L"FAILED");
+    }
+
     return S_OK;
 }
 
@@ -177,9 +237,10 @@ HRESULT __stdcall GamerToolAPO::GetLatency(HNSTIME* pTime)
 {
     if (!pTime)
         return E_POINTER;
-    if (!m_locked)
-        return APOERR_ALREADY_UNLOCKED;
-    *pTime = 0; // biquad is pure feedforward state, adds no latency
+    // Unconditional: some graphs query latency before LockForProcess, and a
+    // failure there can abort graph building. Biquads are pure feedforward
+    // state and add no latency either way.
+    *pTime = 0;
     return S_OK;
 }
 
@@ -199,44 +260,85 @@ HRESULT __stdcall GamerToolAPO::GetRegistrationProperties(APO_REG_PROPERTIES** p
     return S_OK;
 }
 
-// Accept only 32-bit float - the one format the engine offers LFX APOs and
-// the one our biquads process in place.
-static HRESULT CheckFloat32Format(IAudioMediaType* pRequestedFormat, IAudioMediaType** ppSupportedFormat)
+// Reads an IAudioMediaType as float32 stream parameters. S_OK + filled
+// out-params on success; APOERR_FORMAT_NOT_SUPPORTED for anything we cannot
+// process (compressed types, non-float, empty channel count/rate).
+static HRESULT GetFloatParams(IAudioMediaType* pType, UINT32* pChannels, UINT32* pRateHz)
 {
-    if (pRequestedFormat == NULL || ppSupportedFormat == NULL)
+    if (pType == NULL)
         return E_POINTER;
-    *ppSupportedFormat = NULL;
 
     UNCOMPRESSEDAUDIOFORMAT fmt;
     ZeroMemory(&fmt, sizeof(fmt));
-    HRESULT hr = pRequestedFormat->GetUncompressedAudioFormat(&fmt);
+    HRESULT hr = pType->GetUncompressedAudioFormat(&fmt);
     if (FAILED(hr))
         return APOERR_FORMAT_NOT_SUPPORTED;
 
     if (fmt.guidFormatType != KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
         return APOERR_FORMAT_NOT_SUPPORTED;
 
-    pRequestedFormat->AddRef();
-    *ppSupportedFormat = pRequestedFormat;
+    if (pChannels != NULL)
+        *pChannels = fmt.dwSamplesPerFrame;
+    if (pRateHz != NULL)
+        *pRateHz = (UINT32)fmt.fFramesPerSecond;
+    return S_OK;
+}
+
+// Accept only 32-bit float, and - unlike the original version - only when it
+// is COMPATIBLE WITH THE OTHER SIDE of the connection (same channels, same
+// rate). The engine probes mismatched pairs during graph building and
+// expects rejection; blindly accepting any float32 input let an impossible
+// pair through to LockForProcess, whose failure then counted toward the
+// engine's per-APO failure budget (10 strikes disables the endpoint's SysFx
+// outright - exactly the silent death observed on 24H2).
+//
+// Contract, per MSDN: S_OK means "use the requested format" with
+// *ppSupported... set to NULL. (The old code AddRef'd the request into the
+// out-param on success, which the engine is free to misread.)
+static HRESULT CheckFloatPair(IAudioMediaType* pCounterpartFormat,
+    IAudioMediaType* pRequestedFormat, IAudioMediaType** ppSupportedFormat,
+    const wchar_t* tag)
+{
+    if (pRequestedFormat == NULL || ppSupportedFormat == NULL)
+        return E_POINTER;
+    *ppSupportedFormat = NULL;
+
+    UINT32 reqCh = 0, reqRate = 0;
+    HRESULT hr = GetFloatParams(pRequestedFormat, &reqCh, &reqRate);
+    if (FAILED(hr) || reqCh == 0 || reqCh > (UINT32)GamerToolAPO::MaxChannels || reqRate == 0)
+    {
+        ApoLog(L"%ls reject: not usable float (hr=0x%08X ch=%u rate=%u)", tag, hr, reqCh, reqRate);
+        return FAILED(hr) ? hr : APOERR_FORMAT_NOT_SUPPORTED;
+    }
+
+    // When the engine has already fixed the other side, the pair must agree
+    // - this APO is strictly 1:1 in-place (same layout both directions).
+    if (pCounterpartFormat != NULL)
+    {
+        UINT32 otherCh = 0, otherRate = 0;
+        hr = GetFloatParams(pCounterpartFormat, &otherCh, &otherRate);
+        if (FAILED(hr) || otherCh != reqCh || otherRate != reqRate)
+        {
+            ApoLog(L"%ls reject: pair mismatch (req %uch @%uHz vs other %uch @%uHz hr=0x%08X)",
+                tag, reqCh, reqRate, otherCh, otherRate, hr);
+            return APOERR_FORMAT_NOT_SUPPORTED;
+        }
+    }
+
+    ApoLog(L"%ls accept: %uch @%uHz", tag, reqCh, reqRate);
     return S_OK;
 }
 
 HRESULT __stdcall GamerToolAPO::IsInputFormatSupported(IAudioMediaType* pOutputFormat,
     IAudioMediaType* pRequestedInputFormat, IAudioMediaType** ppSupportedInputFormat)
 {
-    UNREFERENCED_PARAMETER(pOutputFormat);
-    if (pRequestedInputFormat == NULL || ppSupportedInputFormat == NULL)
-        return E_POINTER;
-    return CheckFloat32Format(pRequestedInputFormat, ppSupportedInputFormat);
+    return CheckFloatPair(pOutputFormat, pRequestedInputFormat, ppSupportedInputFormat, L"IsIn");
 }
 
 HRESULT __stdcall GamerToolAPO::IsOutputFormatSupported(IAudioMediaType* pInputFormat,
     IAudioMediaType* pRequestedOutputFormat, IAudioMediaType** ppSupportedOutputFormat)
 {
-    UNREFERENCED_PARAMETER(pInputFormat);
-    if (pRequestedOutputFormat == NULL || ppSupportedOutputFormat == NULL)
-        return E_POINTER;
-    return CheckFloat32Format(pRequestedOutputFormat, ppSupportedOutputFormat);
+    return CheckFloatPair(pInputFormat, pRequestedOutputFormat, ppSupportedOutputFormat, L"IsOut");
 }
 
 HRESULT __stdcall GamerToolAPO::GetInputChannelCount(UINT32* pu32ChannelCount)
@@ -270,7 +372,6 @@ HRESULT __stdcall GamerToolAPO::LockForProcess(UINT32 u32NumInputConnections,
     APO_CONNECTION_DESCRIPTOR** ppInputConnections, UINT32 u32NumOutputConnections,
     APO_CONNECTION_DESCRIPTOR** ppOutputConnections)
 {
-    UNREFERENCED_PARAMETER(ppOutputConnections);
     if (!m_initialized)
         return APOERR_NOT_INITIALIZED;
     if (u32NumInputConnections == 0 || u32NumOutputConnections == 0
@@ -278,27 +379,41 @@ HRESULT __stdcall GamerToolAPO::LockForProcess(UINT32 u32NumInputConnections,
         return APOERR_NUM_CONNECTIONS_INVALID;
 
     // Snapshot the format so APOProcess knows the channel layout/rate.
+    // BOTH sides are validated as a pair (float32, identical channels and
+    // rate, within the filter bank): processing is strictly 1:1 in-place,
+    // so a mismatched pair accepted here would corrupt the interleaved
+    // buffer at best and count toward the engine's per-APO failure budget
+    // (10 strikes disables the endpoint's SysFx) at worst.
     APO_CONNECTION_DESCRIPTOR* inConn = ppInputConnections[0];
-    if (inConn == NULL || inConn->pFormat == NULL)
+    APO_CONNECTION_DESCRIPTOR* outConn = ppOutputConnections[0];
+    if (inConn == NULL || inConn->pFormat == NULL
+        || outConn == NULL || outConn->pFormat == NULL)
+    {
+        ApoLog(L"LockForProcess reject: null connection/format");
         return APOERR_FORMAT_NOT_SUPPORTED;
+    }
 
-    UNCOMPRESSEDAUDIOFORMAT fmt;
-    ZeroMemory(&fmt, sizeof(fmt));
-    if (FAILED(inConn->pFormat->GetUncompressedAudioFormat(&fmt)))
+    UINT32 inCh = 0, inRate = 0, outCh = 0, outRate = 0;
+    if (FAILED(GetFloatParams(inConn->pFormat, &inCh, &inRate))
+        || FAILED(GetFloatParams(outConn->pFormat, &outCh, &outRate)))
+    {
+        ApoLog(L"LockForProcess reject: non-float format");
         return APOERR_FORMAT_NOT_SUPPORTED;
-    if (fmt.guidFormatType != KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
-        return APOERR_FORMAT_NOT_SUPPORTED;
+    }
 
-    channelCount = (int)fmt.dwSamplesPerFrame;
-    if (channelCount > MaxChannels)
-        channelCount = MaxChannels;
-    if (channelCount <= 0)
+    if (inCh == 0 || inCh > (UINT32)MaxChannels || inRate == 0
+        || inCh != outCh || inRate != outRate)
+    {
+        ApoLog(L"LockForProcess reject: pair mismatch (in %uch @%uHz, out %uch @%uHz)",
+            inCh, inRate, outCh, outRate);
         return APOERR_FORMAT_NOT_SUPPORTED;
-    sampleRate = (int)fmt.fFramesPerSecond;
-    if (sampleRate <= 0)
-        return APOERR_FORMAT_NOT_SUPPORTED;
+    }
+
+    channelCount = (int)inCh;
+    sampleRate = (int)inRate;
 
     m_locked = true;
+    ApoLog(L"LockForProcess ok: %uch @%uHz", channelCount, sampleRate);
     return S_OK;
 }
 

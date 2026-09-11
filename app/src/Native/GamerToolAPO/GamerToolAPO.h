@@ -117,6 +117,13 @@ public:
     // hand-rolled HKCR\AudioEngine\AudioProcessingObjects writer in DllMain.
     static const CRegAPOProperties<1> regProperties;
 
+    // Filter-bank width every format path must respect: the DSP loop indexes
+    // filters[channel][band], so accepting more channels than this in format
+    // negotiation would mis-index the interleaved frame. Public so the
+    // free-function negotiation helpers (which run before any instance
+    // state exists) enforce the same bound.
+    static const int MaxChannels = 8;
+
 private:
     LONG m_refCount;
     bool m_initialized;
@@ -127,7 +134,6 @@ private:
     EqConfig*   sharedConfig;
 
     // Per-instance processing state (per channel: 10 biquads).
-    static const int MaxChannels = 8;
     Biquad      filters[MaxChannels][10];
     int         channelCount;
     int         sampleRate;
