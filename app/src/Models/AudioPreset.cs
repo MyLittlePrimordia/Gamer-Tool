@@ -43,6 +43,9 @@ public sealed class AudioPreset : INotifyPropertyChanged
 
     public bool EnableNativeLoudness { get; set; }
 
+    /// <summary>Output trim in dB, -12..+12, applied after the 10-band EQ. Default 0 = unchanged.</summary>
+    public double PreampDb { get; set; } = 0.0;
+
     /// <summary>Id returned by HotkeyManager.RegisterHotkey, or null if this preset has no bound hotkey.</summary>
     public int? HotkeyId
     {
@@ -83,6 +86,7 @@ public sealed class AudioPreset : INotifyPropertyChanged
         IsFavorite = IsFavorite,
         BandGainsDb = (double[])BandGainsDb.Clone(),
         EnableNativeLoudness = EnableNativeLoudness,
+        PreampDb = PreampDb,
         HotkeyId = HotkeyId,
         HotkeyModifiers = HotkeyModifiers,
         HotkeyVirtualKey = HotkeyVirtualKey
@@ -148,6 +152,24 @@ public sealed class AudioPreset : INotifyPropertyChanged
             // Night mode: compression on, rumble cut, everything else flat.
             new() { Id = "builtin-latenight", Name = "Late Night", Icon = "crescent", IsBuiltIn = true,
                 BandGainsDb = new double[] { -5, -4, -2, 0, 2, 4, 4, 3, 1, 0 }, EnableNativeLoudness = true },
+
+            // Battle royale: same footstep-forward shape as FPS Shooter but
+            // less extreme (vehicles/distant fights still matter), with
+            // compression on to catch the huge gap between far-off footsteps
+            // and a nearby explosion.
+            new() { Id = "builtin-battleroyale", Name = "Battle Royale", Icon = "robot", IsBuiltIn = true,
+                BandGainsDb = new double[] { -3, -2, -1, 0, 1, 3, 5, 6, 4, 2 }, EnableNativeLoudness = true },
+
+            // Sports: commentary clarity plus stadium atmosphere - bass for
+            // crowd roar and impacts, mid lift for the commentator, gentle
+            // high cut so crowd noise doesn't turn harsh.
+            new() { Id = "builtin-sports", Name = "Sports", Icon = "trophy", IsBuiltIn = true,
+                BandGainsDb = new double[] { 3, 3, 2, 1, 1, 3, 3, 1, 0, -1 }, EnableNativeLoudness = false },
+
+            // Casual / family: gentle "smile" curve - gentle warmth and, no
+            // aggressive tuning, just a pleasant sound.
+            new() { Id = "builtin-casual", Name = "Casual", Icon = "sun", IsBuiltIn = true,
+                BandGainsDb = new double[] { 3, 2, 1, 0, 0, 0, 1, 2, 2, 1 }, EnableNativeLoudness = false },
         };
     }
 }

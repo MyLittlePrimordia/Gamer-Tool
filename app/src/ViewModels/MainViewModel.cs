@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Linq;
-using System.Security.Principal;
 using System.Threading.Tasks;
+using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
 using GamerTool.Core;
@@ -497,9 +497,9 @@ public sealed class MainViewModel : ObservableObject
 
     private void ExecuteClearDisplayHotkey()
     {
-        if (SelectedDisplayPreset?.HotkeyId is not { } hotkeyId)
+        if (SelectedDisplayPreset?.HotkeyId.HasValue != true)
             return;
-        HotkeyManager.Instance.UnregisterHotkey(hotkeyId);
+        HotkeyManager.Instance.UnregisterHotkey(SelectedDisplayPreset.HotkeyId.Value);
         SelectedDisplayPreset.HotkeyId = null;
         SelectedDisplayPreset.HotkeyModifiers = 0;
         SelectedDisplayPreset.HotkeyVirtualKey = 0;
@@ -528,6 +528,8 @@ public sealed class MainViewModel : ObservableObject
             LoadBandGainsFrom(value);
             _enableNativeLoudness = value.EnableNativeLoudness;
             OnPropertyChanged(nameof(EnableNativeLoudness));
+            _preampDb = value.PreampDb;
+            OnPropertyChanged(nameof(PreampDb));
             _settings.ActiveAudioPresetId = value.Id;
             _isAudioDirty = false; // fresh load matches the preset
             OnPropertyChanged(nameof(IsAudioDirty));
@@ -557,6 +559,33 @@ public sealed class MainViewModel : ObservableObject
         set { if (SetProperty(ref _enableNativeLoudness, value)) { MarkAudioDirty(); ApplyAudioLive(); } }
     }
 
+    /// <summary>"Volume" slider in the UI - a plain output trim, -12..+12 dB, saved per-preset.</summary>
+    private double _preampDb;
+    public double PreampDb
+    {
+        get => _preampDb;
+        set { if (SetProperty(ref _preampDb, value)) { MarkAudioDirty(); ApplyAudioLive(); } }
+    }
+
+    /// <summary>
+    /// "Balance Loud &amp; Quiet Sounds" slider - a GLOBAL comfort setting (not
+    /// tied to any one preset, and not part of IsAudioDirty), saved immediately
+    /// like RunOnStartup rather than requiring a Save As New.
+    /// </summary>
+    public double CompressionAmount
+    {
+        get => _settings.CompressionAmount;
+        set
+        {
+            if (Math.Abs(_settings.CompressionAmount - value) < 0.001)
+                return;
+            _settings.CompressionAmount = value;
+            OnPropertyChanged();
+            _settings.Save();
+            ApplyAudioLive();
+        }
+    }
+
     private AudioApplyResult? _lastAudioApplyResult;
     public AudioApplyResult? LastAudioApplyResult
     {
@@ -564,42 +593,10 @@ public sealed class MainViewModel : ObservableObject
         private set => SetProperty(ref _lastAudioApplyResult, value);
     }
 
-    /// <summary>
-    /// One-line live verdict of the last Apply: which path actually took
-    /// effect. Empty when a wired engine applied the gains cleanly - the
-    /// normal case should be silence, not noise.
-    /// </summary>
-    public string EqLiveStatus
-    {
-        get
-        {
-            if (IsAudioBypassed)
-                return "Bypassed - flat output.";
-
-            if (NativeEqEngine.Instance.IsEngineEnabled())
-                return "Applied to system output.";
-
-            return NativeEqEngine.Instance.IsEngineInstalled()
-                ? "Not wired to your current device - re-run Enable above."
-                : "EQ engine off - Enable above to apply system-wide.";
-        }
-    }
-
-    /// <summary>Explicit Apply button: re-publishes the current slider state to the engine.</summary>
-    private void ExecuteApplyEq()
-    {
-        ApplyAudioLive();
-        OnPropertyChanged(nameof(EqLiveStatus));
-        StatusMessage = LastAudioApplyResult?.NativeEqApplied == true
-            ? "EQ applied to system output."
-            : "EQ not applied - engine off or not wired (see Audio tab).";
-    }
-
 
 
     public ICommand SelectAudioPresetCommand { get; }
     public ICommand SaveAudioPresetCommand { get; }
-    public ICommand ApplyEqCommand { get; }
     public ICommand RecordAudioHotkeyCommand { get; }
     public ICommand TestAudioPresetCommand { get; }
     public ICommand CycleAudioPresetForwardCommand { get; }
@@ -675,18 +672,16 @@ public sealed class MainViewModel : ObservableObject
 
         if (IsAudioBypassed)
         {
-            LastAudioApplyResult = AudioManager.Instance.ApplyPreset(new double[10], false);
+            // True bypass: zero EVERYTHING we contribute, not just the bands -
+            // a lingering preamp/compression setting would defeat the point
+            // of a bypass toggle meant for an honest A/B comparison.
+            LastAudioApplyResult = AudioManager.Instance.ApplyPreset(new double[10], false, 0.0, 0.0);
             EqGainsChanged?.Invoke(gains);
-        }
-        else
-        {
-            LastAudioApplyResult = AudioManager.Instance.ApplyPreset(gains, EnableNativeLoudness);
-            EqGainsChanged?.Invoke(gains);
+            return;
         }
 
-        // Every publish funnels through here, so this is the one place the
-        // live verdict (wired engine vs not) needs re-raising.
-        OnPropertyChanged(nameof(EqLiveStatus));
+        LastAudioApplyResult = AudioManager.Instance.ApplyPreset(gains, EnableNativeLoudness, PreampDb, CompressionAmount);
+        EqGainsChanged?.Invoke(gains);
     }
 
     private void ApplyAudioPresetById(string presetId)
@@ -779,6 +774,7 @@ public sealed class MainViewModel : ObservableObject
             custom.IsBuiltIn = false;
             custom.BandGainsDb = gains;
             custom.EnableNativeLoudness = EnableNativeLoudness;
+            custom.PreampDb = PreampDb;
             custom.HotkeyId = null;
             custom.HotkeyModifiers = 0;
             custom.HotkeyVirtualKey = 0;
@@ -791,6 +787,7 @@ public sealed class MainViewModel : ObservableObject
         {
             SelectedAudioPreset.BandGainsDb = gains;
             SelectedAudioPreset.EnableNativeLoudness = EnableNativeLoudness;
+            SelectedAudioPreset.PreampDb = PreampDb;
             IsAudioDirty = false;
         }
 
@@ -812,6 +809,7 @@ public sealed class MainViewModel : ObservableObject
         copy.IsFavorite = false;
         copy.BandGainsDb = gains;
         copy.EnableNativeLoudness = EnableNativeLoudness;
+        copy.PreampDb = PreampDb;
         copy.HotkeyId = null;
         copy.HotkeyModifiers = 0;
         copy.HotkeyVirtualKey = 0;
@@ -861,9 +859,9 @@ public sealed class MainViewModel : ObservableObject
 
     private void ExecuteClearAudioHotkey()
     {
-        if (SelectedAudioPreset?.HotkeyId is not { } hotkeyId)
+        if (SelectedAudioPreset?.HotkeyId.HasValue != true)
             return;
-        HotkeyManager.Instance.UnregisterHotkey(hotkeyId);
+        HotkeyManager.Instance.UnregisterHotkey(SelectedAudioPreset.HotkeyId.Value);
         SelectedAudioPreset.HotkeyId = null;
         SelectedAudioPreset.HotkeyModifiers = 0;
         SelectedAudioPreset.HotkeyVirtualKey = 0;
@@ -911,7 +909,6 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(IsEqEngineEnabled));
         OnPropertyChanged(nameof(IsEqEngineAttached));
         OnPropertyChanged(nameof(NeedsEqReattach));
-        OnPropertyChanged(nameof(EqLiveStatus));
     }
 
     private DispatcherTimer? _eqDeviceWatchTimer;
@@ -956,31 +953,6 @@ public sealed class MainViewModel : ObservableObject
 
     public ICommand EnableEqEngineCommand { get; }
     public ICommand DisableEqEngineCommand { get; }
-    public ICommand RestartAsAdminCommand { get; }
-
-    /// <summary>
-    /// True when this process is already elevated. The EQ engine's install
-    /// step self-elevates a child process either way, but several flows
-    /// (global hotkeys vs UAC prompts, tray restore quirks) behave better
-    /// elevated, so the Settings tab offers a one-click restart-as-admin
-    /// for users who launched normally and forgot.
-    /// </summary>
-    public bool IsElevated { get; } = new WindowsPrincipal(WindowsIdentity.GetCurrent())
-        .IsInRole(WindowsBuiltInRole.Administrator);
-
-    /// <summary>
-    /// Relaunches this exact exe elevated (no args = normal UI startup),
-    /// then exits the current instance. UAC declined = stay put, toast why.
-    /// The actual handoff (mutex release first, then spawn) lives in App,
-    /// which owns the single-instance mutex - firing the event is all the
-    /// ViewModel does.
-    /// </summary>
-    public event Action? RestartAsAdminRequested;
-
-    private void ExecuteRestartAsAdmin()
-    {
-        RestartAsAdminRequested?.Invoke();
-    }
 
     /// <summary>
     /// One-click enablement: relaunches GamerTool elevated with the
@@ -1007,23 +979,17 @@ public sealed class MainViewModel : ObservableObject
             IsEqBusy = true;
             EqStatusText = "Enabling built-in EQ - you may hear audio restart...";
 
-            // Wait in the background for the elevated pass to finish. The
-            // elevated instance exits 0 only when endpoints are actually
-            // wired now (attach verifies a real LFX write, not just files).
+            // Wait in the background for the elevated pass to finish.
             Task.Run(async () =>
             {
                 try { await elevated.WaitForExitAsync(); } catch { }
-                int exitCode = 0;
-                try { exitCode = elevated.ExitCode; } catch { }
                 System.Windows.Application.Current.Dispatcher.Invoke(() =>
                 {
                     IsEqBusy = false;
-                    bool attached = NativeEqEngine.Instance.IsEngineAttachedToAnyDevice();
-                    EqStatusText = exitCode == 0 && attached
+                    bool ok = NativeEqEngine.Instance.IsEngineEnabled();
+                    EqStatusText = ok
                         ? "Built-in EQ active on all playback devices."
-                        : attached
-                            ? "EQ wired but enablement reported an error - re-run if sliders do nothing."
-                            : "Enablement failed - endpoint wiring was denied. Try running Gamer Tool as administrator.";
+                        : "Enablement failed - try running Gamer Tool as administrator.";
                     RefreshEqEngineUI();
                     ApplyAudioLive();
                 });
@@ -1062,8 +1028,7 @@ public sealed class MainViewModel : ObservableObject
                 {
                     IsEqBusy = false;
                     RefreshEqEngineUI();
-                    bool stillEnabled = NativeEqEngine.Instance.IsEngineInstalled();
-                    EqStatusText = stillEnabled
+                    EqStatusText = NativeEqEngine.Instance.IsEngineEnabled()
                         ? "Disable failed - try running Gamer Tool as administrator."
                         : "Built-in EQ disabled.";
                 });
@@ -1319,9 +1284,9 @@ public sealed class MainViewModel : ObservableObject
 
     private void ExecuteClearComboHotkey(ComboPreset? combo)
     {
-        if (combo?.HotkeyId is not { } hotkeyId)
+        if (combo?.HotkeyId.HasValue != true)
             return;
-        HotkeyManager.Instance.UnregisterHotkey(hotkeyId);
+        HotkeyManager.Instance.UnregisterHotkey(combo.HotkeyId.Value);
         combo.HotkeyId = null;
         combo.HotkeyModifiers = 0;
         combo.HotkeyVirtualKey = 0;
@@ -1378,6 +1343,24 @@ public sealed class MainViewModel : ObservableObject
     public string PanicHotkeyLabel => "Ctrl + Alt + R";
 
     public ICommand PanicResetCommand { get; }
+
+    /// <summary>
+    /// True when GamerTool is NOT currently running elevated - drives the
+    /// "Restart as Administrator" banner in Settings. Checked once at
+    /// startup: elevation can't change for a running process, so there's
+    /// nothing to poll here.
+    /// </summary>
+    public bool IsNotElevated { get; } = !ElevationManager.IsElevated();
+
+    public ICommand RestartAsAdminCommand { get; }
+
+    private void ExecuteRestartAsAdmin()
+    {
+        if (ElevationManager.TryRestartElevated())
+            Application.Current.Shutdown();
+        else
+            StatusMessage = "Restart canceled - still running without administrator rights.";
+    }
 
     private void ExecutePanicReset()
     {
@@ -1861,7 +1844,6 @@ public sealed class MainViewModel : ObservableObject
 
         SelectAudioPresetCommand = new RelayCommand<AudioPreset>(p => { if (p is not null) SelectedAudioPreset = p; });
         SaveAudioPresetCommand = new RelayCommand(ExecuteSaveAudioPreset);
-        ApplyEqCommand = new RelayCommand(ExecuteApplyEq);
         RecordAudioHotkeyCommand = new RelayCommand<AudioPreset>(p => { if (p is not null) BeginHotkeyRecording(p, HotkeyTargetKind.Audio, p.Name); });
         TestAudioPresetCommand = new RelayCommand<AudioPreset>(ExecuteTestAudioPreset);
         CycleAudioPresetForwardCommand = new RelayCommand(() => CycleAudioPreset(1));
@@ -1887,6 +1869,7 @@ public sealed class MainViewModel : ObservableObject
         RefreshRunningProcessesCommand = new RelayCommand(ExecuteRefreshRunningProcesses);
 
         PanicResetCommand = new RelayCommand(ExecutePanicReset);
+        RestartAsAdminCommand = new RelayCommand(ExecuteRestartAsAdmin);
         ConfirmPendingHotkeyCommand = new RelayCommand(ExecuteConfirmPendingHotkey, () => HasPendingHotkey && _pendingModifiers != 0);
         ClearPendingHotkeyCommand = new RelayCommand(() =>
         {
@@ -1897,7 +1880,6 @@ public sealed class MainViewModel : ObservableObject
 
         EnableEqEngineCommand = new RelayCommand(ExecuteEnableEqEngine);
         DisableEqEngineCommand = new RelayCommand(ExecuteDisableEqEngine);
-        RestartAsAdminCommand = new RelayCommand(ExecuteRestartAsAdmin);
 
         // Fire-and-forget: detection + version checks hit the network; the
         // constructor must not block first paint on them.

@@ -51,7 +51,7 @@ public sealed class AudioManager
     /// few dB (compensate with volume) instead of clipping transients at the
     /// DAC. Stored presets are never modified - only the published vector.
     /// </summary>
-    public AudioApplyResult ApplyPreset(double[] gainsDb, bool enableNativeLoudness)
+    public AudioApplyResult ApplyPreset(double[] gainsDb, bool enableNativeLoudness, double preampDb = 0.0, double compressionAmount = 0.0)
     {
         var floatGains = new float[gainsDb.Length];
         double peak = double.NegativeInfinity;
@@ -65,7 +65,7 @@ public sealed class AudioManager
         bool eqApplied = false;
         if (NativeEqEngine.Instance.IsEngineEnabled())
         {
-            NativeEqEngine.Instance.PublishGains(floatGains, enabled: true);
+            NativeEqEngine.Instance.PublishGains(floatGains, enabled: true, (float)preampDb, (float)compressionAmount);
             eqApplied = true;
         }
 

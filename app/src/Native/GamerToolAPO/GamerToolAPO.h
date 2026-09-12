@@ -59,6 +59,8 @@ struct EqConfig
     volatile LONG64 version;   // incremented by writer before/after each publish; 0 = flat
     int enabled;               // 0 = bypass (flat), 1 = process
     float gainsDb[10];         // per-band gain in dB, -12..+12
+    float preampDb;            // output trim in dB, -12..+12, applied after the EQ bands
+    float compressionAmount;   // 0.0 (off) .. 1.0 (max) - see ComputeCompressorGain in the .cpp
 };
 #pragma pack(pop)
 
@@ -117,13 +119,6 @@ public:
     // hand-rolled HKCR\AudioEngine\AudioProcessingObjects writer in DllMain.
     static const CRegAPOProperties<1> regProperties;
 
-    // Filter-bank width every format path must respect: the DSP loop indexes
-    // filters[channel][band], so accepting more channels than this in format
-    // negotiation would mis-index the interleaved frame. Public so the
-    // free-function negotiation helpers (which run before any instance
-    // state exists) enforce the same bound.
-    static const int MaxChannels = 8;
-
 private:
     LONG m_refCount;
     bool m_initialized;
@@ -134,6 +129,7 @@ private:
     EqConfig*   sharedConfig;
 
     // Per-instance processing state (per channel: 10 biquads).
+    static const int MaxChannels = 8;
     Biquad      filters[MaxChannels][10];
     int         channelCount;
     int         sampleRate;
@@ -142,8 +138,18 @@ private:
     LONG64      appliedVersion;
     float       appliedGains[10];
     int         appliedEnabled;
+    float       appliedPreampLinear;      // powf(10, preampDb/20), precomputed once per snapshot
+    float       appliedCompressionAmount; // 0..1, raw from config - see ComputeCompressorGain
 
-    void ApplyConfigSnapshot(const float* gainsDb, int enabled);
+    // Per-channel compressor envelope follower state (linear scale) and the
+    // attack/release smoothing coefficients, recomputed only when sampleRate
+    // changes (they're a function of sample rate + fixed time constants, not
+    // something that needs recalculating every sample).
+    float       compressorEnvelope[MaxChannels];
+    float       compressorAttackCoeff;
+    float       compressorReleaseCoeff;
+
+    void ApplyConfigSnapshot(const float* gainsDb, int enabled, float preampDb, float compressionAmount);
     void DesignBiquad(Biquad& b, float freqHz, float gainDb, float q, int rateHz) const;
     void ProcessFrames(float* input, float* output, UINT32 frameCount, int channels);
     void ResetFilters();

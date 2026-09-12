@@ -379,7 +379,7 @@
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <TextBlock Text="&#x1F507;" FontSize="16" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                 <TextBlock Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center" TextWrapping="Wrap" Width="240"
-                                           Text="EQ engine off - sliders move but you hear nothing."/>
+                                           Text="Equalizer is off - sliders won't change your sound yet."/>
                                 <Button Content="Enable" Style="{StaticResource NeonButtonStyle}" Padding="12,4" Margin="8,0,0,0"
                                         Command="{Binding EnableEqEngineCommand}" VerticalAlignment="Center"/>
                             </StackPanel>
@@ -390,7 +390,7 @@
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <TextBlock Text="&#x1F3A7;" FontSize="16" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                 <TextBlock Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center" TextWrapping="Wrap" Width="240"
-                                           Text="Output device changed - re-run Enable so it gets wired."/>
+                                           Text="New sound device detected - turn the equalizer on for it too."/>
                                 <Button Content="Re-run Enable" Style="{StaticResource SecondaryButtonStyle}" Padding="10,4" Margin="8,0,0,0"
                                         Command="{Binding EnableEqEngineCommand}" VerticalAlignment="Center"/>
                             </StackPanel>
@@ -447,9 +447,6 @@
                         <WrapPanel HorizontalAlignment="Center">
                             <Button x:Name="TestAudioButton" Content="&#x25B6;  Play Test" Style="{StaticResource NeonButtonStyle}"
                                     Padding="12,5" Click="TestAudioButton_Click" Margin="0,0,6,4"/>
-                            <Button Content="Apply EQ" Style="{StaticResource NeonButtonStyle}" Padding="12,5"
-                                    Command="{Binding ApplyEqCommand}" Margin="0,0,6,4"
-                                    ToolTip="Re-publish the current EQ curve to the system output"/>
                             <Button Content="Hotkey" Style="{StaticResource SecondaryButtonStyle}" Padding="12,5"
                                     Command="{Binding RecordSelectedAudioHotkeyCommand}" Margin="0,0,6,4"/>
                             <Button Content="Duplicate" Style="{StaticResource SecondaryButtonStyle}" Padding="12,5"
@@ -473,7 +470,7 @@
                                       Foreground="{StaticResource MutedTextBrush}" FontSize="11" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <CheckBox Content="Loudness" IsChecked="{Binding EnableNativeLoudness, Mode=TwoWay}"
                                       Foreground="{StaticResource MutedTextBrush}" FontSize="11" VerticalAlignment="Center"
-                                      ToolTip="Windows Loudness Equalization (dialogue compression)"/>
+                                      ToolTip="Windows' own volume-leveling feature"/>
                         </StackPanel>
                     </StackPanel>
 
@@ -509,13 +506,36 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
 
+                            <!-- Volume trim + loud/quiet balance - two plain sliders, no
+                                 technical terms (no "preamp", "threshold", "ratio", etc). -->
+                            <Grid Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="38"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Volume" Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center" Width="110"/>
+                                <Slider Grid.Column="1" Style="{StaticResource GlowSliderStyle}" Minimum="-12" Maximum="12" Value="{Binding PreampDb, Mode=TwoWay}"/>
+                                <TextBlock Grid.Column="2" Text="{Binding PreampDb, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource ValueTextStyle}" VerticalAlignment="Center"/>
+                            </Grid>
+                            <Grid Margin="0,6,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="38"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Balance Loud &amp; Quiet" Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center" Width="110" TextWrapping="Wrap"/>
+                                <Slider Grid.Column="1" Style="{StaticResource GlowSliderStyle}" Minimum="0" Maximum="1" Value="{Binding CompressionAmount, Mode=TwoWay}"/>
+                                <TextBlock Grid.Column="2" Text="{Binding CompressionAmount, StringFormat={}{0:P0}}" Style="{StaticResource ValueTextStyle}" VerticalAlignment="Center"/>
+                            </Grid>
+                            <TextBlock Style="{StaticResource BodyTextStyle}" FontSize="10" Margin="0,4,0,0" TextWrapping="Wrap"
+                                       Text="Makes footsteps easier to hear without loud sounds hurting your ears."/>
+
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,0"
                                         Visibility="{Binding IsAudioDirty, Converter={StaticResource BoolToVisConverter}}">
                                 <Button Content="Save As New" Style="{StaticResource NeonButtonStyle}"
                                         Command="{Binding SaveAudioPresetCommand}"/>
                             </StackPanel>
-                            <TextBlock Style="{StaticResource BodyTextStyle}" FontSize="10" TextAlignment="Center" Margin="0,6,0,0"
-                                       Text="{Binding EqLiveStatus}"/>
                             <TextBlock Style="{StaticResource BodyTextStyle}" FontSize="10" TextAlignment="Center" Margin="0,8,0,0" TextWrapping="Wrap"
                                        Text="Built-in anti-clip: loud boosts are auto-leveled (turn up volume to compensate)."/>
                         </StackPanel>
@@ -707,6 +727,20 @@
                                     <TextBlock Grid.Column="0" Text="Run on Windows Startup" Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center"/>
                                     <ToggleButton Grid.Column="1" Style="{StaticResource ToggleSwitchStyle}" IsChecked="{Binding RunOnStartup, Mode=TwoWay}"/>
                                 </Grid>
+
+                                <Grid Margin="0,10,0,0" Visibility="{Binding IsNotElevated, Converter={StaticResource BoolToVisConverter}}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource BodyTextStyle}" Text="Not running as Administrator" FontWeight="SemiBold"/>
+                                        <TextBlock Style="{StaticResource BodyTextStyle}" FontSize="10" TextWrapping="Wrap" Width="220"
+                                                   Text="Turning EQ on/off will show a Windows permission popup each time."/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="Restart as Admin" Style="{StaticResource SecondaryButtonStyle}" Padding="10,5"
+                                            Command="{Binding RestartAsAdminCommand}" VerticalAlignment="Center"/>
+                                </Grid>
                             </StackPanel>
                         </Border>
 
@@ -754,7 +788,7 @@
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" VerticalAlignment="Center">
                                         <TextBlock Style="{StaticResource BodyTextStyle}"
-                                                   Text="Enables Gamer Tool's own system-wide EQ engine. One-time admin approval." TextWrapping="Wrap"/>
+                                                   Text="Turns the equalizer on for all your sounds. Needs a one-time Windows permission popup." TextWrapping="Wrap"/>
                                         <TextBlock Style="{StaticResource BodyTextStyle}" FontSize="10" Margin="0,4,0,0"
                                                    Text="If sliders do nothing audible, the engine isn't enabled yet." TextWrapping="Wrap"/>
                                     </StackPanel>
@@ -769,13 +803,6 @@
                                                 Visibility="{Binding IsEqEngineEnabled, Converter={StaticResource BoolToVisConverter}}"/>
                                     </StackPanel>
                                 </Grid>
-                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0"
-                                            Visibility="{Binding IsElevated, Converter={StaticResource InverseBoolToVisConverter}}">
-                                    <TextBlock Style="{StaticResource BodyTextStyle}" FontSize="10" VerticalAlignment="Center" Margin="0,0,8,0"
-                                               Text="Not running as admin - the engine install needs one approval:" TextWrapping="Wrap"/>
-                                    <Button Content="Restart as admin" Style="{StaticResource SecondaryButtonStyle}" Padding="12,5"
-                                            Command="{Binding RestartAsAdminCommand}"/>
-                                </StackPanel>
                                 <TextBlock Style="{StaticResource BodyTextStyle}" Foreground="{StaticResource MutedTextBrush}"
                                            Text="{Binding EqStatusText, Mode=OneWay}" TextWrapping="Wrap" Margin="0,8,0,0"
                                            Visibility="{Binding EqStatusText, Converter={StaticResource StringToVisConverter}}"/>

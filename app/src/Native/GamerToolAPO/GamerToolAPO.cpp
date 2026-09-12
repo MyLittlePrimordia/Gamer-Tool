@@ -13,65 +13,18 @@
 #include "ClassFactory.h"
 #include <Unknwn.h>
 #include <math.h>
-#include <stdio.h>
-#include <stdarg.h>
 
 #define GAMERTOOL_SHARED_MEMORY_NAME L"Local\\GamerToolEqConfig"
-
-// ---------------------------------------------------------------------------
-// audiodg-side diagnostics. The engine gives NO feedback when it skips an
-// APO, so these append-only lines (Initialize + format negotiation + lock
-// only - NEVER the real-time APOProcess path) are how a failed load is
-// distinguished from a config/DSP problem. %ProgramData% is Everyone-writable
-// so this works under audiodg's service account too.
-// ---------------------------------------------------------------------------
-static void ApoLog(const wchar_t* fmt, ...)
-{
-    wchar_t dir[MAX_PATH];
-    DWORD n = GetEnvironmentVariableW(L"ProgramData", dir, MAX_PATH);
-    if (n == 0 || n + 32 >= MAX_PATH)
-        return;
-
-    wchar_t path[MAX_PATH];
-    _snwprintf_s(path, MAX_PATH, _TRUNCATE, L"%s\\GamerTool\\apo-load.log", dir);
-
-    FILE* f = NULL;
-    if (_wfopen_s(&f, path, L"a, ccs=UTF-16LE") != 0 || f == NULL)
-        return;
-
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    fwprintf(f, L"[%02u:%02u:%02u.%03u] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
-    va_list args;
-    va_start(args, fmt);
-    vfwprintf(f, fmt, args);
-    va_end(args);
-    fwprintf(f, L"\n");
-    fclose(f);
-}
 
 // ---------------------------------------------------------------------------
 // Registration metadata - CRegAPOProperties<1> declares one APO CLSID.
 // APO_FLAG_INPLACE lets us process directly into the output buffer when the
 // engine gives us that luxury (both connection buffers may alias).
-//
-// CRegAPOProperties ends in iidAPOInterfaceList[1] - a flexible-array-style
-// tail the audio SDK uses everywhere. MSVC /W4 flags that shape on the
-// aggregate initializer ("zero-sized array...will have no elements",
-// emitted for the trailing member) even though the layout is exactly what
-// GetRegistrationProperties consumers expect. Verified against in-box APOs:
-// the byte layout below matches their registry blobs, so the warning is
-// informational only and is disabled for this one declaration.
 // ---------------------------------------------------------------------------
-#pragma warning(push, 0) // silence ALL warnings for this one SDK-pattern declaration;
-// the trailing zero-sized array member is inherent to CRegAPOProperties<1>
-// (flexible-array idiom from the audio SDK) regardless of warning number,
-// and the emitted layout is verified byte-identical to in-box APO blobs.
 const CRegAPOProperties<1> GamerToolAPO::regProperties(
     CLSID_GamerToolAPO, L"GamerToolAPO", L"Gamer Tool built-in equalizer", 1, 0,
     __uuidof(IAudioProcessingObject),
     (APO_FLAG)(APO_FLAG_FRAMESPERSECOND_MUST_MATCH | APO_FLAG_BITSPERSAMPLE_MUST_MATCH | APO_FLAG_INPLACE));
-#pragma warning(pop)
 
 // ---------------------------------------------------------------------------
 // Object creation (ClassFactory.cpp entry point).
@@ -104,7 +57,12 @@ GamerToolAPO::GamerToolAPO()
     sampleRate = 0;
     appliedVersion = 0;
     appliedEnabled = 0;
+    appliedPreampLinear = 1.0f;
+    appliedCompressionAmount = 0.0f;
+    compressorAttackCoeff = 0.0f;
+    compressorReleaseCoeff = 0.0f;
     ZeroMemory(appliedGains, sizeof(appliedGains));
+    ZeroMemory(compressorEnvelope, sizeof(compressorEnvelope));
     ResetFilters();
 }
 
@@ -196,42 +154,27 @@ HRESULT __stdcall GamerToolAPO::Initialize(UINT32 cbDataSize, BYTE* pbyData)
     if ((NULL != pbyData) && (0 == cbDataSize))
         return E_POINTER;
 
-    ApoLog(L"Initialize: blob %u bytes (Effects=%u, Effects2=%u)",
-        cbDataSize, (UINT32)sizeof(APOInitSystemEffects), (UINT32)sizeof(APOInitSystemEffects2));
-
     // Accept both the classic APOInitSystemEffects and the Windows 10+
     // APOInitSystemEffects2 (which carries the device GUID we don't need -
     // all devices share the one Gamer Tool config).
     if (cbDataSize == sizeof(APOInitSystemEffects) || cbDataSize == sizeof(APOInitSystemEffects2))
     {
-        m_initialized = true;
-    }
-    else
-    {
-        // Fallback for any other init blob shape (e.g. APOInitSystemEffects3
-        // on Win11 22H2+ driver stacks): accept and keep the graph alive.
-        m_initialized = true;
-    }
-
-    // Open (or create) the shared config on EVERY successful init path.
-    // The original opened it only for the two known blob sizes, so a
-    // system that passes Effects3 initialized the APO into a silent
-    // permanent bypass: process runs, sharedConfig stays NULL, the EQ
-    // never sees any config and audio passes through untouched - the
-    // "enabled but does nothing" failure mode.
-    if (m_initialized && sharedConfig == NULL)
-    {
-        mappingHandle = OpenSharedConfig();
-        if (mappingHandle != NULL)
+        // Open (or create) the shared config at first initialize.
+        if (sharedConfig == NULL)
         {
-            sharedConfig = (EqConfig*)MapViewOfFile(
-                mappingHandle, FILE_MAP_READ, 0, 0, sizeof(EqConfig));
+            mappingHandle = OpenSharedConfig();
+            if (mappingHandle != NULL)
+            {
+                sharedConfig = (EqConfig*)MapViewOfFile(
+                    mappingHandle, FILE_MAP_READ, 0, 0, sizeof(EqConfig));
+            }
         }
-        ApoLog(L"Initialize: mapping=%s view=%s",
-            mappingHandle != NULL ? L"ok" : L"FAILED",
-            sharedConfig != NULL ? L"ok" : L"FAILED");
+        m_initialized = true;
+        return S_OK;
     }
 
+    // Fallback for raw/generic init blobs: don't fail the graph.
+    m_initialized = true;
     return S_OK;
 }
 
@@ -239,10 +182,9 @@ HRESULT __stdcall GamerToolAPO::GetLatency(HNSTIME* pTime)
 {
     if (!pTime)
         return E_POINTER;
-    // Unconditional: some graphs query latency before LockForProcess, and a
-    // failure there can abort graph building. Biquads are pure feedforward
-    // state and add no latency either way.
-    *pTime = 0;
+    if (!m_locked)
+        return APOERR_ALREADY_UNLOCKED;
+    *pTime = 0; // biquad is pure feedforward state, adds no latency
     return S_OK;
 }
 
@@ -262,85 +204,44 @@ HRESULT __stdcall GamerToolAPO::GetRegistrationProperties(APO_REG_PROPERTIES** p
     return S_OK;
 }
 
-// Reads an IAudioMediaType as float32 stream parameters. S_OK + filled
-// out-params on success; APOERR_FORMAT_NOT_SUPPORTED for anything we cannot
-// process (compressed types, non-float, empty channel count/rate).
-static HRESULT GetFloatParams(IAudioMediaType* pType, UINT32* pChannels, UINT32* pRateHz)
+// Accept only 32-bit float - the one format the engine offers LFX APOs and
+// the one our biquads process in place.
+static HRESULT CheckFloat32Format(IAudioMediaType* pRequestedFormat, IAudioMediaType** ppSupportedFormat)
 {
-    if (pType == NULL)
+    if (pRequestedFormat == NULL || ppSupportedFormat == NULL)
         return E_POINTER;
+    *ppSupportedFormat = NULL;
 
     UNCOMPRESSEDAUDIOFORMAT fmt;
     ZeroMemory(&fmt, sizeof(fmt));
-    HRESULT hr = pType->GetUncompressedAudioFormat(&fmt);
+    HRESULT hr = pRequestedFormat->GetUncompressedAudioFormat(&fmt);
     if (FAILED(hr))
         return APOERR_FORMAT_NOT_SUPPORTED;
 
     if (fmt.guidFormatType != KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
         return APOERR_FORMAT_NOT_SUPPORTED;
 
-    if (pChannels != NULL)
-        *pChannels = fmt.dwSamplesPerFrame;
-    if (pRateHz != NULL)
-        *pRateHz = (UINT32)fmt.fFramesPerSecond;
-    return S_OK;
-}
-
-// Accept only 32-bit float, and - unlike the original version - only when it
-// is COMPATIBLE WITH THE OTHER SIDE of the connection (same channels, same
-// rate). The engine probes mismatched pairs during graph building and
-// expects rejection; blindly accepting any float32 input let an impossible
-// pair through to LockForProcess, whose failure then counted toward the
-// engine's per-APO failure budget (10 strikes disables the endpoint's SysFx
-// outright - exactly the silent death observed on 24H2).
-//
-// Contract, per MSDN: S_OK means "use the requested format" with
-// *ppSupported... set to NULL. (The old code AddRef'd the request into the
-// out-param on success, which the engine is free to misread.)
-static HRESULT CheckFloatPair(IAudioMediaType* pCounterpartFormat,
-    IAudioMediaType* pRequestedFormat, IAudioMediaType** ppSupportedFormat,
-    const wchar_t* tag)
-{
-    if (pRequestedFormat == NULL || ppSupportedFormat == NULL)
-        return E_POINTER;
-    *ppSupportedFormat = NULL;
-
-    UINT32 reqCh = 0, reqRate = 0;
-    HRESULT hr = GetFloatParams(pRequestedFormat, &reqCh, &reqRate);
-    if (FAILED(hr) || reqCh == 0 || reqCh > (UINT32)GamerToolAPO::MaxChannels || reqRate == 0)
-    {
-        ApoLog(L"%ls reject: not usable float (hr=0x%08X ch=%u rate=%u)", tag, hr, reqCh, reqRate);
-        return FAILED(hr) ? hr : APOERR_FORMAT_NOT_SUPPORTED;
-    }
-
-    // When the engine has already fixed the other side, the pair must agree
-    // - this APO is strictly 1:1 in-place (same layout both directions).
-    if (pCounterpartFormat != NULL)
-    {
-        UINT32 otherCh = 0, otherRate = 0;
-        hr = GetFloatParams(pCounterpartFormat, &otherCh, &otherRate);
-        if (FAILED(hr) || otherCh != reqCh || otherRate != reqRate)
-        {
-            ApoLog(L"%ls reject: pair mismatch (req %uch @%uHz vs other %uch @%uHz hr=0x%08X)",
-                tag, reqCh, reqRate, otherCh, otherRate, hr);
-            return APOERR_FORMAT_NOT_SUPPORTED;
-        }
-    }
-
-    ApoLog(L"%ls accept: %uch @%uHz", tag, reqCh, reqRate);
+    pRequestedFormat->AddRef();
+    *ppSupportedFormat = pRequestedFormat;
     return S_OK;
 }
 
 HRESULT __stdcall GamerToolAPO::IsInputFormatSupported(IAudioMediaType* pOutputFormat,
     IAudioMediaType* pRequestedInputFormat, IAudioMediaType** ppSupportedInputFormat)
 {
-    return CheckFloatPair(pOutputFormat, pRequestedInputFormat, ppSupportedInputFormat, L"IsIn");
+    UNREFERENCED_PARAMETER(pOutputFormat);
+    if (pRequestedInputFormat == NULL || ppSupportedInputFormat == NULL)
+        return E_POINTER;
+    return CheckFloat32Format(pRequestedInputFormat, ppSupportedInputFormat);
 }
 
 HRESULT __stdcall GamerToolAPO::IsOutputFormatSupported(IAudioMediaType* pInputFormat,
     IAudioMediaType* pRequestedOutputFormat, IAudioMediaType** ppSupportedOutputFormat)
 {
-    return CheckFloatPair(pInputFormat, pRequestedOutputFormat, ppSupportedOutputFormat, L"IsOut");
+    UNREFERENCED_PARAMETER(pInputFormat);
+    if (pRequestedOutputFormat == NULL || ppSupportedOutputFormat == NULL)
+        return E_POINTER;
+    return CheckFloat32Format(pRequestedOutputFormat, ppSupportedOutputFormat);
 }
 
 HRESULT __stdcall GamerToolAPO::GetInputChannelCount(UINT32* pu32ChannelCount)
@@ -374,6 +275,7 @@ HRESULT __stdcall GamerToolAPO::LockForProcess(UINT32 u32NumInputConnections,
     APO_CONNECTION_DESCRIPTOR** ppInputConnections, UINT32 u32NumOutputConnections,
     APO_CONNECTION_DESCRIPTOR** ppOutputConnections)
 {
+    UNREFERENCED_PARAMETER(ppOutputConnections);
     if (!m_initialized)
         return APOERR_NOT_INITIALIZED;
     if (u32NumInputConnections == 0 || u32NumOutputConnections == 0
@@ -381,41 +283,27 @@ HRESULT __stdcall GamerToolAPO::LockForProcess(UINT32 u32NumInputConnections,
         return APOERR_NUM_CONNECTIONS_INVALID;
 
     // Snapshot the format so APOProcess knows the channel layout/rate.
-    // BOTH sides are validated as a pair (float32, identical channels and
-    // rate, within the filter bank): processing is strictly 1:1 in-place,
-    // so a mismatched pair accepted here would corrupt the interleaved
-    // buffer at best and count toward the engine's per-APO failure budget
-    // (10 strikes disables the endpoint's SysFx) at worst.
     APO_CONNECTION_DESCRIPTOR* inConn = ppInputConnections[0];
-    APO_CONNECTION_DESCRIPTOR* outConn = ppOutputConnections[0];
-    if (inConn == NULL || inConn->pFormat == NULL
-        || outConn == NULL || outConn->pFormat == NULL)
-    {
-        ApoLog(L"LockForProcess reject: null connection/format");
+    if (inConn == NULL || inConn->pFormat == NULL)
         return APOERR_FORMAT_NOT_SUPPORTED;
-    }
 
-    UINT32 inCh = 0, inRate = 0, outCh = 0, outRate = 0;
-    if (FAILED(GetFloatParams(inConn->pFormat, &inCh, &inRate))
-        || FAILED(GetFloatParams(outConn->pFormat, &outCh, &outRate)))
-    {
-        ApoLog(L"LockForProcess reject: non-float format");
+    UNCOMPRESSEDAUDIOFORMAT fmt;
+    ZeroMemory(&fmt, sizeof(fmt));
+    if (FAILED(inConn->pFormat->GetUncompressedAudioFormat(&fmt)))
         return APOERR_FORMAT_NOT_SUPPORTED;
-    }
-
-    if (inCh == 0 || inCh > (UINT32)MaxChannels || inRate == 0
-        || inCh != outCh || inRate != outRate)
-    {
-        ApoLog(L"LockForProcess reject: pair mismatch (in %uch @%uHz, out %uch @%uHz)",
-            inCh, inRate, outCh, outRate);
+    if (fmt.guidFormatType != KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
         return APOERR_FORMAT_NOT_SUPPORTED;
-    }
 
-    channelCount = (int)inCh;
-    sampleRate = (int)inRate;
+    channelCount = (int)fmt.dwSamplesPerFrame;
+    if (channelCount > MaxChannels)
+        channelCount = MaxChannels;
+    if (channelCount <= 0)
+        return APOERR_FORMAT_NOT_SUPPORTED;
+    sampleRate = (int)fmt.fFramesPerSecond;
+    if (sampleRate <= 0)
+        return APOERR_FORMAT_NOT_SUPPORTED;
 
     m_locked = true;
-    ApoLog(L"LockForProcess ok: %uch @%uHz", channelCount, sampleRate);
     return S_OK;
 }
 
@@ -435,6 +323,7 @@ void GamerToolAPO::ResetFilters()
 {
     // Zero state; coefficients get designed on the next config snapshot.
     ZeroMemory(filters, sizeof(filters));
+    ZeroMemory(compressorEnvelope, sizeof(compressorEnvelope));
 }
 
 void GamerToolAPO::DesignBiquad(Biquad& b, float freqHz, float gainDb, float q, int rateHz) const
@@ -459,7 +348,36 @@ void GamerToolAPO::DesignBiquad(Biquad& b, float freqHz, float gainDb, float q, 
     // (device glitch / Reset() / construction).
 }
 
-void GamerToolAPO::ApplyConfigSnapshot(const float* gainsDb, int enabled)
+// "Balance Loud & Quiet Sounds" - a simple downward compressor. amount=0 is
+// pure identity (returns 1.0f unconditionally, so the feature costs nothing
+// when untouched); amount=1 is the most aggressive setting. Threshold and
+// ratio both slide linearly with amount rather than exposing either as a
+// separate control - the UI shows one plain-English slider, not a mixing
+// console. Never increases gain above 1.0x on its own (only ever pulls loud
+// peaks down, partially made back up), so a quiet channel never gets noisier.
+static inline float ComputeCompressorGain(float envelopeLinear, float amount)
+{
+    if (amount <= 0.0001f)
+        return 1.0f;
+
+    float thresholdDb = -24.0f * amount;      // 0dB (never engages) .. -24dB
+    float ratio = 1.0f + 5.0f * amount;       // 1:1 (no effect) .. 6:1
+
+    float envDb = 20.0f * log10f(envelopeLinear > 1e-6f ? envelopeLinear : 1e-6f);
+    if (envDb <= thresholdDb)
+        return 1.0f;
+
+    float overDb = envDb - thresholdDb;
+    float gainReductionDb = overDb - (overDb / ratio);
+
+    // Partial makeup gain: brings the compressed peak back up part-way so
+    // this reads as "balanced", not just "everything got quieter".
+    float makeupDb = gainReductionDb * 0.5f;
+
+    return powf(10.0f, (makeupDb - gainReductionDb) / 20.0f);
+}
+
+void GamerToolAPO::ApplyConfigSnapshot(const float* gainsDb, int enabled, float preampDb, float compressionAmount)
 {
     if (sampleRate <= 0)
         return;
@@ -503,6 +421,18 @@ void GamerToolAPO::ApplyConfigSnapshot(const float* gainsDb, int enabled)
     for (int i = 0; i < 10; i++)
         appliedGains[i] = gainsDb[i];
     appliedEnabled = enabled;
+
+    // Preamp: dB -> linear once here, not per-sample.
+    appliedPreampLinear = powf(10.0f, preampDb / 20.0f);
+
+    // Compressor: clamp defensively (a corrupt/uninitialized 0-byte section
+    // would read as 0.0f, which is "off" - the safe direction) and recompute
+    // the attack/release smoothing coefficients for the current sample rate.
+    // 5ms attack catches transients fast enough to matter for footsteps/gunshots;
+    // 150ms release is slow enough to avoid audible "pumping".
+    appliedCompressionAmount = (compressionAmount < 0.0f) ? 0.0f : (compressionAmount > 1.0f ? 1.0f : compressionAmount);
+    compressorAttackCoeff = 1.0f - expf(-1.0f / (0.005f * (float)sampleRate));
+    compressorReleaseCoeff = 1.0f - expf(-1.0f / (0.150f * (float)sampleRate));
 }
 
 #pragma AVRT_CODE_BEGIN
@@ -535,8 +465,10 @@ void __stdcall GamerToolAPO::APOProcess(UINT32 u32NumInputConnections,
             snap.enabled = sharedConfig->enabled;
             for (int i = 0; i < 10; i++)
                 snap.gainsDb[i] = sharedConfig->gainsDb[i];
+            snap.preampDb = sharedConfig->preampDb;
+            snap.compressionAmount = sharedConfig->compressionAmount;
 
-            ApplyConfigSnapshot(snap.gainsDb, snap.enabled);
+            ApplyConfigSnapshot(snap.gainsDb, snap.enabled, snap.preampDb, snap.compressionAmount);
             appliedVersion = v;
         }
     }
@@ -592,6 +524,31 @@ void GamerToolAPO::ProcessFrames(float* input, float* output, UINT32 frameCount,
                 b.z1y = y;
                 x = y;
             }
+
+            // Preamp: single dB-derived linear gain, precomputed per snapshot
+            // (not per-sample) in ApplyConfigSnapshot.
+            x *= appliedPreampLinear;
+
+            // "Balance Loud & Quiet Sounds": envelope-follow this channel's
+            // post-EQ/preamp level, then pull loud peaks down toward the
+            // quieter material. Skipped entirely at amount=0 (default).
+            if (appliedCompressionAmount > 0.0001f)
+            {
+                int envCh = (c < MaxChannels) ? c : 0;
+                float absX = fabsf(x);
+                float& env = compressorEnvelope[envCh];
+                float coeff = (absX > env) ? compressorAttackCoeff : compressorReleaseCoeff;
+                env += coeff * (absX - env);
+
+                x *= ComputeCompressorGain(env, appliedCompressionAmount);
+            }
+
+            // Final safety clamp: whatever the EQ/preamp/compressor did,
+            // never hand audiodg a sample outside [-1, 1]. A hard clip here
+            // is inaudible in the rare case it triggers; letting an out-of-
+            // range sample through could clip audibly further down the chain.
+            if (x > 1.0f) x = 1.0f;
+            else if (x < -1.0f) x = -1.0f;
 
             output[f * ch + c] = x;
         }

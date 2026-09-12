@@ -16,6 +16,13 @@ namespace GamerTool.Models;
 public sealed class AppSettings
 {
     public bool RunOnStartup { get; set; }
+
+    /// <summary>
+    /// Global "Balance Loud & Quiet Sounds" amount, 0.0 (off) .. 1.0 (max).
+    /// Applies on top of whichever audio preset is active, rather than being
+    /// stored per-preset - it's a personal comfort setting, not a per-game tune.
+    /// </summary>
+    public double CompressionAmount { get; set; } = 0.0;
     public string? ActiveDisplayPresetId { get; set; }
     public string? ActiveAudioPresetId { get; set; }
 
