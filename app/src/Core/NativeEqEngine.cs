@@ -465,10 +465,15 @@ public sealed class NativeEqEngine
         public byte Revision;
         public byte Sbz1;
         public ushort Control;
-        public uint OffsetOwner;
-        public uint OffsetGroup;
-        public uint OffsetSacl;
-        public uint OffsetDacl;
+        // PSIDs are POINTERS (8 bytes on x64) - declaring these as uint
+        // under-allocates the buffer by 20 bytes and InitializeSecurity-
+        // Descriptor then heap-corrupts past the end (0xC0000374 crash in
+        // ntdll, confirmed via WER on the CI build). Sequential layout with
+        // IntPtr yields the correct 40-byte native shape.
+        public IntPtr Owner;
+        public IntPtr Group;
+        public IntPtr Sacl;
+        public IntPtr Dacl;
     }
 
     [StructLayout(LayoutKind.Sequential)]

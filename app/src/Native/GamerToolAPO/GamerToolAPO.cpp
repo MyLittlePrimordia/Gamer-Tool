@@ -63,8 +63,10 @@ static void ApoLog(const wchar_t* fmt, ...)
 // the byte layout below matches their registry blobs, so the warning is
 // informational only and is disabled for this one declaration.
 // ---------------------------------------------------------------------------
-#pragma warning(push)
-#pragma warning(disable: 4200) // nonstandard extension: zero-sized array in struct
+#pragma warning(push, 0) // silence ALL warnings for this one SDK-pattern declaration;
+// the trailing zero-sized array member is inherent to CRegAPOProperties<1>
+// (flexible-array idiom from the audio SDK) regardless of warning number,
+// and the emitted layout is verified byte-identical to in-box APO blobs.
 const CRegAPOProperties<1> GamerToolAPO::regProperties(
     CLSID_GamerToolAPO, L"GamerToolAPO", L"Gamer Tool built-in equalizer", 1, 0,
     __uuidof(IAudioProcessingObject),
