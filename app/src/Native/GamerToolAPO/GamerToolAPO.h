@@ -56,11 +56,15 @@ static const float BandQ = 1.414f;
 // Written by GamerTool.exe, read by every APO instance in audiodg.exe.
 struct EqConfig
 {
-    volatile LONG64 version;   // incremented by writer before/after each publish; 0 = flat
-    int enabled;               // 0 = bypass (flat), 1 = process
-    float gainsDb[10];         // per-band gain in dB, -12..+12
-    float preampDb;            // output trim in dB, -12..+12, applied after the EQ bands
-    float compressionAmount;   // 0.0 (off) .. 1.0 (max) - see ComputeCompressorGain in the .cpp
+    volatile LONG64 version;        // incremented by writer before/after each publish; 0 = flat
+    int enabled;                    // 0 = bypass (flat), 1 = process
+    float gainsDb[10];              // per-band gain in dB, -12..+12
+    float preampDb;                 // output trim in dB, -12..+12, applied after the EQ bands
+    float compressionAmount;        // 0.0 (off) .. 1.0 (max) - see ComputeCompressorGain in the .cpp
+    volatile LONG64 heartbeatTicks; // GetTickCount64() written every APOProcess call - see APOProcess.
+                                     // If this never moves, audiodg never actually loaded/ran the
+                                     // APO (common cause: Windows silently refusing an unsigned APO),
+                                     // as distinct from the APO running but EQ being set to flat.
 };
 #pragma pack(pop)
 

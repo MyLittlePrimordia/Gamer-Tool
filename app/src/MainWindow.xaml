@@ -439,6 +439,31 @@
 
                     <!-- EQ curve preview + test loop -->
                     <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,10,0" HorizontalAlignment="Center">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,4">
+                            <Ellipse Width="8" Height="8" VerticalAlignment="Center" Margin="0,0,6,0">
+                                <Ellipse.Style>
+                                    <Style TargetType="Ellipse">
+                                        <Setter Property="Fill" Value="{StaticResource MutedTextBrush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsEngineReceivingAudio}" Value="True">
+                                                <Setter Property="Fill" Value="{DynamicResource AccentBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                            </Ellipse>
+                            <TextBlock Text="{Binding EngineHeartbeatStatusText, Mode=OneWay}" FontSize="10" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock" BasedOn="{StaticResource BodyTextStyle}">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsEngineReceivingAudio}" Value="True">
+                                                <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
                         <TextBlock Text="RESPONSE" Style="{StaticResource HeaderTextStyle}" HorizontalAlignment="Center"/>
                         <Border Style="{StaticResource CardBorderStyle}" Padding="4" Margin="0,0,0,6">
                             <Image x:Name="EqCurveImage" Width="360" Height="203" Stretch="Uniform" SnapsToDevicePixels="True"/>
@@ -789,12 +814,20 @@
                                     <StackPanel Grid.Column="0" VerticalAlignment="Center">
                                         <TextBlock Style="{StaticResource BodyTextStyle}"
                                                    Text="Turns the equalizer on for all your sounds. Needs a one-time Windows permission popup." TextWrapping="Wrap"/>
-                                        <TextBlock Style="{StaticResource BodyTextStyle}" FontSize="10" Margin="0,4,0,0"
-                                                   Text="If sliders do nothing audible, the engine isn't enabled yet." TextWrapping="Wrap"/>
+                                        <TextBlock Text="{Binding EngineHeartbeatStatusText, Mode=OneWay}" FontSize="10" Margin="0,4,0,0" TextWrapping="Wrap">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock" BasedOn="{StaticResource BodyTextStyle}">
+                                                    <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsEngineReceivingAudio}" Value="True">
+                                                            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
                                     </StackPanel>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                        <TextBlock Text="Active" Foreground="{StaticResource AccentBrush}" FontSize="11" VerticalAlignment="Center" Margin="0,0,8,0"
-                                                   Visibility="{Binding IsEqEngineEnabled, Converter={StaticResource BoolToVisConverter}}"/>
                                         <Button Content="Enable" Style="{StaticResource NeonButtonStyle}" Padding="12,5"
                                                 Command="{Binding EnableEqEngineCommand}"
                                                 Visibility="{Binding IsEqEngineEnabled, Converter={StaticResource InverseBoolToVisConverter}}"/>

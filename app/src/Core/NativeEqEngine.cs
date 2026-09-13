@@ -29,9 +29,9 @@ public sealed class NativeEqEngine
 
     private const int ConfigSize = 4 /*version:LONG64*/ + 4 /*enabled:int*/ + 40 /*10 floats*/;
     // Actually LONG64 = 8 bytes. Version alignment: 8 + 4 + 40 = 52, plus
-    // 4 (preampDb) + 4 (compressionAmount) = 60. The native struct is
-    // #pragma pack(1) so no padding - mirror that exactly.
-    private const int ConfigSizePacked = 8 + 4 + 40 + 4 + 4;
+    // 4 (preampDb) + 4 (compressionAmount) + 8 (heartbeatTicks) = 68.
+    // The native struct is #pragma pack(1) so no padding - mirror exactly.
+    private const int ConfigSizePacked = 8 + 4 + 40 + 4 + 4 + 8;
 
     private const string ProgramDataDir = @"GamerTool";
     private static string ApoDllPath =>
@@ -154,6 +154,7 @@ public sealed class NativeEqEngine
                 Marshal.WriteInt32(_viewPtr, 12 + i * 4, 0);
             Marshal.WriteInt32(_viewPtr, 52, 0);   // preampDb = 0
             Marshal.WriteInt32(_viewPtr, 56, 0);   // compressionAmount = 0 (off)
+            Marshal.WriteInt64(_viewPtr, 60, 0L);  // heartbeatTicks = 0 (never run yet)
             return;
         }
 
@@ -208,6 +209,38 @@ public sealed class NativeEqEngine
     {
         var zeros = new float[10];
         PublishGains(zeros, enabled: true, preampDb: 0f, compressionAmount: 0f); // identity gains, still processing = flat output
+    }
+
+    /// <summary>
+    /// How long ago the APO last wrote its heartbeat, or null if it never
+    /// has. This is the one signal that actually distinguishes "the APO is
+    /// loaded and audiodg is calling it" from "the registry says it should
+    /// be, but audiodg silently never loaded it" - the classic symptom of
+    /// an unsigned APO being refused by the protected audiodg.exe process.
+    /// A null/stale result while audio is audibly playing elsewhere points
+    /// straight at that, rather than at anything in the DSP or UI.
+    /// </summary>
+    public TimeSpan? GetHeartbeatAge()
+    {
+        try
+        {
+            EnsureMapping();
+            if (_viewPtr == IntPtr.Zero)
+                return null;
+
+            long heartbeatTicks = Marshal.ReadInt64(_viewPtr, 60);
+            if (heartbeatTicks <= 0)
+                return null; // never written - APOProcess has never run once
+
+            long ageMs = Environment.TickCount64 - heartbeatTicks;
+            if (ageMs < 0)
+                ageMs = 0; // tick-source skew guard - never report a negative age
+            return TimeSpan.FromMilliseconds(ageMs);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private NativeEqEngine() { }

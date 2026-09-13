@@ -454,6 +454,16 @@ void __stdcall GamerToolAPO::APOProcess(UINT32 u32NumInputConnections,
     // version with a full memory barrier before flipping it back).
     if (sharedConfig != NULL)
     {
+        // Heartbeat: written EVERY call, unconditionally (bypass or not) -
+        // this is the one fact that actually proves audiodg loaded this APO
+        // and is calling it. If GamerTool.exe ever sees this value stop
+        // moving, the APO isn't running at all (most likely cause: Windows
+        // silently refusing to load an unsigned APO into the protected
+        // audiodg.exe process) - a completely different problem from "the
+        // APO is running but set to flat", which is what a zeroed gains
+        // array alone would otherwise look identical to from the outside.
+        InterlockedExchange64((volatile LONG64*)&sharedConfig->heartbeatTicks, (LONG64)GetTickCount64());
+
         LONG64 v = InterlockedCompareExchange64(
             (volatile LONG64*)&sharedConfig->version, 0, 0);
         if (v != appliedVersion)

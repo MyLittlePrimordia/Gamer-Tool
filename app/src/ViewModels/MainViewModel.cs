@@ -933,8 +933,57 @@ public sealed class MainViewModel : ObservableObject
                 _lastKnownDefaultRenderDeviceId = currentId;
                 RefreshEqEngineUI();
             }
+
+            RefreshEngineHeartbeatStatus();
         };
         _eqDeviceWatchTimer.Start();
+        RefreshEngineHeartbeatStatus();
+    }
+
+    /// <summary>
+    /// True once the engine has ever received a heartbeat from the APO
+    /// (i.e., audiodg genuinely loaded and called it at least once) - this
+    /// is the definitive "is it actually running" signal, separate from
+    /// "is it registered" (IsEqEngineEnabled) or "is it wired to this
+    /// device" (IsEqEngineAttached). A false value while the engine is
+    /// enabled and audio is audibly playing elsewhere is the strongest
+    /// evidence Windows silently refused to load an unsigned APO.
+    /// </summary>
+    public bool IsEngineReceivingAudio { get; private set; }
+
+    public string EngineHeartbeatStatusText { get; private set; } = "Not checked yet";
+
+    private void RefreshEngineHeartbeatStatus()
+    {
+        if (!IsEqEngineEnabled)
+        {
+            IsEngineReceivingAudio = false;
+            EngineHeartbeatStatusText = "Equalizer is off";
+        }
+        else
+        {
+            var age = NativeEqEngine.Instance.GetHeartbeatAge();
+            if (age is null)
+            {
+                IsEngineReceivingAudio = false;
+                EngineHeartbeatStatusText = "Never received audio yet - play something to test";
+            }
+            else if (age.Value.TotalSeconds < 3)
+            {
+                IsEngineReceivingAudio = true;
+                EngineHeartbeatStatusText = "Receiving audio right now";
+            }
+            else
+            {
+                IsEngineReceivingAudio = false;
+                EngineHeartbeatStatusText = age.Value.TotalMinutes < 2
+                    ? $"Last received audio {(int)age.Value.TotalSeconds}s ago"
+                    : "Not receiving audio - play something to test";
+            }
+        }
+
+        OnPropertyChanged(nameof(IsEngineReceivingAudio));
+        OnPropertyChanged(nameof(EngineHeartbeatStatusText));
     }
 
     private bool _isEqBusy;
