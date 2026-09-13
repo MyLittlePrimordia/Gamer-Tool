@@ -37,7 +37,7 @@ public sealed class AudioManager
 
     private AudioManager() { }
 
-    public bool IsEngineEnabled => NativeEqEngine.IsEngineEnabled();
+    public bool IsEngineEnabled => NativeEqEngine.Instance.IsEngineEnabled();
 
     /// <summary>
     /// Applies a 10-band preset: publishes gains to the built-in APO's shared
@@ -63,7 +63,7 @@ public sealed class AudioManager
             floatGains[i] = (float)(gainsDb[i] - headroomShift);
 
         bool eqApplied = false;
-        if (NativeEqEngine.IsEngineEnabled())
+        if (NativeEqEngine.Instance.IsEngineEnabled())
         {
             NativeEqEngine.Instance.PublishGains(floatGains, enabled: true, (float)preampDb, (float)compressionAmount);
             eqApplied = true;

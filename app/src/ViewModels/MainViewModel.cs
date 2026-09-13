@@ -497,9 +497,9 @@ public sealed class MainViewModel : ObservableObject
 
     private void ExecuteClearDisplayHotkey()
     {
-        if (SelectedDisplayPreset?.HotkeyId is not int displayHotkeyId)
+        if (SelectedDisplayPreset?.HotkeyId.HasValue != true)
             return;
-        HotkeyManager.Instance.UnregisterHotkey(displayHotkeyId);
+        HotkeyManager.Instance.UnregisterHotkey(SelectedDisplayPreset.HotkeyId.Value);
         SelectedDisplayPreset.HotkeyId = null;
         SelectedDisplayPreset.HotkeyModifiers = 0;
         SelectedDisplayPreset.HotkeyVirtualKey = 0;
@@ -859,9 +859,9 @@ public sealed class MainViewModel : ObservableObject
 
     private void ExecuteClearAudioHotkey()
     {
-        if (SelectedAudioPreset?.HotkeyId is not int audioHotkeyId)
+        if (SelectedAudioPreset?.HotkeyId.HasValue != true)
             return;
-        HotkeyManager.Instance.UnregisterHotkey(audioHotkeyId);
+        HotkeyManager.Instance.UnregisterHotkey(SelectedAudioPreset.HotkeyId.Value);
         SelectedAudioPreset.HotkeyId = null;
         SelectedAudioPreset.HotkeyModifiers = 0;
         SelectedAudioPreset.HotkeyVirtualKey = 0;
@@ -876,7 +876,7 @@ public sealed class MainViewModel : ObservableObject
     #region Built-in EQ engine
 
     /// <summary>True when the built-in APO is installed and registered.</summary>
-    public bool IsEqEngineEnabled => NativeEqEngine.IsEngineEnabled();
+    public bool IsEqEngineEnabled => NativeEqEngine.Instance.IsEngineEnabled();
 
     /// <summary>
     /// True when the render endpoint Windows is CURRENTLY using as the
@@ -986,7 +986,7 @@ public sealed class MainViewModel : ObservableObject
                 System.Windows.Application.Current.Dispatcher.Invoke(() =>
                 {
                     IsEqBusy = false;
-                    bool ok = NativeEqEngine.IsEngineEnabled();
+                    bool ok = NativeEqEngine.Instance.IsEngineEnabled();
                     EqStatusText = ok
                         ? "Built-in EQ active on all playback devices."
                         : "Enablement failed - try running Gamer Tool as administrator.";
@@ -1028,7 +1028,7 @@ public sealed class MainViewModel : ObservableObject
                 {
                     IsEqBusy = false;
                     RefreshEqEngineUI();
-                    EqStatusText = NativeEqEngine.IsEngineEnabled()
+                    EqStatusText = NativeEqEngine.Instance.IsEngineEnabled()
                         ? "Disable failed - try running Gamer Tool as administrator."
                         : "Built-in EQ disabled.";
                 });
@@ -1284,9 +1284,9 @@ public sealed class MainViewModel : ObservableObject
 
     private void ExecuteClearComboHotkey(ComboPreset? combo)
     {
-        if (combo?.HotkeyId is not int comboHotkeyId)
+        if (combo?.HotkeyId.HasValue != true)
             return;
-        HotkeyManager.Instance.UnregisterHotkey(comboHotkeyId);
+        HotkeyManager.Instance.UnregisterHotkey(combo.HotkeyId.Value);
         combo.HotkeyId = null;
         combo.HotkeyModifiers = 0;
         combo.HotkeyVirtualKey = 0;

@@ -1,8 +1,6 @@
 using System;
-using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
-using System.IO.MemoryMappedFiles;
 using System.Linq;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
@@ -39,15 +37,187 @@ public sealed class NativeEqEngine
     private static string ApoDllPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), ProgramDataDir, "GamerToolAPO.dll");
 
-    private MemoryMappedFile? _mapping;
+    #region Live config publishing
+
+    private IntPtr _mappingHandle = IntPtr.Zero;
+    private IntPtr _viewPtr = IntPtr.Zero;
     private long _lastVersionWritten;
 
+    /// <summary>
+    /// Raw kernel32/advapi32 P/Invoke for the shared-memory section, used
+    /// instead of System.IO.MemoryMappedFiles because MemoryMappedFileSecurity
+    /// (the managed wrapper for a custom security descriptor) isn't available
+    /// even on net8.0-windows. This mirrors GamerToolAPO.cpp's OpenSharedConfig
+    /// exactly: audiodg.exe runs the APO under a different account than this
+    /// desktop app, so the DEFAULT (creator-only) security descriptor would
+    /// let whichever side creates the section first lock the other one out -
+    /// the APO would then never see a real config and just pass audio
+    /// straight through untouched. A real NULL DACL (built explicitly, not
+    /// just a NULL parameter, which means something different) grants access
+    /// to any account regardless of creation order.
+    /// </summary>
+    private static class SharedMemoryNative
+    {
+        public const uint PAGE_READWRITE = 0x04;
+        public const uint FILE_MAP_ALL_ACCESS = 0xF001F;
+        public const uint SECURITY_DESCRIPTOR_REVISION = 1;
+        public const int SECURITY_DESCRIPTOR_MIN_LENGTH = 40; // opaque; Win32's SECURITY_DESCRIPTOR_MIN_LENGTH is well under this
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct SECURITY_ATTRIBUTES
+        {
+            public int nLength;
+            public IntPtr lpSecurityDescriptor;
+            [MarshalAs(UnmanagedType.Bool)] public bool bInheritHandle;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern IntPtr CreateFileMappingW(
+            IntPtr hFile, ref SECURITY_ATTRIBUTES lpAttributes, uint flProtect,
+            uint dwMaximumSizeHigh, uint dwMaximumSizeLow, string lpName);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern IntPtr OpenFileMappingW(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, string lpName);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr MapViewOfFile(IntPtr hFileMappingObject, uint dwDesiredAccess, uint dwFileOffsetHigh, uint dwFileOffsetLow, UIntPtr dwNumberOfBytesToMap);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool UnmapViewOfFile(IntPtr lpBaseAddress);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool CloseHandle(IntPtr hObject);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool InitializeSecurityDescriptor(IntPtr pSecurityDescriptor, uint dwRevision);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetSecurityDescriptorDacl(IntPtr pSecurityDescriptor, [MarshalAs(UnmanagedType.Bool)] bool bDaclPresent, IntPtr pDacl, [MarshalAs(UnmanagedType.Bool)] bool bDaclDefaulted);
+    }
+
+    private void EnsureMapping()
+    {
+        if (_viewPtr != IntPtr.Zero)
+            return;
+
+        // Open existing (audiodg created it when the APO loaded) ...
+        _mappingHandle = SharedMemoryNative.OpenFileMappingW(SharedMemoryNative.FILE_MAP_ALL_ACCESS, false, SharedMemoryName);
+
+        if (_mappingHandle == IntPtr.Zero)
+        {
+            // ... or create it ourselves (so config is stable before any APO
+            // instance runs), with an explicit NULL DACL - see the class
+            // summary above for why the default security descriptor isn't safe.
+            IntPtr sd = Marshal.AllocHGlobal(SharedMemoryNative.SECURITY_DESCRIPTOR_MIN_LENGTH);
+            try
+            {
+                if (!SharedMemoryNative.InitializeSecurityDescriptor(sd, SharedMemoryNative.SECURITY_DESCRIPTOR_REVISION))
+                    return;
+                if (!SharedMemoryNative.SetSecurityDescriptorDacl(sd, true, IntPtr.Zero, false))
+                    return;
+
+                var sa = new SharedMemoryNative.SECURITY_ATTRIBUTES
+                {
+                    nLength = Marshal.SizeOf<SharedMemoryNative.SECURITY_ATTRIBUTES>(),
+                    lpSecurityDescriptor = sd,
+                    bInheritHandle = false
+                };
+
+                _mappingHandle = SharedMemoryNative.CreateFileMappingW(
+                    new IntPtr(-1) /* INVALID_HANDLE_VALUE: page-file-backed, no real file */,
+                    ref sa, SharedMemoryNative.PAGE_READWRITE, 0, (uint)ConfigSizePacked, SharedMemoryName);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(sd);
+            }
+
+            if (_mappingHandle == IntPtr.Zero)
+                return;
+
+            _viewPtr = SharedMemoryNative.MapViewOfFile(_mappingHandle, SharedMemoryNative.FILE_MAP_ALL_ACCESS, 0, 0, (UIntPtr)ConfigSizePacked);
+            if (_viewPtr == IntPtr.Zero)
+            {
+                SharedMemoryNative.CloseHandle(_mappingHandle);
+                _mappingHandle = IntPtr.Zero;
+                return;
+            }
+
+            // Initialize to flat/bypass so a freshly-created section is benign.
+            Marshal.WriteInt64(_viewPtr, 0, 0L);   // version
+            Marshal.WriteInt32(_viewPtr, 8, 0);    // enabled = 0
+            for (int i = 0; i < 10; i++)
+                Marshal.WriteInt32(_viewPtr, 12 + i * 4, 0);
+            Marshal.WriteInt32(_viewPtr, 52, 0);   // preampDb = 0
+            Marshal.WriteInt32(_viewPtr, 56, 0);   // compressionAmount = 0 (off)
+            return;
+        }
+
+        _viewPtr = SharedMemoryNative.MapViewOfFile(_mappingHandle, SharedMemoryNative.FILE_MAP_ALL_ACCESS, 0, 0, (UIntPtr)ConfigSizePacked);
+        if (_viewPtr == IntPtr.Zero)
+        {
+            SharedMemoryNative.CloseHandle(_mappingHandle);
+            _mappingHandle = IntPtr.Zero;
+        }
+    }
+
+    /// <summary>
+    /// Publishes a 10-band gain vector plus preamp/compression to every APO
+    /// instance. Bump-version protocol: write payload, memory barrier, then
+    /// flip the version - the RT reader snapshots only when the version
+    /// moved, so a torn read of a stable payload is impossible.
+    /// </summary>
+    public void PublishGains(float[] gainsDb, bool enabled, float preampDb = 0f, float compressionAmount = 0f)
+    {
+        if (gainsDb is null || gainsDb.Length != 10)
+            return;
+
+        try
+        {
+            EnsureMapping();
+            if (_viewPtr == IntPtr.Zero)
+                return;
+
+            long newVersion = _lastVersionWritten + 2;
+
+            Marshal.WriteInt32(_viewPtr, 8, enabled ? 1 : 0);
+            for (int i = 0; i < 10; i++)
+            {
+                float g = Math.Clamp(gainsDb[i], -12f, 12f);
+                Marshal.WriteInt32(_viewPtr, 12 + i * 4, BitConverter.SingleToInt32Bits(g));
+            }
+            Marshal.WriteInt32(_viewPtr, 52, BitConverter.SingleToInt32Bits(Math.Clamp(preampDb, -12f, 12f)));
+            Marshal.WriteInt32(_viewPtr, 56, BitConverter.SingleToInt32Bits(Math.Clamp(compressionAmount, 0f, 1f)));
+
+            System.Threading.Thread.MemoryBarrier();
+            Marshal.WriteInt64(_viewPtr, 0, newVersion);
+            _lastVersionWritten = newVersion;
+        }
+        catch
+        {
+            // Mapping unavailable (engine disabled) - nothing to publish to.
+        }
+    }
+
+    /// <summary>Flat-line and bypass our contribution without touching other processing.</summary>
+    public void ClearGains()
+    {
+        var zeros = new float[10];
+        PublishGains(zeros, enabled: true, preampDb: 0f, compressionAmount: 0f); // identity gains, still processing = flat output
+    }
+
     private NativeEqEngine() { }
+
+    #endregion
 
     #region State
 
     /// <summary>True when the extracted APO file and its registration both exist.</summary>
-    public static bool IsEngineEnabled()
+    public bool IsEngineEnabled()
     {
         if (!File.Exists(ApoDllPath))
             return false;
@@ -139,226 +309,6 @@ public sealed class NativeEqEngine
 
         int idx = deviceId.LastIndexOf('{');
         return idx >= 0 ? deviceId[idx..] : null;
-    }
-
-    #endregion
-
-    #region Live config publishing
-
-    private void EnsureMapping()
-    {
-        if (_mapping is not null)
-            return;
-
-        try
-        {
-            // Open existing (audiodg created it when the APO loaded) or create
-            // for ourselves (so config is stable before any APO instance runs).
-            _mapping = MemoryMappedFile.OpenExisting(SharedMemoryName, MemoryMappedFileRights.ReadWrite);
-        }
-        catch (FileNotFoundException)
-        {
-            // audiodg.exe runs the APO instance under a different account
-            // (LocalService) than this desktop app runs under. A section
-            // created with the default (null) security descriptor is only
-            // reachable by its creator's own account, so whichever side
-            // gets here first silently locks the other one out - the APO
-            // then never sees a real config and just passes audio straight
-            // through untouched (which is exactly "the EQ does nothing").
-            // Mirror OpenSharedConfig on the C++ side with raw P/Invoke
-            // (MemoryMappedFileSecurity, the managed route, is .NET
-            // Framework-only): an explicitly built NULL DACL (not just a
-            // null SA parameter, which would be the default descriptor
-            // again) grants access to any account regardless of
-            // creation order.
-            _mapping = CreateSectionWithNullDacl(out bool weCreatedIt);
-
-            if (weCreatedIt)
-            {
-                // Initialize to flat/bypass so a freshly-created section is benign.
-                using var view = _mapping.CreateViewAccessor();
-                view.Write(0, 0L);          // version
-                view.Write(8, 0);           // enabled = 0
-                for (int i = 0; i < 10; i++)
-                    view.Write(12 + i * 4, 0f);
-                view.Write(52, 0f);         // preampDb = 0
-                view.Write(56, 0f);         // compressionAmount = 0 (off)
-            }
-        }
-    }
-
-    // --- kernel32/advapi32 P/Invokes mirroring GamerToolAPO.cpp OpenSharedConfig ---
-    // The managed MemoryMappedFileSecurity type is .NET Framework-only, so
-    // the "Local\GamerToolEqConfig" section's security is declared by hand,
-    // exactly like the native side does.
-
-    /// <summary>
-    /// Create-or-open of the shared config section with an explicit NULL
-    /// DACL - exact mirror of GamerToolAPO.cpp OpenSharedConfig. Returns a
-    /// managed wrapper. weCreatedIt is false when the section already
-    /// existed (e.g. audiodg created it), in which case its contents are
-    /// NOT initialized - the APO owns them. The raw CreateFileMappingW
-    /// handle is released as soon as the managed re-open succeeds; keeping
-    /// it alive longer would serve no purpose (the section object itself
-    /// persists as long as ANY handle to it is open anywhere).
-    /// </summary>
-    private static MemoryMappedFile CreateSectionWithNullDacl(out bool weCreatedIt)
-    {
-        // SECURITY_DESCRIPTOR (absolute format): revision byte + control
-        // byte + control word + 4 pointer-width slots (owner/group/sacl/
-        // dacl). Sized via the mirrored struct (40 bytes on x64) rather
-        // than the legacy SECURITY_DESCRIPTOR_MIN_LENGTH (20, a 32-bit-era
-        // constant) so InitializeSecurityDescriptor can never write past
-        // the buffer while nulling the owner/group slots. The native side
-        // gets the same guarantee from its full stack SECURITY_DESCRIPTOR.
-        // A null DACL set as "present" (SetSecurityDescriptorDacl TRUE,
-        // NULL, FALSE) means "grant everyone everything" - the strongest
-        // possible openness, matching the native side.
-        var sd = new byte[Marshal.SizeOf<SECURITY_DESCRIPTOR>()];
-        if (!InitializeSecurityDescriptor(sd, SecurityDescriptorRevision))
-            throw new Win32Exception("InitializeSecurityDescriptor failed");
-
-        if (!SetSecurityDescriptorDacl(sd, bDaclPresent: true, pDacl: IntPtr.Zero, bDaclDefaulted: false))
-            throw new Win32Exception("SetSecurityDescriptorDacl failed");
-
-        // SECURITY_ATTRIBUTES wraps the descriptor - CreateFileMappingW
-        // wants a pointer to this struct, not to the descriptor itself.
-        // Blittable by-hand layout, fields in Win32 order.
-        var sa = new SECURITY_ATTRIBUTES
-        {
-            nLength = (uint)Marshal.SizeOf<SECURITY_ATTRIBUTES>(),
-            lpSecurityDescriptor = Marshal.AllocHGlobal(sd.Length),
-            bInheritHandle = false
-        };
-        try
-        {
-            Marshal.Copy(sd, 0, sa.lpSecurityDescriptor, sd.Length);
-
-            IntPtr section = CreateFileMappingW(
-                InvalidHandleValue, ref sa, PageReadWrite,
-                0, (uint)ConfigSizePacked, SharedMemoryName);
-            if (section == IntPtr.Zero)
-                throw new Win32Exception("CreateFileMappingW failed");
-
-            bool existed = Marshal.GetLastWin32Error() == ErrorAlreadyExists;
-            weCreatedIt = !existed;
-
-            try
-            {
-                // Re-open via the managed API so the MemoryMappedFile owns
-                // its own handle. CreateFromHandle doesn't exist in this
-                // TFM, so this is the only route to a managed wrapper. The
-                // re-open cannot fail with "name not found" while the raw
-                // handle above is still open.
-                return MemoryMappedFile.OpenExisting(
-                    SharedMemoryName, MemoryMappedFileRights.ReadWrite);
-            }
-            finally
-            {
-                CloseHandle(section);
-            }
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(sa.lpSecurityDescriptor);
-        }
-    }
-
-    private const uint SecurityDescriptorRevision = 1;    // SECURITY_DESCRIPTOR_REVISION
-    private const uint PageReadWrite = 0x04;              // PAGE_READWRITE
-    private const int ErrorAlreadyExists = 183;           // ERROR_ALREADY_EXISTS
-
-    private static readonly IntPtr InvalidHandleValue = new(-1); // INVALID_HANDLE_VALUE
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct SECURITY_ATTRIBUTES
-    {
-        public uint nLength;
-        public IntPtr lpSecurityDescriptor;
-        [MarshalAs(UnmanagedType.Bool)] public bool bInheritHandle;
-    }
-
-    // Absolute-format SECURITY_DESCRIPTOR: 1-byte revision, 1-byte control,
-    // 2-byte control word, then owner/group/sacl/dacl pointer slots.
-    // Used only for size - InitializeSecurityDescriptor zeroes it and
-    // SetSecurityDescriptorDacl stamps the null DACL flag.
-    [StructLayout(LayoutKind.Sequential)]
-    private struct SECURITY_DESCRIPTOR
-    {
-        public byte Revision;
-        public byte Sbz1;
-        public ushort Control;
-        public IntPtr Owner;
-        public IntPtr Group;
-        public IntPtr Sacl;
-        public IntPtr Dacl;
-    }
-
-    [DllImport("advapi32", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool InitializeSecurityDescriptor(
-        byte[] pSecurityDescriptor, uint dwRevision);
-
-    [DllImport("advapi32", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetSecurityDescriptorDacl(
-        byte[] pSecurityDescriptor,
-        [MarshalAs(UnmanagedType.Bool)] bool bDaclPresent,
-        IntPtr pDacl,
-        [MarshalAs(UnmanagedType.Bool)] bool bDaclDefaulted);
-
-    [DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern IntPtr CreateFileMappingW(
-        IntPtr hFile,
-        ref SECURITY_ATTRIBUTES lpFileMappingAttributes,
-        uint flProtect,
-        uint dwMaximumSizeHigh,
-        uint dwMaximumSizeLow,
-        string lpName);
-
-    [DllImport("kernel32", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CloseHandle(IntPtr hObject);
-
-    /// <summary>
-    /// Publishes a 10-band gain vector plus preamp/compression to every APO
-    /// instance. Bump-version protocol: write payload, memory barrier, then
-    /// flip the version - the RT reader snapshots only when the version
-    /// moved, so a torn read of a stable payload is impossible.
-    /// </summary>
-    public void PublishGains(float[] gainsDb, bool enabled, float preampDb = 0f, float compressionAmount = 0f)
-    {
-        if (gainsDb is null || gainsDb.Length != 10)
-            return;
-
-        try
-        {
-            EnsureMapping();
-
-            using var view = _mapping!.CreateViewAccessor();
-            long newVersion = _lastVersionWritten + 2;
-
-            view.Write(8, enabled ? 1 : 0);
-            for (int i = 0; i < 10; i++)
-                view.Write(12 + i * 4, Math.Clamp(gainsDb[i], -12f, 12f));
-            view.Write(52, Math.Clamp(preampDb, -12f, 12f));
-            view.Write(56, Math.Clamp(compressionAmount, 0f, 1f));
-
-            System.Threading.Thread.MemoryBarrier();
-            view.Write(0, newVersion);
-            _lastVersionWritten = newVersion;
-        }
-        catch
-        {
-            // Mapping unavailable (engine disabled) - nothing to publish to.
-        }
-    }
-
-    /// <summary>Flat-line and bypass our contribution without touching other processing.</summary>
-    public void ClearGains()
-    {
-        var zeros = new float[10];
-        PublishGains(zeros, enabled: true, preampDb: 0f, compressionAmount: 0f); // identity gains, still processing = flat output
     }
 
     #endregion
@@ -539,7 +489,7 @@ public sealed class NativeEqEngine
     {
         try
         {
-            if (!IsEngineEnabled())
+            if (!Instance.IsEngineEnabled())
                 return true; // engine off - nothing to do, not a failure
 
             return AttachToAllRenderEndpoints();
