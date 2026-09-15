@@ -246,12 +246,27 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(GainBlue));
     }
 
+    /// <summary>
+    /// Routes ramp application through the selected preset's TargetMonitorId:
+    /// null (the default, and the only option before multi-monitor support)
+    /// keeps the exact original primary-display path with full crash-recovery
+    /// coverage; a specific monitor uses the best-effort per-device path
+    /// instead (see DisplayManager.TryApplyRampToDevice) and falls back to the
+    /// primary path if that device can't be opened (unplugged, driver refusal).
+    /// </summary>
+    private void ApplyRampToTarget(RAMP ramp)
+    {
+        var targetId = SelectedDisplayPreset?.TargetMonitorId;
+        if (string.IsNullOrEmpty(targetId) || !DisplayManager.Instance.TryApplyRampToDevice(ramp, targetId))
+            DisplayManager.Instance.ApplyRamp(ramp);
+    }
+
     private void ApplyDisplayLive()
     {
         var ramp = DisplayManager.Instance.ComputeRamp(
             Gamma, Contrast, ShadowLift, BrightnessOffset, GainRed, GainGreen, GainBlue);
 
-        DisplayManager.Instance.ApplyRamp(ramp);
+        ApplyRampToTarget(ramp);
         PreviewRampChanged?.Invoke(ramp);
     }
 
@@ -268,7 +283,7 @@ public sealed class MainViewModel : ObservableObject
             Gamma, Contrast, ShadowLift, BrightnessOffset, GainRed, GainGreen, GainBlue);
         PreviewRampChanged?.Invoke(ramp);
         if (IsDisplayLive && !IsDisplayBypassed)
-            DisplayManager.Instance.ApplyRamp(ramp);
+            ApplyRampToTarget(ramp);
     }
 
     /// <summary>Explicit "Apply to Screen": pushes the current preview ramp to the monitor.</summary>
@@ -512,6 +527,8 @@ public sealed class MainViewModel : ObservableObject
             LoadBandGainsFrom(value);
             _enableNativeLoudness = value.EnableNativeLoudness;
             OnPropertyChanged(nameof(EnableNativeLoudness));
+            _preampDb = value.PreampDb;
+            OnPropertyChanged(nameof(PreampDb));
             _settings.ActiveAudioPresetId = value.Id;
             _isAudioDirty = false; // fresh load matches the preset
             OnPropertyChanged(nameof(IsAudioDirty));
@@ -541,14 +558,20 @@ public sealed class MainViewModel : ObservableObject
         set { if (SetProperty(ref _enableNativeLoudness, value)) { MarkAudioDirty(); ApplyAudioLive(); } }
     }
 
+    /// <summary>"Volume" slider in the UI - a plain output trim, -12..+12 dB, saved per-preset.</summary>
+    private double _preampDb;
+    public double PreampDb
+    {
+        get => _preampDb;
+        set { if (SetProperty(ref _preampDb, value)) { MarkAudioDirty(); ApplyAudioLive(); } }
+    }
+
     private AudioApplyResult? _lastAudioApplyResult;
     public AudioApplyResult? LastAudioApplyResult
     {
         get => _lastAudioApplyResult;
         private set => SetProperty(ref _lastAudioApplyResult, value);
     }
-
-
 
     public ICommand SelectAudioPresetCommand { get; }
     public ICommand SaveAudioPresetCommand { get; }
@@ -627,12 +650,15 @@ public sealed class MainViewModel : ObservableObject
 
         if (IsAudioBypassed)
         {
-            LastAudioApplyResult = AudioManager.Instance.ApplyPreset(new double[10], false);
+            // True bypass: zero EVERYTHING we contribute, not just the bands -
+            // a lingering preamp setting would defeat the point of a bypass
+            // toggle meant for an honest A/B comparison.
+            LastAudioApplyResult = AudioManager.Instance.ApplyPreset(new double[10], false, 0.0);
             EqGainsChanged?.Invoke(gains);
             return;
         }
 
-        LastAudioApplyResult = AudioManager.Instance.ApplyPreset(gains, EnableNativeLoudness);
+        LastAudioApplyResult = AudioManager.Instance.ApplyPreset(gains, EnableNativeLoudness, PreampDb);
         EqGainsChanged?.Invoke(gains);
     }
 
@@ -726,6 +752,7 @@ public sealed class MainViewModel : ObservableObject
             custom.IsBuiltIn = false;
             custom.BandGainsDb = gains;
             custom.EnableNativeLoudness = EnableNativeLoudness;
+            custom.PreampDb = PreampDb;
             custom.HotkeyId = null;
             custom.HotkeyModifiers = 0;
             custom.HotkeyVirtualKey = 0;
@@ -738,6 +765,7 @@ public sealed class MainViewModel : ObservableObject
         {
             SelectedAudioPreset.BandGainsDb = gains;
             SelectedAudioPreset.EnableNativeLoudness = EnableNativeLoudness;
+            SelectedAudioPreset.PreampDb = PreampDb;
             IsAudioDirty = false;
         }
 
@@ -759,6 +787,7 @@ public sealed class MainViewModel : ObservableObject
         copy.IsFavorite = false;
         copy.BandGainsDb = gains;
         copy.EnableNativeLoudness = EnableNativeLoudness;
+        copy.PreampDb = PreampDb;
         copy.HotkeyId = null;
         copy.HotkeyModifiers = 0;
         copy.HotkeyVirtualKey = 0;
@@ -822,26 +851,38 @@ public sealed class MainViewModel : ObservableObject
 
     #endregion
 
-    #region Built-in EQ engine
+    #region EqualizerAPO integration
 
-    /// <summary>True when the built-in APO is installed and registered.</summary>
-    public bool IsEqEngineEnabled => NativeEqEngine.Instance.IsEngineEnabled();
+    /// <summary>True once EqualizerAPO is detected as installed (its own registry key exists).</summary>
+    public bool IsEqualizerApoInstalled => AudioManager.Instance.IsEngineEnabled;
 
-    /// <summary>True when at least one render endpoint is wired to our APO.</summary>
-    public bool IsEqEngineAttached => NativeEqEngine.Instance.IsEngineAttachedToAnyDevice();
+    private DispatcherTimer? _apoDetectTimer;
 
     /// <summary>
-    /// Plugged in a new USB headset after enabling? The APO is installed but
-    /// no active endpoint carries it - sliders move but nothing audible.
-    /// Unelevated detection only; fix is one more elevated Enable run.
+    /// Polls every few seconds for EqualizerAPO appearing (the user may be
+    /// mid-install in a separate window) so the UI updates itself the moment
+    /// it's available, without requiring an app restart.
     /// </summary>
-    public bool NeedsEqReattach => IsEqEngineEnabled && !IsEqEngineAttached;
-
-    private void RefreshEqEngineUI()
+    private void StartEqualizerApoDetection()
     {
-        OnPropertyChanged(nameof(IsEqEngineEnabled));
-        OnPropertyChanged(nameof(IsEqEngineAttached));
-        OnPropertyChanged(nameof(NeedsEqReattach));
+        _apoDetectTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+        bool wasInstalled = IsEqualizerApoInstalled;
+        _apoDetectTimer.Tick += (_, _) =>
+        {
+            bool nowInstalled = IsEqualizerApoInstalled;
+            if (nowInstalled != wasInstalled)
+            {
+                wasInstalled = nowInstalled;
+                OnPropertyChanged(nameof(IsEqualizerApoInstalled));
+                if (nowInstalled)
+                {
+                    EqStatusText = "EqualizerAPO detected - your presets are now active.";
+                    EqualizerApoManager.EnsureIncluded();
+                    ApplyAudioLive();
+                }
+            }
+        };
+        _apoDetectTimer.Start();
     }
 
     private bool _isEqBusy;
@@ -858,92 +899,36 @@ public sealed class MainViewModel : ObservableObject
         private set => SetProperty(ref _eqStatusText, value);
     }
 
-    public ICommand EnableEqEngineCommand { get; }
-    public ICommand DisableEqEngineCommand { get; }
+    public ICommand InstallEqualizerApoCommand { get; }
 
     /// <summary>
-    /// One-click enablement: relaunches GamerTool elevated with the
-    /// --enable-eq flag; the elevated instance runs the extraction +
-    /// registration + endpoint wiring + audio restart, then exits.
+    /// Downloads the official EqualizerAPO installer and launches it
+    /// (visibly - it has a short device-selection step a real person
+    /// should see rather than an automated silent guess). The detection
+    /// timer picks up completion on its own; no need to wait here.
     /// </summary>
-    private void ExecuteEnableEqEngine()
+    private async void ExecuteInstallEqualizerApo()
     {
-        var exePath = Environment.ProcessPath!;
-        var psi = new ProcessStartInfo
+        IsEqBusy = true;
+        EqStatusText = "Downloading EqualizerAPO...";
+
+        var installerPath = await EqualizerApoManager.DownloadInstallerAsync();
+        IsEqBusy = false;
+
+        if (installerPath is null)
         {
-            FileName = exePath,
-            Arguments = "--enable-eq",
-            UseShellExecute = true,
-            Verb = "runas"
-        };
+            EqStatusText = "Download failed - check your internet connection and try again.";
+            return;
+        }
 
         try
         {
-            using var elevated = Process.Start(psi);
-            if (elevated is null)
-                return;
-
-            IsEqBusy = true;
-            EqStatusText = "Enabling built-in EQ - you may hear audio restart...";
-
-            // Wait in the background for the elevated pass to finish.
-            Task.Run(async () =>
-            {
-                try { await elevated.WaitForExitAsync(); } catch { }
-                System.Windows.Application.Current.Dispatcher.Invoke(() =>
-                {
-                    IsEqBusy = false;
-                    bool ok = NativeEqEngine.Instance.IsEngineEnabled();
-                    EqStatusText = ok
-                        ? "Built-in EQ active on all playback devices."
-                        : "Enablement failed - try running Gamer Tool as administrator.";
-                    RefreshEqEngineUI();
-                    ApplyAudioLive();
-                });
-            });
+            Process.Start(new ProcessStartInfo { FileName = installerPath, UseShellExecute = true });
+            EqStatusText = "Installer opened - follow its steps, then come back here.";
         }
         catch
         {
-            EqStatusText = "Enablement cancelled (UAC declined).";
-        }
-    }
-
-    private void ExecuteDisableEqEngine()
-    {
-        var exePath = Environment.ProcessPath!;
-        var psi = new ProcessStartInfo
-        {
-            FileName = exePath,
-            Arguments = "--disable-eq",
-            UseShellExecute = true,
-            Verb = "runas"
-        };
-
-        try
-        {
-            using var elevated = Process.Start(psi);
-            if (elevated is null)
-                return;
-
-            IsEqBusy = true;
-            EqStatusText = "Disabling built-in EQ...";
-
-            Task.Run(async () =>
-            {
-                try { await elevated.WaitForExitAsync(); } catch { }
-                System.Windows.Application.Current.Dispatcher.Invoke(() =>
-                {
-                    IsEqBusy = false;
-                    RefreshEqEngineUI();
-                    EqStatusText = NativeEqEngine.Instance.IsEngineEnabled()
-                        ? "Disable failed - try running Gamer Tool as administrator."
-                        : "Built-in EQ disabled.";
-                });
-            });
-        }
-        catch
-        {
-            EqStatusText = "Disable cancelled (UAC declined).";
+            EqStatusText = "Couldn't open the installer. Try downloading it yourself from the EqualizerAPO website.";
         }
     }
 
@@ -981,6 +966,129 @@ public sealed class MainViewModel : ObservableObject
     public ICommand ToggleComboFavoriteCommand { get; }
     public ICommand ClearComboHotkeyCommand { get; }
     public ICommand DuplicateComboCommand { get; }
+    public ICommand ToggleComboAutoLaunchCommand { get; }
+    public ICommand RefreshRunningProcessesCommand { get; }
+
+    /// <summary>
+    /// Currently running, user-visible apps for the Combos "launch with"
+    /// picker. Populated at startup and on-demand via RefreshRunningProcessesCommand
+    /// (process lists go stale the moment something new launches).
+    /// </summary>
+    public ObservableCollection<string> RunningProcesses { get; } = new();
+
+    /// <summary>One selectable row for the Display tab's monitor picker.</summary>
+    public sealed record MonitorPickerOption(string? DeviceName, string Label);
+
+    /// <summary>
+    /// "Primary Only" (DeviceName == null, the original single-monitor
+    /// behavior) plus one entry per additional detected monitor. Loaded
+    /// once at startup - monitors rarely change mid-session, and this is a
+    /// picker, not a live device-change feed.
+    /// </summary>
+    public ObservableCollection<MonitorPickerOption> AvailableMonitors { get; } = new();
+
+    private void LoadAvailableMonitors()
+    {
+        AvailableMonitors.Clear();
+        AvailableMonitors.Add(new MonitorPickerOption(null, "Primary Only (recommended)"));
+        foreach (var monitor in DisplayManager.EnumerateMonitors())
+        {
+            if (monitor.IsPrimary)
+                continue; // already covered by "Primary Only"
+            AvailableMonitors.Add(new MonitorPickerOption(monitor.DeviceName, monitor.FriendlyName));
+        }
+    }
+
+    private void ExecuteRefreshRunningProcesses()
+    {
+        RunningProcesses.Clear();
+        foreach (var name in GameLaunchWatcher.GetRunningAppProcessNames())
+            RunningProcesses.Add(name);
+    }
+
+    /// <summary>
+    /// Turns auto-launch on/off for a combo, enforcing that each process can
+    /// only be claimed by one combo at a time. IsChecked in the view binds
+    /// OneWay to AutoActivateOnLaunch, so a rejected toggle here simply never
+    /// changes the model and the checkbox visually stays where it was.
+    /// </summary>
+    private void ExecuteToggleComboAutoLaunch(ComboPreset? combo)
+    {
+        if (combo is null)
+            return;
+
+        if (combo.AutoActivateOnLaunch)
+        {
+            combo.AutoActivateOnLaunch = false;
+            StatusMessage = $"Auto-launch turned off for '{combo.Name}'.";
+            _settings.Save();
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(combo.TriggerProcessName))
+        {
+            StatusMessage = "Pick an app first, then turn on auto-launch.";
+            // The CheckBox already flipped its own visual state on click (it's a
+            // ToggleButton) even though IsChecked binds OneWay - re-pushing the
+            // unchanged value forces PropertyChanged so the binding snaps the
+            // visual back to reality instead of showing a checked box that lies.
+            combo.RefreshAutoActivateOnLaunch();
+            return;
+        }
+
+        var conflict = ComboPresets.FirstOrDefault(other =>
+            other != combo && other.AutoActivateOnLaunch &&
+            string.Equals(other.TriggerProcessName, combo.TriggerProcessName, StringComparison.OrdinalIgnoreCase));
+
+        if (conflict is not null)
+        {
+            StatusMessage = $"'{conflict.Name}' already auto-launches with {combo.TriggerProcessName} - clear that one first.";
+            combo.RefreshAutoActivateOnLaunch();
+            return;
+        }
+
+        combo.AutoActivateOnLaunch = true;
+        StatusMessage = $"'{combo.Name}' will auto-activate whenever {combo.TriggerProcessName} is focused.";
+        _settings.Save();
+    }
+
+    private DispatcherTimer? _gameLaunchTimer;
+    private string? _lastActiveGameLaunchComboId;
+
+    /// <summary>
+    /// Polls the foreground window's process every ~1.5s and activates the
+    /// combo registered to it, if any - switching seamlessly back and forth
+    /// as the user alt-tabs between two registered games. Focus on anything
+    /// not registered leaves the last-applied combo alone (does nothing),
+    /// which keeps behavior predictable rather than guessing a "revert to".
+    /// </summary>
+    private void StartGameLaunchWatch()
+    {
+        ExecuteRefreshRunningProcesses();
+
+        _gameLaunchTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
+        _gameLaunchTimer.Tick += (_, _) =>
+        {
+            var foregroundProcess = GameLaunchWatcher.GetForegroundProcessName();
+            if (foregroundProcess is null)
+                return;
+
+            var match = ComboPresets.FirstOrDefault(c =>
+                c.AutoActivateOnLaunch &&
+                string.Equals(c.TriggerProcessName, foregroundProcess, StringComparison.OrdinalIgnoreCase));
+
+            if (match is null || match.Id == _lastActiveGameLaunchComboId)
+                return;
+
+            _lastActiveGameLaunchComboId = match.Id;
+            ApplyDisplayPresetById(match.DisplayPresetId);
+            ApplyAudioPresetById(match.AudioPresetId);
+            StatusMessage = $"Auto-activated '{match.Name}' for {foregroundProcess}.";
+            ShowToast($"⚡ Auto: {match.Name}");
+            ActiveStateChanged?.Invoke();
+        };
+        _gameLaunchTimer.Start();
+    }
 
     /// <summary>
     /// Live-resolves combo member names by Id (fixes stale denormalized names
@@ -1631,6 +1739,8 @@ public sealed class MainViewModel : ObservableObject
         ToggleComboFavoriteCommand = new RelayCommand<ComboPreset>(ExecuteToggleComboFavorite);
         ClearComboHotkeyCommand = new RelayCommand<ComboPreset>(ExecuteClearComboHotkey);
         DuplicateComboCommand = new RelayCommand<ComboPreset>(ExecuteDuplicateCombo);
+        ToggleComboAutoLaunchCommand = new RelayCommand<ComboPreset>(ExecuteToggleComboAutoLaunch);
+        RefreshRunningProcessesCommand = new RelayCommand(ExecuteRefreshRunningProcesses);
 
         PanicResetCommand = new RelayCommand(ExecutePanicReset);
         ConfirmPendingHotkeyCommand = new RelayCommand(ExecuteConfirmPendingHotkey, () => HasPendingHotkey && _pendingModifiers != 0);
@@ -1641,8 +1751,7 @@ public sealed class MainViewModel : ObservableObject
             RefreshPendingHotkeyUI();
         });
 
-        EnableEqEngineCommand = new RelayCommand(ExecuteEnableEqEngine);
-        DisableEqEngineCommand = new RelayCommand(ExecuteDisableEqEngine);
+        InstallEqualizerApoCommand = new RelayCommand(ExecuteInstallEqualizerApo);
 
         // Fire-and-forget: detection + version checks hit the network; the
         // constructor must not block first paint on them.
@@ -1673,6 +1782,10 @@ public sealed class MainViewModel : ObservableObject
             SelectedDisplayPreset = initialDisplay;
         if (initialAudio is not null)
             SelectedAudioPreset = initialAudio;
+
+        LoadAvailableMonitors();
+        StartEqualizerApoDetection();
+        StartGameLaunchWatch();
     }
 
     /// <summary>

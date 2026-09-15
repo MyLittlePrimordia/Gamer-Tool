@@ -1,13 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Gamer Tool V2 - zero-external-dependency WPF app with a BUILT-IN
-    system-wide EQ engine (GamerToolAPO.dll, a native APO that audiodg.exe
-    loads). The APO binary is built from src/Native/GamerToolAPO (MSVC) and
-    embedded into this exe as GamerTool.Resources.GamerToolAPO.dll; at
-    runtime the enable flow extracts it to %ProgramData%\GamerTool\.
-    CI (build.yml) builds the APO first, copies it to
-    src/Native/GamerToolAPO/prebuilt/, then publishes this project.
+    Gamer Tool - zero-external-dependency WPF app. Presets/hotkeys/combos/
+    display gamma are all handled directly with no native code of our own.
+    The audio EQ engine is a thin integration with EqualizerAPO (see
+    Core/EqualizerApoManager.cs for why a from-scratch, unsigned audio
+    plugin isn't viable on modern Windows) - GamerTool writes plain text
+    config files that EqualizerAPO watches and hot-reloads; there is no
+    native project to build, and CI is a single dotnet publish step.
   -->
 
   <PropertyGroup>
@@ -54,17 +54,6 @@
   </ItemGroup>
 
   <!--
-    The native APO, built by CI into src\Native\GamerToolAPO\prebuilt\, is
-    embedded as a resource. The enable flow extracts it at runtime.
-    Local development without the C++ toolchain: drop a built DLL at that
-    path (or publish with /p:EmbedNativeApo=false to skip it for UI work).
-  -->
-  <ItemGroup Condition="'$(EmbedNativeApo)' != 'false'">
-    <EmbeddedResource Include="src\Native\GamerToolAPO\prebuilt\GamerToolAPO.dll"
-                      LogicalName="GamerTool.Resources.GamerToolAPO.dll" />
-  </ItemGroup>
-
-  <!--
     Tray icons etc. are Content (copied next to the exe) - TrayManager.cs
     loads them from disk via LoadImage P/Invoke, which requires the files to
     physically exist after publish.
@@ -97,8 +86,12 @@
     resolves by key.
   -->
   <ItemGroup>
-    <EmbeddedResource Include="Assets\Icons\preset\*_32.png" LogicalName="GamerTool.Resources.icons.%(Filename)" />
-    <EmbeddedResource Include="Assets\Icons\preset\tray\*_20.png" LogicalName="GamerTool.Resources.icons.tray.%(Filename)" />
+    <!-- %(Filename) strips the extension - without %(Extension) every
+         LogicalName below was missing ".png", so IconCatalog's lookup
+         (which appends ".png") never matched anything and every preset
+         icon silently resolved to null. -->
+    <EmbeddedResource Include="Assets\Icons\preset\*_32.png" LogicalName="GamerTool.Resources.icons.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Assets\Icons\preset\tray\*_20.png" LogicalName="GamerTool.Resources.icons.tray.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <!-- UI glyph PNGs remain Content (used by styles/layouts at build time). -->

@@ -9,17 +9,19 @@
       giving each tab its own identity (Display=green, Audio=blue,
       Combos=amber, Settings=purple) with zero duplicated styles.
     -->
-    <Color x:Key="BackgroundColor">#FF101216</Color>
-    <Color x:Key="CardColor">#FF181B21</Color>
-    <Color x:Key="CardHoverColor">#FF20242C</Color>
-    <Color x:Key="BorderColor">#FF262B34</Color>
-    <Color x:Key="PrimaryTextColor">#FFF2F3F5</Color>
-    <Color x:Key="MutedTextColor">#FF8A919E</Color>
-    <Color x:Key="DangerRedColor">#FFFF4136</Color>
+    <Color x:Key="BackgroundColor">#FF0D0F12</Color>
+    <Color x:Key="CardColor">#FF15171C</Color>
+    <Color x:Key="CardHoverColor">#FF1C1F26</Color>
+    <Color x:Key="BorderColor">#FF23272F</Color>
+    <Color x:Key="PrimaryTextColor">#FFEDEEF0</Color>
+    <Color x:Key="MutedTextColor">#FF828A96</Color>
+    <Color x:Key="DangerRedColor">#FFF85149</Color>
 
-    <!-- Default accent (Display tab); swapped at runtime per tab -->
-    <Color x:Key="AccentColor">#FF00E676</Color>
-    <Color x:Key="AccentDimColor">#FF0E3B24</Color>
+    <!-- Default accent (Display tab); swapped at runtime per tab. Refined
+         toward a mint-green rather than a pure/neon signal green - each
+         tab's pair below follows the same "muted, not neon" direction. -->
+    <Color x:Key="AccentColor">#FF3ECF8E</Color>
+    <Color x:Key="AccentDimColor">#FF173D2C</Color>
 
     <SolidColorBrush x:Key="BackgroundBrush" Color="{StaticResource BackgroundColor}"/>
     <SolidColorBrush x:Key="CardBrush" Color="{StaticResource CardColor}"/>
@@ -28,7 +30,7 @@
     <SolidColorBrush x:Key="PrimaryTextBrush" Color="{StaticResource PrimaryTextColor}"/>
     <SolidColorBrush x:Key="MutedTextBrush" Color="{StaticResource MutedTextColor}"/>
     <SolidColorBrush x:Key="DangerRedBrush" Color="{StaticResource DangerRedColor}"/>
-    <SolidColorBrush x:Key="DangerButtonBackgroundBrush" Color="#FF3A1512"/>
+    <SolidColorBrush x:Key="DangerButtonBackgroundBrush" Color="#FF33201E"/>
 
     <!--
       AccentBrush/AccentDimBrush are REWRITTEN at runtime (they are not
@@ -107,27 +109,30 @@
         </Setter>
     </Style>
 
-    <!-- Active-tab look: filled pill in THIS tab's accent (Tag-bound color) -->
+    <!-- Active-tab look: a soft tinted wash in this tab's accent + bold
+         accent-colored text, instead of a solid neon-filled pill with
+         black text - reads as "selected segment" rather than "sticker".
+         Exposed as its own named template so each tab button's per-tab
+         DataTrigger (in MainWindow.xaml) can reference it directly. -->
+    <ControlTemplate x:Key="NavTabActiveTemplate" TargetType="Button">
+        <Border x:Name="Bg"
+                Background="{DynamicResource AccentDimBrush}"
+                CornerRadius="10"
+                Margin="{TemplateBinding Margin}"
+                Padding="16,7">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Border>
+        <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bg" Property="Opacity" Value="0.8"/>
+            </Trigger>
+        </ControlTemplate.Triggers>
+    </ControlTemplate>
+
     <Style x:Key="NavTabButtonActiveStyle" TargetType="Button" BasedOn="{StaticResource NavTabButtonStyle}">
-        <Setter Property="Template">
-            <Setter.Value>
-                <ControlTemplate TargetType="Button">
-                    <Border x:Name="Bg"
-                            Background="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"
-                            CornerRadius="13"
-                            Margin="{TemplateBinding Margin}"
-                            Padding="16,7">
-                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
-                    <ControlTemplate.Triggers>
-                        <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bg" Property="Opacity" Value="0.85"/>
-                        </Trigger>
-                    </ControlTemplate.Triggers>
-                </ControlTemplate>
-            </Setter.Value>
-        </Setter>
-        <Setter Property="Foreground" Value="#FF101216"/>
+        <Setter Property="Foreground" Value="{Binding Tag, RelativeSource={RelativeSource Self}}"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="Template" Value="{StaticResource NavTabActiveTemplate}"/>
     </Style>
 
     <!-- ============================== PRIMARY / SECONDARY / DANGER BUTTONS ============================== -->
@@ -251,6 +256,69 @@
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Bg" Property="Background" Value="#FFE81123"/>
                             <Setter Property="Foreground" Value="White"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Emergency reset, pinned in the title bar. Deliberately the SAME
+         40x30 footprint as minimize/close so it reads as a peer chrome
+         button, not an undersized afterthought. -->
+    <Style x:Key="TitleBarDangerButtonStyle" TargetType="Button" BasedOn="{StaticResource TitleBarGlyphButtonStyle}">
+        <Setter Property="Foreground" Value="{StaticResource DangerRedBrush}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bg" Background="{TemplateBinding Background}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bg" Property="Background" Value="{StaticResource DangerButtonBackgroundBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ============================== SCROLLBAR (themed, implicit) ============================== -->
+    <!-- Applies to every ScrollBar in the app with no per-usage styling
+         needed - the Combos horizontal strip and every ComboBox dropdown
+         (which hosts its own internal ScrollViewer) pick this up
+         automatically instead of showing the stock light-theme scrollbar. -->
+    <Style TargetType="ScrollBar">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Width" Value="10"/>
+        <Setter Property="Height" Value="10"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ScrollBar">
+                    <Grid Background="Transparent">
+                        <Track x:Name="PART_Track"
+                               Orientation="{TemplateBinding Orientation}">
+                            <Track.DecreaseRepeatButton>
+                                <RepeatButton Command="ScrollBar.PageUpCommand" Background="Transparent" BorderThickness="0" Focusable="False"/>
+                            </Track.DecreaseRepeatButton>
+                            <Track.IncreaseRepeatButton>
+                                <RepeatButton Command="ScrollBar.PageDownCommand" Background="Transparent" BorderThickness="0" Focusable="False"/>
+                            </Track.IncreaseRepeatButton>
+                            <Track.Thumb>
+                                <Thumb>
+                                    <Thumb.Template>
+                                        <ControlTemplate TargetType="Thumb">
+                                            <Border Background="{StaticResource BorderBrush2}" CornerRadius="5" Margin="1"/>
+                                        </ControlTemplate>
+                                    </Thumb.Template>
+                                </Thumb>
+                            </Track.Thumb>
+                        </Track>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="Transparent"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -588,6 +656,21 @@
         <Style.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
                 <Setter Property="Background" Value="{StaticResource CardHoverBrush}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- A fixed-size card for the Combos horizontal strip - never taller
+         than its content so the strip never needs vertical scrolling.
+         Fixed Height (not just Width) keeps every card the same size even
+         though some show a "Clear Hotkey" row and others don't. -->
+    <Style x:Key="ComboCardBorderStyle" TargetType="Border" BasedOn="{StaticResource CardBorderStyle}">
+        <Setter Property="Width" Value="248"/>
+        <Setter Property="Height" Value="232"/>
+        <Setter Property="Margin" Value="0,0,10,0"/>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
                 <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
             </Trigger>
         </Style.Triggers>

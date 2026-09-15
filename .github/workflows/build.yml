@@ -15,6 +15,11 @@ env:
 jobs:
   build-and-release:
     runs-on: windows-latest
+    # Newer repos/orgs default GITHUB_TOKEN to read-only, which makes
+    # softprops/action-gh-release fail with 403 "Resource not accessible
+    # by integration". This grants the one scope that step needs.
+    permissions:
+      contents: write
 
     steps:
     - name: Checkout
@@ -25,19 +30,7 @@ jobs:
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
 
-    - name: Add MSVC to PATH
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: x64
-
-    - name: Build native GamerToolAPO
-      run: |
-        msbuild "app\src\Native\GamerToolAPO\GamerToolAPO.vcxproj" /p:Configuration=Release /p:Platform=x64 /m
-        New-Item -ItemType Directory -Force -Path "app\src\Native\GamerToolAPO\prebuilt"
-        Copy-Item "app\src\Native\GamerToolAPO\x64\Release\GamerToolAPO.dll" "app\src\Native\GamerToolAPO\prebuilt\GamerToolAPO.dll"
-        Get-FileHash "app\src\Native\GamerToolAPO\prebuilt\GamerToolAPO.dll" -Algorithm SHA256
-
-    - name: Publish Gamer Tool (single-file exe with embedded APO)
+    - name: Publish Gamer Tool (single-file exe)
       run: |
         dotnet publish "app\GamerTool.csproj" -c $env:CONFIGURATION -r $env:RUNTIME_ID --self-contained true `
           -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false `
