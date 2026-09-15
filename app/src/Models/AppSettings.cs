@@ -16,6 +16,7 @@ namespace GamerTool.Models;
 public sealed class AppSettings
 {
     public bool RunOnStartup { get; set; }
+
     public string? ActiveDisplayPresetId { get; set; }
     public string? ActiveAudioPresetId { get; set; }
 

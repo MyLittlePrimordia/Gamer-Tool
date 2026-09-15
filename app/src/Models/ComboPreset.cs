@@ -68,6 +68,35 @@ public sealed class ComboPreset : INotifyPropertyChanged
     public string? HotkeyDisplayLabel =>
         HotkeyId.HasValue ? GamerTool.Core.HotkeyFormatting.Format(HotkeyModifiers, HotkeyVirtualKey) : null;
 
+    /// <summary>
+    /// When true, this combo auto-activates whenever TriggerProcessName is
+    /// the focused (foreground) app, and only one combo may claim a given
+    /// process at a time - see MainViewModel.ExecuteToggleComboAutoLaunch.
+    /// </summary>
+    public bool AutoActivateOnLaunch
+    {
+        get => _autoActivateOnLaunch;
+        set { _autoActivateOnLaunch = value; OnPropertyChanged(); }
+    }
+    private bool _autoActivateOnLaunch;
+
+    /// <summary>Process image name to match against the foreground window, e.g. "cod.exe".</summary>
+    public string? TriggerProcessName
+    {
+        get => _triggerProcessName;
+        set { _triggerProcessName = value; OnPropertyChanged(); }
+    }
+    private string? _triggerProcessName;
+
+    /// <summary>
+    /// Re-raises PropertyChanged for AutoActivateOnLaunch without changing
+    /// its value - used when a toggle attempt is rejected (see
+    /// MainViewModel.ExecuteToggleComboAutoLaunch) so a OneWay-bound
+    /// CheckBox, which already flipped its own visual state on click,
+    /// snaps back to reality instead of showing a checked box that lies.
+    /// </summary>
+    public void RefreshAutoActivateOnLaunch() => OnPropertyChanged(nameof(AutoActivateOnLaunch));
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     private void OnPropertyChanged([CallerMemberName] string? name = null) =>
@@ -85,6 +114,8 @@ public sealed class ComboPreset : INotifyPropertyChanged
         AudioPresetName = AudioPresetName,
         HotkeyId = HotkeyId,
         HotkeyModifiers = HotkeyModifiers,
-        HotkeyVirtualKey = HotkeyVirtualKey
+        HotkeyVirtualKey = HotkeyVirtualKey,
+        AutoActivateOnLaunch = false, // a duplicate never inherits the launch trigger - avoids an instant conflict
+        TriggerProcessName = TriggerProcessName
     };
 }

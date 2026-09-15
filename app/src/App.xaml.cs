@@ -22,21 +22,6 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        // --- Elevated bootstrap pass ---
-        // The UI relaunches GamerTool with --enable-eq/--disable-eq under the
-        // runas verb for the one-time APO install/uninstall. That elevated
-        // instance does the registry + file work, exits with a code, and never
-        // touches the UI (the single-instance mutex below is intentionally
-        // AFTER this block for exactly that reason).
-        bool enableEq = Array.Exists(e.Args, a => string.Equals(a, "--enable-eq", StringComparison.OrdinalIgnoreCase));
-        bool disableEq = Array.Exists(e.Args, a => string.Equals(a, "--disable-eq", StringComparison.OrdinalIgnoreCase));
-        if (enableEq || disableEq)
-        {
-            int exitCode = NativeEqEngine.RunElevatedEnable(enableEq) ? 0 : 1;
-            Shutdown(exitCode);
-            return;
-        }
-
         // --- Single-instance enforcement ---
         _singleInstanceMutex = new Mutex(initiallyOwned: true, MutexName, out bool createdNew);
         if (!createdNew)

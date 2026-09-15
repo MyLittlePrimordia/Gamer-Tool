@@ -45,6 +45,13 @@ public sealed class DisplayPreset : INotifyPropertyChanged
     public double GainGreen { get; set; } = 1.0;
     public double GainBlue { get; set; } = 1.0;
 
+    /// <summary>
+    /// Which monitor this preset targets (GDI device name, e.g. "\\.\DISPLAY2"),
+    /// or null for the default/primary path. Null preserves the exact
+    /// original single-monitor behavior for anyone who never touches this.
+    /// </summary>
+    public string? TargetMonitorId { get; set; }
+
     /// <summary>Id returned by HotkeyManager.RegisterHotkey, or null if this preset has no bound hotkey.</summary>
     public int? HotkeyId
     {
@@ -90,6 +97,7 @@ public sealed class DisplayPreset : INotifyPropertyChanged
         GainRed = GainRed,
         GainGreen = GainGreen,
         GainBlue = GainBlue,
+        TargetMonitorId = TargetMonitorId,
         HotkeyId = HotkeyId,
         HotkeyModifiers = HotkeyModifiers,
         HotkeyVirtualKey = HotkeyVirtualKey
@@ -170,6 +178,25 @@ public sealed class DisplayPreset : INotifyPropertyChanged
             new() { Id = "builtin-nighteye", Name = "Night Eye", Icon = "crescent", IsBuiltIn = true,
                 Gamma = 1.08, Contrast = 0.95, ShadowLift = 0.06, BrightnessOffset = -0.02,
                 GainRed = 1.04, GainGreen = 1.00, GainBlue = 0.75 },
+
+            // Battle royale: huge open maps, enemies crouched in grass or
+            // shadow at range. More shadow lift than FPS Shooter, slight
+            // green push helps foliage read without looking unnatural.
+            new() { Id = "builtin-battleroyale", Name = "Battle Royale", Icon = "bomb", IsBuiltIn = true,
+                Gamma = 1.06, Contrast = 1.20, ShadowLift = 0.14, BrightnessOffset = 0.03,
+                GainRed = 1.05, GainGreen = 1.08, GainBlue = 1.00 },
+
+            // Sports: bright stadium lighting, saturated team colors, fast
+            // ball/player motion - vivid and punchy, no shadow work needed.
+            new() { Id = "builtin-sports", Name = "Sports", Icon = "robot", IsBuiltIn = true,
+                Gamma = 0.92, Contrast = 1.15, ShadowLift = 0.03, BrightnessOffset = 0.05,
+                GainRed = 1.10, GainGreen = 1.10, GainBlue = 1.05 },
+
+            // Casual / family: bright, cheerful, no tactical tuning - a
+            // gentle warm "smile" look for Minecraft, party and platform games.
+            new() { Id = "builtin-casual", Name = "Casual", Icon = "alien", IsBuiltIn = true,
+                Gamma = 0.95, Contrast = 1.05, ShadowLift = 0.00, BrightnessOffset = 0.04,
+                GainRed = 1.08, GainGreen = 1.05, GainBlue = 1.02 },
         };
     }
 }

@@ -1,7 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
 
 namespace GamerTool.Core;
+
+/// <summary>A single enumerated display, for the "Target Monitor" picker.</summary>
+public sealed record MonitorInfo(string DeviceName, string FriendlyName, bool IsPrimary);
 
 /// <summary>
 /// Owns all interaction with the physical display gamma ramp: computing curves
@@ -216,6 +221,66 @@ public sealed class DisplayManager
     public RAMP? GetCurrentRamp()
     {
         lock (_lock) { return _currentRamp?.Clone(); }
+    }
+
+    /// <summary>Lists attached monitors for the "Target Monitor" picker.</summary>
+    public static IReadOnlyList<MonitorInfo> EnumerateMonitors()
+    {
+        var monitors = new List<MonitorInfo>();
+        try
+        {
+            uint index = 0;
+            while (true)
+            {
+                var device = new DISPLAY_DEVICE { cb = Marshal.SizeOf<DISPLAY_DEVICE>() };
+                if (!User32DisplayNative.EnumDisplayDevices(null, index, ref device, 0))
+                    break;
+
+                index++;
+
+                bool attached = (device.StateFlags & User32DisplayNative.DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) != 0;
+                if (!attached)
+                    continue;
+
+                bool isPrimary = (device.StateFlags & User32DisplayNative.DISPLAY_DEVICE_PRIMARY_DEVICE) != 0;
+                monitors.Add(new MonitorInfo(device.DeviceName, device.DeviceString, isPrimary));
+            }
+        }
+        catch
+        {
+            // Best-effort - an empty list just means the picker falls back to "Primary Only".
+        }
+        return monitors;
+    }
+
+    /// <summary>
+    /// EXPERIMENTAL / best-effort: applies a ramp to one specific non-primary
+    /// monitor's own device context, instead of the primary display path
+    /// that ApplyRamp/RestoreFactoryGamma use. Multi-monitor gamma behavior
+    /// varies significantly by GPU vendor and driver, so this is
+    /// deliberately NOT wired into the crash-recovery/factory-ramp safety
+    /// net - it never touches session.lock or the saved factory ramp. If a
+    /// secondary monitor ever looks wrong, unplugging/replugging it (or a
+    /// GPU driver restart) resets its ramp instantly regardless of this app.
+    /// </summary>
+    public bool TryApplyRampToDevice(RAMP ramp, string deviceName)
+    {
+        IntPtr hdc = Gdi32Native.CreateDC(null, deviceName, null, IntPtr.Zero);
+        if (hdc == IntPtr.Zero)
+            return false;
+
+        try
+        {
+            return Gdi32Native.SetDeviceGammaRamp(hdc, ref ramp);
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            Gdi32Native.DeleteDC(hdc);
+        }
     }
 
     private static RAMP ReadCurrentRampFromDevice()

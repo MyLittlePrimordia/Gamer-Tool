@@ -67,6 +67,43 @@ public static class Gdi32Native
 
     [DllImport(Gdi32Dll, SetLastError = true)]
     public static extern bool SetDeviceGammaRamp(IntPtr hdc, ref RAMP lpRamp);
+
+    [DllImport(Gdi32Dll, CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern IntPtr CreateDC(string? lpszDriver, string lpszDevice, string? lpszOutput, IntPtr lpInitData);
+
+    [DllImport(Gdi32Dll)]
+    public static extern bool DeleteDC(IntPtr hdc);
+}
+
+#endregion
+
+#region USER32 - Multi-monitor enumeration
+
+/// <summary>Mirrors Win32's DISPLAY_DEVICEW for EnumDisplayDevices.</summary>
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+public struct DISPLAY_DEVICE
+{
+    [MarshalAs(UnmanagedType.U4)]
+    public int cb;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+    public string DeviceName;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+    public string DeviceString;
+    [MarshalAs(UnmanagedType.U4)]
+    public int StateFlags;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+    public string DeviceID;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+    public string DeviceKey;
+}
+
+public static class User32DisplayNative
+{
+    public const int DISPLAY_DEVICE_ATTACHED_TO_DESKTOP = 0x1;
+    public const int DISPLAY_DEVICE_PRIMARY_DEVICE = 0x4;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
 }
 
 #endregion
@@ -100,6 +137,12 @@ public static class User32Native
 
     [DllImport(User32Dll)]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport(User32Dll)]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport(User32Dll, SetLastError = true)]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
     // RegisterHotKey modifier flags
     public const uint MOD_ALT = 0x0001;

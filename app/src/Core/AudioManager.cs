@@ -5,23 +5,25 @@ using Microsoft.Win32;
 namespace GamerTool.Core;
 
 /// <summary>
-/// Result of applying an audio preset through the built-in engine.
-/// NativeEqEngineApplied covers the DSP path; NativeLoudnessApplied is the
-/// optional Windows per-endpoint "Loudness Equalization" enhancement toggle,
-/// which is complementary (dynamic-range compression, not EQ).
+/// Result of applying an audio preset. EqApplied covers the EqualizerAPO
+/// config-file path; NativeLoudnessApplied is the optional Windows
+/// per-endpoint "Loudness Equalization" enhancement toggle, which is
+/// complementary (dynamic-range compression, not EQ) and works entirely
+/// independently of EqualizerAPO.
 /// </summary>
 public sealed class AudioApplyResult
 {
-    public bool NativeEqApplied { get; init; }
+    public bool EqApplied { get; init; }
     public bool NativeLoudnessApplied { get; init; }
-    public bool AnyBackendSucceeded => NativeEqApplied || NativeLoudnessApplied;
+    public bool AnyBackendSucceeded => EqApplied || NativeLoudnessApplied;
 }
 
 /// <summary>
-/// V2 audio pipeline: presets are rendered by GamerTool's OWN APO
-/// (GamerToolAPO.dll) running inside audiodg.exe - no external app required.
-/// This class only handles the per-endpoint property-store side (native
-/// loudness toggle) and delegates the EQ itself to NativeEqEngine.
+/// Audio pipeline: presets are rendered by EqualizerAPO (see
+/// EqualizerApoManager for why - a from-scratch unsigned audio plugin is
+/// silently refused by Windows on most modern PCs). This class handles the
+/// per-endpoint property-store side (native loudness toggle, unchanged from
+/// earlier versions) and delegates the actual EQ to EqualizerApoManager.
 /// </summary>
 public sealed class AudioManager
 {
@@ -37,43 +39,47 @@ public sealed class AudioManager
 
     private AudioManager() { }
 
-    public bool IsEngineEnabled => NativeEqEngine.Instance.IsEngineEnabled();
+    public bool IsEngineEnabled => EqualizerApoManager.IsInstalled();
 
     /// <summary>
-    /// Applies a 10-band preset: publishes gains to the built-in APO's shared
-    /// config (instant, all devices) and toggles the optional native loudness
+    /// Applies a 10-band preset: writes EqualizerAPO's config file (instant,
+    /// all devices, no elevation) and toggles the optional native loudness
     /// enhancement via the endpoint property store.
     ///
-    /// Anti-clip headroom (no protocol change): the APO struct has no preamp
-    /// field, so when the stored curve peaks above +3dB we publish the whole
-    /// curve shifted down so the peak lands at +3dB. Relative shape (what you
-    /// hear as "footsteps forward") is bit-identical, absolute level drops a
-    /// few dB (compensate with volume) instead of clipping transients at the
-    /// DAC. Stored presets are never modified - only the published vector.
+    /// Anti-clip headroom: EqualizerAPO has no automatic gain-safety net
+    /// either, so when the stored curve peaks above +3dB we write the whole
+    /// curve shifted down so the peak lands at +3dB. Relative shape (what
+    /// you hear as "footsteps forward") is bit-identical, absolute level
+    /// drops a few dB (compensate with the Volume slider) instead of
+    /// clipping transients at the DAC. Stored presets are never modified -
+    /// only the written config reflects the shift.
     /// </summary>
-    public AudioApplyResult ApplyPreset(double[] gainsDb, bool enableNativeLoudness)
+    public AudioApplyResult ApplyPreset(double[] gainsDb, bool enableNativeLoudness, double preampDb = 0.0)
     {
-        var floatGains = new float[gainsDb.Length];
         double peak = double.NegativeInfinity;
         for (int i = 0; i < gainsDb.Length; i++)
             if (gainsDb[i] > peak) peak = gainsDb[i];
         double headroomShift = peak > 3.0 ? peak - 3.0 : 0.0;
 
+        var shiftedGains = new double[gainsDb.Length];
         for (int i = 0; i < gainsDb.Length; i++)
-            floatGains[i] = (float)(gainsDb[i] - headroomShift);
+            shiftedGains[i] = gainsDb[i] - headroomShift;
 
         bool eqApplied = false;
-        if (NativeEqEngine.Instance.IsEngineEnabled())
+        if (EqualizerApoManager.IsInstalled())
         {
-            NativeEqEngine.Instance.PublishGains(floatGains, enabled: true);
-            eqApplied = true;
+            EqualizerApoManager.EnsureIncluded();
+            eqApplied = EqualizerApoManager.WriteConfig(
+                shiftedGains,
+                Array.ConvertAll(BandFrequenciesHz, f => (double)f),
+                preampDb - headroomShift);
         }
 
         bool loudnessApplied = TrySetNativeLoudnessEqualization(enableNativeLoudness);
 
         return new AudioApplyResult
         {
-            NativeEqApplied = eqApplied,
+            EqApplied = eqApplied,
             NativeLoudnessApplied = loudnessApplied
         };
     }
@@ -81,7 +87,8 @@ public sealed class AudioManager
     /// <summary>Flat-lines our EQ contribution (Default preset / panic reset).</summary>
     public void ClearEq()
     {
-        NativeEqEngine.Instance.ClearGains();
+        if (EqualizerApoManager.IsInstalled())
+            EqualizerApoManager.WriteFlatConfig(Array.ConvertAll(BandFrequenciesHz, f => (double)f));
         TrySetNativeLoudnessEqualization(false);
     }
 
@@ -163,6 +170,56 @@ public sealed class AudioManager
         {
             if (store is not null && Marshal.IsComObject(store))
                 Marshal.ReleaseComObject(store);
+            if (device is not null && Marshal.IsComObject(device))
+                Marshal.ReleaseComObject(device);
+            if (enumeratorObj is not null && Marshal.IsComObject(enumeratorObj))
+                Marshal.ReleaseComObject(enumeratorObj);
+        }
+    }
+
+    /// <summary>
+    /// The current default render endpoint's device ID string (e.g.
+    /// "{0.0.0.00000000}.{guid}"), or null if it can't be determined.
+    /// Used to detect real output-device changes so the "re-run Enable"
+    /// prompt reflects the device actually in use, not a stale snapshot.
+    /// </summary>
+    public string? TryGetDefaultRenderEndpointId()
+    {
+        object? enumeratorObj = null;
+        IMMDevice? device = null;
+
+        try
+        {
+            var clsid = ComGuids.MMDeviceEnumerator;
+            var iid = ComGuids.IID_IMMDeviceEnumerator;
+
+            int hr = Ole32Native.CoCreateInstance(
+                ref clsid, IntPtr.Zero, Ole32Native.CLSCTX_INPROC_SERVER, ref iid, out var enumeratorPtr);
+
+            if (hr != 0 || enumeratorPtr == IntPtr.Zero)
+                return null;
+
+            enumeratorObj = Marshal.GetObjectForIUnknown(enumeratorPtr);
+            Marshal.Release(enumeratorPtr);
+
+            if (enumeratorObj is not IMMDeviceEnumerator enumerator)
+                return null;
+
+            hr = enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eMultimedia, out var dev);
+            if (hr != 0 || dev is null)
+                return null;
+
+            device = dev;
+
+            hr = device.GetId(out var id);
+            return hr == 0 ? id : null;
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
             if (device is not null && Marshal.IsComObject(device))
                 Marshal.ReleaseComObject(device);
             if (enumeratorObj is not null && Marshal.IsComObject(enumeratorObj))
