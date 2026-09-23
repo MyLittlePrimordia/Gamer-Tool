@@ -12,6 +12,8 @@ public partial class MainWindow : Window
     private readonly HotkeyService _hotkeyService = new();
     private FocusWatcher? _focusWatcher;
     private readonly List<Slider> _bandSliders = new();
+    // Maps dropdown display name -> endpoint Id (for future per-device setup).
+    private readonly Dictionary<string, string> _deviceNameToId = new(StringComparer.OrdinalIgnoreCase);
 
     private DisplayPreset _currentDisplay = DisplayPreset.Daylight;
     private AudioPreset _currentAudio = AudioPreset.Flat;
@@ -342,33 +344,51 @@ public partial class MainWindow : Window
 
     private void RefreshOutputDevices()
     {
+        // IMPORTANT: only put plain strings in the ComboBox.
+        // Putting ComboBoxItem instances in Items causes WPF to double-wrap them
+        // and can hard-crash (AccessViolation) when the dropdown opens — especially
+        // with third-party control themes like WPF-UI.
         try
         {
-            // Detach so Clear/rebuild doesn't re-enter SelectionChanged and crash.
             OutputDeviceCombo.SelectionChanged -= OutputDeviceCombo_SelectionChanged;
-
-            var devices = AudioDeviceService.EnumerateRenderDevices();
             OutputDeviceCombo.Items.Clear();
+            _deviceNameToId.Clear();
 
-            OutputDeviceCombo.Items.Add(new ComboBoxItem { Content = "System Default", Tag = null });
+            OutputDeviceCombo.Items.Add("System Default");
+
+            List<AudioDeviceInfo> devices;
+            try
+            {
+                devices = AudioDeviceService.EnumerateRenderDevices();
+            }
+            catch
+            {
+                devices = new List<AudioDeviceInfo>();
+            }
 
             int selectIndex = 0;
             for (int i = 0; i < devices.Count; i++)
             {
                 var d = devices[i];
-                OutputDeviceCombo.Items.Add(new ComboBoxItem { Content = d.FriendlyName, Tag = d.Id });
+                // Avoid duplicate display names colliding in the map.
+                string label = d.FriendlyName;
+                if (_deviceNameToId.ContainsKey(label))
+                    label = $"{d.FriendlyName} ({i})";
+
+                _deviceNameToId[label] = d.Id;
+                OutputDeviceCombo.Items.Add(label);
                 if (d.IsDefault)
-                    selectIndex = i + 1;
+                    selectIndex = OutputDeviceCombo.Items.Count - 1;
             }
 
-            OutputDeviceCombo.SelectedIndex = selectIndex;
+            OutputDeviceCombo.SelectedIndex = selectIndex >= 0 ? selectIndex : 0;
         }
         catch
         {
             try
             {
                 OutputDeviceCombo.Items.Clear();
-                OutputDeviceCombo.Items.Add(new ComboBoxItem { Content = "System Default", Tag = null });
+                OutputDeviceCombo.Items.Add("System Default");
                 OutputDeviceCombo.SelectedIndex = 0;
             }
             catch { /* last resort */ }
@@ -383,17 +403,17 @@ public partial class MainWindow : Window
     {
         try
         {
-            // Persist choice. Re-run Enable / Repair EQ to attach APO to a new device.
-            if (OutputDeviceCombo.SelectedItem is ComboBoxItem item)
-            {
-                _settings.OutputDeviceId = item.Tag as string ?? item.Content?.ToString() ?? "";
-                ProfileManager.Save(_settings);
-            }
-            else if (OutputDeviceCombo.SelectedItem is string name)
-            {
+            if (OutputDeviceCombo.SelectedItem is not string name)
+                return;
+
+            if (name == "System Default")
+                _settings.OutputDeviceId = "";
+            else if (_deviceNameToId.TryGetValue(name, out var id))
+                _settings.OutputDeviceId = id;
+            else
                 _settings.OutputDeviceId = name;
-                ProfileManager.Save(_settings);
-            }
+
+            ProfileManager.Save(_settings);
         }
         catch
         {
