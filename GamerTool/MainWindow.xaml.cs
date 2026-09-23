@@ -303,9 +303,31 @@ public partial class MainWindow : Window
 
     private void RefreshEngineStatus()
     {
+        bool installed = EqualizerApoInstallerService.IsEngineInstalled();
+        bool registered = EqualizerApoInstallerService.IsApoRegisteredOnDefaultDevice();
         bool ready = AudioService.IsEngineReady();
-        EngineStatusText.Text = ready ? "Audio Engine: Ready" : "Audio Engine: Setup Required";
-        EnableAudioBanner.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
+
+        if (ready)
+        {
+            EngineStatusText.Text = "Audio Engine: Ready";
+            EngineStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(0x4A, 0xDE, 0x80));
+            EnableAudioBanner.Visibility = Visibility.Collapsed;
+        }
+        else if (installed && !registered)
+        {
+            EngineStatusText.Text = "Audio Engine: Installed but NOT on your device";
+            EngineStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(0xF5, 0xA6, 0x23));
+            EnableAudioBanner.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            EngineStatusText.Text = "Audio Engine: Setup Required";
+            EngineStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(0x9A, 0xA0, 0xAC));
+            EnableAudioBanner.Visibility = Visibility.Visible;
+        }
     }
 
     // ============================ OUTPUT DEVICE =============================

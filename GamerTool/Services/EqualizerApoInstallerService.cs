@@ -175,6 +175,27 @@ public static class EqualizerApoInstallerService
         return key32 != null;
     }
 
+    /// <summary>
+    /// True if the current default playback device has Equalizer APO's Post-Mix
+    /// CLSID written into its FxProperties. This is what actually puts EQ in
+    /// the audio path — merely having the DLL installed is not enough.
+    /// </summary>
+    public static bool IsApoRegisteredOnDefaultDevice()
+    {
+        try
+        {
+            string? endpointGuid = GetDefaultRenderEndpointGuid();
+            if (string.IsNullOrEmpty(endpointGuid)) return false;
+
+            var existing = ReadExistingEffectConfig(endpointGuid);
+            return existing.AlreadyHasEqualizerApo;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static string? DownloadInstaller()
     {
         try

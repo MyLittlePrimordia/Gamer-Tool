@@ -13,6 +13,7 @@ public record AudioDeviceInfo(string Id, string FriendlyName, bool IsDefault);
 public static class AudioDeviceService
 {
     private const int eRender = 0;
+    private const int eConsole = 0;       // matches what Sound Settings shows as Default
     private const int eMultimedia = 1;
     private const int DEVICE_STATE_ACTIVE = 0x1;
 
@@ -84,7 +85,16 @@ public static class AudioDeviceService
         {
             var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
 
-            enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia, out var defaultDevice);
+            // Prefer eConsole (matches Sound Settings "Default"); fall back to eMultimedia.
+            IMMDevice defaultDevice;
+            try
+            {
+                enumerator.GetDefaultAudioEndpoint(eRender, eConsole, out defaultDevice);
+            }
+            catch
+            {
+                enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia, out defaultDevice);
+            }
             string defaultId = GetDeviceId(defaultDevice);
 
             enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, out var collection);

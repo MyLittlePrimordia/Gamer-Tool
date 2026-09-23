@@ -38,17 +38,29 @@ public static class AudioService
     private const string ElevatedSetupFlag = "--elevated-audio-setup";
 
     /// <summary>
-    /// True once C:\ProgramData\GamerTool\EQ exists, is ACL'd correctly, and
-    /// Equalizer APO's engine DLL is registered for the active render device.
-    /// Checked at startup so the UI can show "Audio Engine: Ready" vs
-    /// "Audio Engine: Setup Required" instead of silently failing later.
+    /// True only when Equalizer APO is installed AND registered on the current
+    /// default playback device AND DisableProtectedAudioDG is set.
+    /// A weak check (folder exists + installer present) was falsely reporting
+    /// "Ready" while EQ had no effect — this is the stricter version.
     /// </summary>
     public static bool IsEngineReady()
     {
         try
         {
-            if (!Directory.Exists(EqDirectory)) return false;
-            return EqualizerApoInstallerService.IsEngineInstalled();
+            if (!EqualizerApoInstallerService.IsEngineInstalled())
+                return false;
+
+            // Unsigned APOs require this flag on modern Windows.
+            using (var audioKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                       @"SOFTWARE\Microsoft\Windows\CurrentVersion\Audio"))
+            {
+                object? v = audioKey?.GetValue("DisableProtectedAudioDG");
+                if (v is not int i || i != 1)
+                    return false;
+            }
+
+            // APO must be attached to the default render endpoint.
+            return EqualizerApoInstallerService.IsApoRegisteredOnDefaultDevice();
         }
         catch
         {

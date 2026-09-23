@@ -45,6 +45,9 @@
             <StackPanel Grid.Column="1" Orientation="Horizontal">
                 <ComboBox x:Name="OutputDeviceCombo" Width="220" Margin="0,0,8,0"
                           SelectionChanged="OutputDeviceCombo_SelectionChanged" />
+                <Button Content="Enable / Repair EQ"
+                        Click="EnableAudioEq_Click" Padding="10,4" Margin="0,0,8,0"
+                        ToolTip="Installs Equalizer APO if needed and registers it on your default playback device (one UAC prompt)" />
                 <Button x:Name="PanicButton" Content="⚠ Panic / Reset Audio"
                         Click="PanicButton_Click" Padding="10,4"
                         Background="#FF3A1414" Foreground="#FFFF8080" BorderThickness="0" />
@@ -136,9 +139,11 @@
                                 BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,4,16,12"
                                 Visibility="Collapsed">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="Audio EQ isn't set up yet. One-time admin step needed."
-                                           Foreground="#FFE0C258" VerticalAlignment="Center" />
-                                <Button Content="Enable Audio EQ" Margin="12,0,0,0" Padding="10,4"
+                                <TextBlock x:Name="EnableAudioBannerText"
+                                           Text="Audio EQ isn't active on your playback device. Click to install/register (one UAC prompt)."
+                                           Foreground="#FFE0C258" VerticalAlignment="Center"
+                                           TextWrapping="Wrap" MaxWidth="420" />
+                                <Button Content="Enable / Repair Audio EQ" Margin="12,0,0,0" Padding="10,4"
                                         Click="EnableAudioEq_Click" />
                             </StackPanel>
                         </Border>
