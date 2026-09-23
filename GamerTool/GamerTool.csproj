@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <LangVersion>13.0</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>GamerTool</AssemblyName>
+    <RootNamespace>GamerTool</RootNamespace>
+    <!-- Drop an app.ico into Resources\ and uncomment this to brand the exe:
+    <ApplicationIcon>Resources\app.ico</ApplicationIcon>
+    -->
+
+    <!-- Single-file, self-contained, AOT-friendly publish settings -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- GamerTool touches gamma ramps / audio / registry -> request admin once at launch
+         for the initial ACL + APO registration step; everything after that is user-mode. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WPF-UI" Version="3.0.5" />
+    <PackageReference Include="System.Text.Json" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Win32.Registry.AccessControl" Version="9.0.0" />
+  </ItemGroup>
+
+</Project>
