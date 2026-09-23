@@ -32,8 +32,13 @@ public static class EqualizerApoInstallerService
         "https://downloads.sourceforge.net/project/equalizerapo/1.4.2/EqualizerAPO-x64-1.4.2.exe";
 
     private const string EngineRegistryCheckKey = @"SOFTWARE\EqualizerAPO";
+    // Equalizer APO Post-Mix (GFX / EFX) CLSID — used for SFX/EFX install mode.
     private const string PostMixEfxClsid = "{EC1CC9CE-FAED-4822-828A-82A81A6F018F}";
-    private const string FxPropertiesEndpointEffectValueName = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},7";
+    // Property keys under FxProperties (PKEY_FX_*).
+    private const string FxStreamEffect = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},5";   // SFX
+    private const string FxModeEffect = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},6";     // MFX
+    private const string FxEndpointEffect = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},7"; // EFX
+    private const string FxPropertiesEndpointEffectValueName = FxEndpointEffect;
 
     public static string DefaultInstallDir =>
         Environment.ExpandEnvironmentVariables(@"%ProgramFiles%\EqualizerAPO");
@@ -111,43 +116,72 @@ public static class EqualizerApoInstallerService
                 Log("Equalizer APO engine already installed, skipping download/install.");
             }
 
-            string? endpointGuid = GetDefaultRenderEndpointGuid();
-            if (endpointGuid == null)
+            // Register on EVERY active playback device so speakers + headphones both
+            // get EQ without the user opening Configurator. Skip endpoints that
+            // already have a *different* third-party enhancement (don't stomp).
+            var devices = AudioDeviceService.EnumerateRenderDevices();
+            if (devices.Count == 0)
             {
-                Log("Could not resolve default playback device GUID; opening Configurator for manual selection.");
+                Log("No active render endpoints found; opening Configurator.");
                 LaunchConfiguratorElevated();
                 return SetupOutcome.DeviceAutoRegisterFailed_ConfiguratorOpened;
             }
 
-            var existing = ReadExistingEffectConfig(endpointGuid);
-            if (existing.HasOtherEffects)
-            {
-                Log($"Endpoint {endpointGuid} already has non-Equalizer-APO effects configured " +
-                    "(another audio enhancement tool is active) — not overwriting. Opening Configurator " +
-                    "so the user can decide.");
-                LaunchConfiguratorElevated();
-                return SetupOutcome.DeviceAlreadyHasOtherEffects_ConfiguratorOpened;
-            }
+            int registeredCount = 0;
+            int skippedOther = 0;
+            int alreadyOurs = 0;
+            int failed = 0;
 
-            if (existing.AlreadyHasEqualizerApo)
+            foreach (var dev in devices)
             {
-                Log($"Endpoint {endpointGuid} already has Equalizer APO registered. Nothing to do.");
-                RestartAudioService();
-                return SetupOutcome.AlreadyInstalled;
-            }
+                string? guid = ExtractEndpointGuid(dev.Id);
+                if (string.IsNullOrEmpty(guid))
+                {
+                    Log($"Skip device '{dev.FriendlyName}': could not parse endpoint GUID from {dev.Id}");
+                    failed++;
+                    continue;
+                }
 
-            Log($"Registering Equalizer APO EFX for endpoint {endpointGuid}...");
-            bool registered = TryRegisterEfxForEndpoint(endpointGuid);
-            if (!registered)
-            {
-                Log("Direct registry registration failed; opening Configurator for manual completion.");
-                LaunchConfiguratorElevated();
-                return SetupOutcome.DeviceAutoRegisterFailed_ConfiguratorOpened;
+                var existing = ReadExistingEffectConfig(guid);
+                if (existing.HasOtherEffects)
+                {
+                    Log($"Skip '{dev.FriendlyName}' ({guid}): other enhancements present.");
+                    skippedOther++;
+                    continue;
+                }
+                if (existing.AlreadyHasEqualizerApo)
+                {
+                    Log($"'{dev.FriendlyName}' already has Equalizer APO.");
+                    alreadyOurs++;
+                    registeredCount++;
+                    continue;
+                }
+
+                Log($"Registering Equalizer APO on '{dev.FriendlyName}' ({guid})...");
+                if (TryRegisterEfxForEndpoint(guid))
+                {
+                    registeredCount++;
+                    Log($"  OK: registered {guid}");
+                }
+                else
+                {
+                    failed++;
+                    Log($"  FAILED: registry write for {guid}");
+                }
             }
 
             RestartAudioService();
-            Log("Setup complete.");
-            return SetupOutcome.Success;
+            Log($"Done. registered/kept={registeredCount}, skippedOther={skippedOther}, failed={failed}");
+
+            if (registeredCount > 0)
+                return alreadyOurs == devices.Count && failed == 0 && skippedOther == 0
+                    ? SetupOutcome.AlreadyInstalled
+                    : SetupOutcome.Success;
+
+            // Nothing registered — fall back to official UI.
+            Log("No endpoints registered; opening Configurator for manual selection.");
+            LaunchConfiguratorElevated();
+            return SetupOutcome.DeviceAutoRegisterFailed_ConfiguratorOpened;
         }
         catch (Exception ex)
         {
@@ -308,16 +342,22 @@ public static class EqualizerApoInstallerService
     private static string? GetDefaultRenderEndpointGuid()
     {
         var devices = AudioDeviceService.EnumerateRenderDevices();
-        var defaultDevice = devices.Find(d => d.IsDefault);
-        string? endpointId = defaultDevice?.Id;
-        if (string.IsNullOrEmpty(endpointId)) return null;
+        var defaultDevice = devices.Find(d => d.IsDefault) ?? devices.FirstOrDefault();
+        return defaultDevice == null ? null : ExtractEndpointGuid(defaultDevice.Id);
+    }
 
-        // Endpoint IDs look like "{0.0.0.00000000}.{5D16E8DA-...}" — the
-        // GUID we need for the registry path is the segment after the last dot.
+    /// <summary>
+    /// Endpoint IDs look like "{0.0.0.00000000}.{5D16E8DA-...}" — registry
+    /// needs the segment after the last dot, including braces.
+    /// </summary>
+    private static string? ExtractEndpointGuid(string endpointId)
+    {
+        if (string.IsNullOrEmpty(endpointId)) return null;
         int lastDot = endpointId.LastIndexOf('.');
-        return lastDot >= 0 && lastDot < endpointId.Length - 1
-            ? endpointId[(lastDot + 1)..]
-            : null;
+        if (lastDot < 0 || lastDot >= endpointId.Length - 1) return null;
+        string guid = endpointId[(lastDot + 1)..];
+        if (!guid.StartsWith('{')) guid = "{" + guid.Trim('{', '}') + "}";
+        return guid;
     }
 
     private readonly record struct ExistingEffectConfig(bool AlreadyHasEqualizerApo, bool HasOtherEffects);
@@ -328,19 +368,29 @@ public static class EqualizerApoInstallerService
         using var key = Registry.LocalMachine.OpenSubKey(keyPath);
         if (key == null) return new ExistingEffectConfig(false, false);
 
-        object? efx = key.GetValue(FxPropertiesEndpointEffectValueName);
-        if (efx is string efxClsid)
+        string[] slots =
         {
-            bool isOurs = string.Equals(efxClsid.Trim(), PostMixEfxClsid, StringComparison.OrdinalIgnoreCase);
-            return new ExistingEffectConfig(isOurs, !isOurs);
+            FxStreamEffect, FxModeEffect, FxEndpointEffect,
+            "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1", // legacy LFX
+            "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},2", // legacy GFX
+        };
+
+        bool foundOurs = false;
+        bool foundOther = false;
+        foreach (string slot in slots)
+        {
+            if (key.GetValue(slot) is not string clsid || string.IsNullOrWhiteSpace(clsid))
+                continue;
+            if (string.Equals(clsid.Trim(), PostMixEfxClsid, StringComparison.OrdinalIgnoreCase))
+                foundOurs = true;
+            else
+                foundOther = true;
         }
 
-        // No EFX set, but check the legacy GFX slot too — some older driver
-        // configs still use it and we don't want to fight with them either.
-        object? gfx = key.GetValue(@"{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},2");
-        if (gfx is string gfxClsid && !string.IsNullOrWhiteSpace(gfxClsid))
-            return new ExistingEffectConfig(false, true);
-
+        // "Ours" wins if Equalizer APO is in any slot, even if OEM APO is also present
+        // (Equalizer APO is designed to chain). Only treat pure-other as HasOtherEffects.
+        if (foundOurs) return new ExistingEffectConfig(true, false);
+        if (foundOther) return new ExistingEffectConfig(false, true);
         return new ExistingEffectConfig(false, false);
     }
 
@@ -381,6 +431,10 @@ public static class EqualizerApoInstallerService
         using var key = Registry.LocalMachine.CreateSubKey(fxPropertiesPath, writable: true)
             ?? throw new InvalidOperationException($"Could not create/open {fxPropertiesPath}");
 
+        // SFX/EFX mode (preferred on Win10/11): put Equalizer APO in stream + endpoint slots.
+        key.SetValue(FxStreamEffect, PostMixEfxClsid, RegistryValueKind.String);
+        key.SetValue(FxEndpointEffect, PostMixEfxClsid, RegistryValueKind.String);
+        // Also set EFX under the name we used for detection.
         key.SetValue(FxPropertiesEndpointEffectValueName, PostMixEfxClsid, RegistryValueKind.String);
     }
 

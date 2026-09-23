@@ -342,26 +342,62 @@ public partial class MainWindow : Window
 
     private void RefreshOutputDevices()
     {
-        var devices = AudioDeviceService.EnumerateRenderDevices();
-        OutputDeviceCombo.Items.Clear();
-        OutputDeviceCombo.Items.Add("System Default");
+        try
+        {
+            // Detach so Clear/rebuild doesn't re-enter SelectionChanged and crash.
+            OutputDeviceCombo.SelectionChanged -= OutputDeviceCombo_SelectionChanged;
 
-        foreach (var d in devices)
-            OutputDeviceCombo.Items.Add(d.FriendlyName);
+            var devices = AudioDeviceService.EnumerateRenderDevices();
+            OutputDeviceCombo.Items.Clear();
 
-        OutputDeviceCombo.SelectedIndex = 0;
+            OutputDeviceCombo.Items.Add(new ComboBoxItem { Content = "System Default", Tag = null });
+
+            int selectIndex = 0;
+            for (int i = 0; i < devices.Count; i++)
+            {
+                var d = devices[i];
+                OutputDeviceCombo.Items.Add(new ComboBoxItem { Content = d.FriendlyName, Tag = d.Id });
+                if (d.IsDefault)
+                    selectIndex = i + 1;
+            }
+
+            OutputDeviceCombo.SelectedIndex = selectIndex;
+        }
+        catch
+        {
+            try
+            {
+                OutputDeviceCombo.Items.Clear();
+                OutputDeviceCombo.Items.Add(new ComboBoxItem { Content = "System Default", Tag = null });
+                OutputDeviceCombo.SelectedIndex = 0;
+            }
+            catch { /* last resort */ }
+        }
+        finally
+        {
+            OutputDeviceCombo.SelectionChanged += OutputDeviceCombo_SelectionChanged;
+        }
     }
 
     private void OutputDeviceCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        // Equalizer APO applies per-endpoint; full device-specific re-registration
-        // is out of scope here since it requires re-running the elevated installer
-        // targeted at a specific device GUID. We persist the friendly name choice
-        // so a future setup pass can use it.
-        if (OutputDeviceCombo.SelectedItem is string name)
+        try
         {
-            _settings.OutputDeviceId = name;
-            ProfileManager.Save(_settings);
+            // Persist choice. Re-run Enable / Repair EQ to attach APO to a new device.
+            if (OutputDeviceCombo.SelectedItem is ComboBoxItem item)
+            {
+                _settings.OutputDeviceId = item.Tag as string ?? item.Content?.ToString() ?? "";
+                ProfileManager.Save(_settings);
+            }
+            else if (OutputDeviceCombo.SelectedItem is string name)
+            {
+                _settings.OutputDeviceId = name;
+                ProfileManager.Save(_settings);
+            }
+        }
+        catch
+        {
+            // Never crash the UI over a settings write.
         }
     }
 
