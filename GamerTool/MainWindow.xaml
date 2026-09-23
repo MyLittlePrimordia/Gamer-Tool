@@ -65,19 +65,19 @@
                     <StackPanel Grid.Column="0" Margin="0,0,16,0">
                         <TextBlock Text="BRIGHTNESS" Foreground="#FF9AA0AC" FontSize="11" Margin="0,8,0,2" />
                         <Slider x:Name="BrightnessSlider" Style="{StaticResource HudSliderHorizontal}"
-                                Minimum="-0.3" Maximum="0.3" ValueChanged="DisplaySlider_ValueChanged" />
+                                Minimum="-0.3" Maximum="0.3" />
 
                         <TextBlock Text="CONTRAST" Foreground="#FF9AA0AC" FontSize="11" Margin="0,16,0,2" />
                         <Slider x:Name="ContrastSlider" Style="{StaticResource HudSliderHorizontal}"
-                                Minimum="0.5" Maximum="1.8" ValueChanged="DisplaySlider_ValueChanged" />
+                                Minimum="0.5" Maximum="1.8" />
 
                         <TextBlock Text="GAMMA" Foreground="#FF9AA0AC" FontSize="11" Margin="0,16,0,2" />
                         <Slider x:Name="GammaSlider" Style="{StaticResource HudSliderHorizontal}"
-                                Minimum="1.0" Maximum="3.2" ValueChanged="DisplaySlider_ValueChanged" />
+                                Minimum="1.0" Maximum="3.2" />
 
                         <TextBlock Text="BLACK EQUALIZER (SHADOW BOOST)" Foreground="#FF9AA0AC" FontSize="11" Margin="0,16,0,2" />
                         <Slider x:Name="ShadowBoostSlider" Style="{StaticResource HudSliderHorizontal}"
-                                Minimum="0" Maximum="100" ValueChanged="DisplaySlider_ValueChanged" />
+                                Minimum="0" Maximum="100" />
 
                         <TextBlock Text="RGB BALANCE" Foreground="#FF9AA0AC" FontSize="11" Margin="0,16,0,2" />
                         <Grid>
@@ -87,7 +87,7 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="R" Foreground="#FFFF6B6B" Grid.Column="0" VerticalAlignment="Center" />
                             <Slider x:Name="RedSlider" Grid.Column="1" Style="{StaticResource HudSliderHorizontal}"
-                                    Minimum="0" Maximum="1" ValueChanged="DisplaySlider_ValueChanged" />
+                                    Minimum="0" Maximum="1" />
                         </Grid>
                         <Grid Margin="0,4,0,0">
                             <Grid.ColumnDefinitions>
@@ -96,7 +96,7 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="G" Foreground="#FF6BFF8F" Grid.Column="0" VerticalAlignment="Center" />
                             <Slider x:Name="GreenSlider" Grid.Column="1" Style="{StaticResource HudSliderHorizontal}"
-                                    Minimum="0" Maximum="1" ValueChanged="DisplaySlider_ValueChanged" />
+                                    Minimum="0" Maximum="1" />
                         </Grid>
                         <Grid Margin="0,4,0,0">
                             <Grid.ColumnDefinitions>
@@ -105,7 +105,7 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="B" Foreground="#FF6BB8FF" Grid.Column="0" VerticalAlignment="Center" />
                             <Slider x:Name="BlueSlider" Grid.Column="1" Style="{StaticResource HudSliderHorizontal}"
-                                    Minimum="0" Maximum="1" ValueChanged="DisplaySlider_ValueChanged" />
+                                    Minimum="0" Maximum="1" />
                         </Grid>
 
                         <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
@@ -153,11 +153,10 @@
 
                         <TextBlock Text="PRE-AMP" Foreground="#FF9AA0AC" FontSize="11" Margin="0,20,0,2" />
                         <Slider x:Name="PreampSlider" Style="{StaticResource HudSliderHorizontal}"
-                                Minimum="-20" Maximum="15" ValueChanged="AudioControl_Changed" />
+                                Minimum="-20" Maximum="15" />
 
                         <CheckBox x:Name="AntiClipCheck" Content="Anti-Clipping / Auto-Limiter"
-                                  Foreground="White" Margin="0,12,0,0" Checked="AudioControl_Changed"
-                                  Unchecked="AudioControl_Changed" />
+                                  Foreground="White" Margin="0,12,0,0" />
 
                         <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
                             <Button Content="Save As New Preset" Click="SaveAudioPreset_Click" Padding="10,6" Margin="0,0,8,0" />

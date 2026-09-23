@@ -33,6 +33,18 @@ public partial class MainWindow : Window
         RefreshOutputDevices();
         RefreshEngineStatus();
 
+        // Attach event handlers after controls are fully initialized
+        BrightnessSlider.ValueChanged += DisplaySlider_ValueChanged;
+        ContrastSlider.ValueChanged += DisplaySlider_ValueChanged;
+        GammaSlider.ValueChanged += DisplaySlider_ValueChanged;
+        ShadowBoostSlider.ValueChanged += DisplaySlider_ValueChanged;
+        RedSlider.ValueChanged += DisplaySlider_ValueChanged;
+        GreenSlider.ValueChanged += DisplaySlider_ValueChanged;
+        BlueSlider.ValueChanged += DisplaySlider_ValueChanged;
+        PreampSlider.ValueChanged += AudioControl_Changed;
+        AntiClipCheck.Checked += AudioControl_Changed;
+        AntiClipCheck.Unchecked += AudioControl_Changed;
+
         // Restore last-applied state
         _currentDisplay = _settings.DisplayPresets.FirstOrDefault(p => p.Name == _settings.LastDisplayPreset)
                           ?? DisplayPreset.Daylight;
