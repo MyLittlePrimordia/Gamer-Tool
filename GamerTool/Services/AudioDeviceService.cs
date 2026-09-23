@@ -34,7 +34,8 @@ public static class AudioDeviceService
                 catch { /* no default device */ }
             }
 
-            using var collection = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
+            // MMDeviceCollection is NOT IDisposable in NAudio 2.2 — do not wrap in using.
+            var collection = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
             for (int i = 0; i < collection.Count; i++)
             {
                 try
