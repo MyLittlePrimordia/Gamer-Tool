@@ -268,20 +268,28 @@ public partial class MainWindow : Window
             EqualizerApoInstallerService.SetupOutcome.AlreadyInstalled =>
                 "Audio EQ was already set up. You're good to go.",
             EqualizerApoInstallerService.SetupOutcome.DownloadFailed =>
-                "Couldn't download Equalizer APO (check your internet connection) and no existing install was " +
-                "found. You can also install it yourself from sourceforge.net/projects/equalizerapo and click " +
-                "\"Enable Audio EQ\" again.",
+                "Couldn't download Equalizer APO automatically.\n\n" +
+                "Manual fix:\n" +
+                "1. Open https://sourceforge.net/projects/equalizerapo/files/latest/download\n" +
+                "2. Run EqualizerAPO-x64-….exe\n" +
+                "3. When Configurator opens, tick your speakers/headphones → OK\n" +
+                "4. Click Enable / Repair EQ here again.",
             EqualizerApoInstallerService.SetupOutcome.InstallFailed =>
-                "The Equalizer APO installer ran but setup couldn't confirm it installed correctly. Try running " +
-                "it manually, or check C:\\ProgramData\\GamerTool\\EQ\\setup.log for details.",
+                "Installer ran but EqualizerAPO.dll was not found afterward.\n\n" +
+                "Manual fix:\n" +
+                "1. Download https://sourceforge.net/projects/equalizerapo/files/latest/download\n" +
+                "2. Run the installer as Administrator\n" +
+                "3. Tick your playback device in Configurator → OK\n" +
+                "4. Click Enable / Repair EQ here again.\n\n" +
+                "Log: C:\\ProgramData\\GamerTool\\EQ\\setup.log",
             EqualizerApoInstallerService.SetupOutcome.DeviceAutoRegisterFailed_ConfiguratorOpened =>
-                "Equalizer APO is installed, but GamerTool couldn't automatically wire it to your playback " +
-                "device — Equalizer APO's own Configurator window should have opened. Just tick the box next " +
-                "to your device there (Install APO as SFX/EFX) and click OK.",
+                "Equalizer APO files are present, but it is not attached to your playback device yet.\n\n" +
+                "If Configurator opened: tick your speakers/headphones (SFX/EFX) → OK.\n\n" +
+                "If not, run:\nC:\\Program Files\\EqualizerAPO\\Configurator.exe\n" +
+                "tick your device, then click Enable / Repair EQ again.",
             EqualizerApoInstallerService.SetupOutcome.DeviceAlreadyHasOtherEffects_ConfiguratorOpened =>
-                "Your default playback device already has another audio enhancement tool configured, so " +
-                "GamerTool didn't override it. Equalizer APO's Configurator opened so you can decide how to " +
-                "combine or replace it.",
+                "Your default device already has another audio enhancement tool.\n" +
+                "Configurator opened so you can choose how to combine or replace it.",
             null =>
                 "Setup needs admin approval to install/configure Equalizer APO and grant the Windows audio " +
                 "service access to the EQ config folder. Without it, audio EQ can't run reliably.",

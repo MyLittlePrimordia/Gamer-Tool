@@ -26,10 +26,10 @@ namespace GamerTool.Services;
 /// </summary>
 public static class EqualizerApoInstallerService
 {
-    // SourceForge's "latest" redirector always resolves to the current
-    // Windows installer for this project, so we don't have to scrape a
-    // version number or hardcode a URL that goes stale.
+    // Primary: SourceForge "latest" redirect. Fallback: pinned 1.4.2 x64 direct path.
     private const string DownloadUrl = "https://sourceforge.net/projects/equalizerapo/files/latest/download";
+    private const string DownloadUrlFallback =
+        "https://downloads.sourceforge.net/project/equalizerapo/1.4.2/EqualizerAPO-x64-1.4.2.exe";
 
     private const string EngineRegistryCheckKey = @"SOFTWARE\EqualizerAPO";
     private const string PostMixEfxClsid = "{EC1CC9CE-FAED-4822-828A-82A81A6F018F}";
@@ -158,21 +158,49 @@ public static class EqualizerApoInstallerService
         }
     }
 
+    /// <summary>
+    /// True only when EqualizerAPO.dll is actually on disk.
+    /// A leftover HKLM\SOFTWARE\EqualizerAPO key (partial/failed install) used
+    /// to make this return true and skip the download — that is exactly the
+    /// bug the user hit. Always require the real DLL file.
+    /// </summary>
     public static bool IsEngineInstalled()
     {
-        using var key = Registry.LocalMachine.OpenSubKey(EngineRegistryCheckKey);
-        if (key != null) return true;
+        string[] candidateDlls =
+        {
+            Path.Combine(DefaultInstallDir, "EqualizerAPO.dll"),
+            Path.Combine(Environment.ExpandEnvironmentVariables(@"%ProgramFiles(x86)%\EqualizerAPO"), "EqualizerAPO.dll"),
+        };
+        foreach (string dll in candidateDlls)
+        {
+            if (File.Exists(dll))
+                return true;
+        }
 
-        // 32-bit installers get redirected away from the 64-bit registry view
-        // by WOW6432Node unless read with the right view explicitly — check
-        // both, since this exact gap is a known source of false negatives.
-        using var baseKey64 = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
-        using var key64 = baseKey64.OpenSubKey(EngineRegistryCheckKey);
-        if (key64 != null) return true;
+        // Registry InstallPath only counts if it points at a real DLL.
+        try
+        {
+            string? installPath = null;
+            using (var key = Registry.LocalMachine.OpenSubKey(EngineRegistryCheckKey))
+                installPath = key?.GetValue("InstallPath") as string;
 
-        using var baseKey32 = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry32);
-        using var key32 = baseKey32.OpenSubKey(EngineRegistryCheckKey);
-        return key32 != null;
+            if (string.IsNullOrEmpty(installPath))
+            {
+                using var baseKey64 = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+                using var key64 = baseKey64.OpenSubKey(EngineRegistryCheckKey);
+                installPath = key64?.GetValue("InstallPath") as string;
+            }
+
+            if (!string.IsNullOrEmpty(installPath))
+            {
+                string dll = Path.Combine(installPath, "EqualizerAPO.dll");
+                if (File.Exists(dll))
+                    return true;
+            }
+        }
+        catch { /* ignore */ }
+
+        return false;
     }
 
     /// <summary>
@@ -198,74 +226,71 @@ public static class EqualizerApoInstallerService
 
     private static string? DownloadInstaller()
     {
-        try
+        string tempPath = Path.Combine(Path.GetTempPath(), $"EqualizerAPO-Setup-{Guid.NewGuid():N}.exe");
+        string[] urls = { DownloadUrl, DownloadUrlFallback };
+
+        foreach (string url in urls)
         {
-            string tempPath = Path.Combine(Path.GetTempPath(), $"EqualizerAPO-Setup-{Guid.NewGuid():N}.exe");
-
-            using var http = new HttpClient
+            try
             {
-                Timeout = TimeSpan.FromMinutes(3)
-            };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("GamerTool/1.0");
+                using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+                http.DefaultRequestHeaders.UserAgent.ParseAdd(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GamerTool/1.0");
 
-            using var response = http.GetAsync(DownloadUrl, HttpCompletionOption.ResponseHeadersRead)
-                .GetAwaiter().GetResult();
-            response.EnsureSuccessStatusCode();
+                using var response = http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead)
+                    .GetAwaiter().GetResult();
+                if (!response.IsSuccessStatusCode) continue;
 
-            using (var fileStream = File.Create(tempPath))
-            using (var httpStream = response.Content.ReadAsStream())
-            {
-                httpStream.CopyTo(fileStream);
+                using (var fileStream = File.Create(tempPath))
+                using (var httpStream = response.Content.ReadAsStream())
+                    httpStream.CopyTo(fileStream);
+
+                var info = new FileInfo(tempPath);
+                // Real installer is several MB; reject HTML error pages / stubs.
+                if (info.Length < 1_000_000) { TryDeleteFile(tempPath); continue; }
+
+                byte[] header = new byte[2];
+                using (var fs = File.OpenRead(tempPath))
+                    fs.ReadExactly(header, 0, 2);
+                if (header[0] != 'M' || header[1] != 'Z') { TryDeleteFile(tempPath); continue; }
+
+                return tempPath;
             }
-
-            // Sanity checks: a real installer is a multi-MB PE executable.
-            // Anything smaller is almost certainly an error page or redirect
-            // stub, not the actual installer — bail rather than "installing" garbage.
-            var info = new FileInfo(tempPath);
-            if (info.Length < 500_000)
+            catch
             {
                 TryDeleteFile(tempPath);
-                return null;
             }
-
-            byte[] header = new byte[2];
-            using (var fs = File.OpenRead(tempPath))
-                fs.ReadExactly(header, 0, 2);
-            if (header[0] != 'M' || header[1] != 'Z') // PE header magic
-            {
-                TryDeleteFile(tempPath);
-                return null;
-            }
-
-            return tempPath;
         }
-        catch
-        {
-            return null;
-        }
+
+        return null;
     }
 
     private static bool SilentInstallEngine(string installerPath)
     {
         try
         {
+            // /S = NSIS silent. Already running elevated from the parent setup,
+            // so no extra UAC needed for the installer itself.
             var psi = new ProcessStartInfo(installerPath, "/S")
             {
-                UseShellExecute = false,
-                CreateNoWindow = true
+                UseShellExecute = true,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden
             };
             using var proc = Process.Start(psi);
             if (proc == null) return false;
 
-            // The NSIS installer's silent mode is normally quick, but give it
-            // a generous ceiling rather than hanging GamerTool's setup forever
-            // if something about the target machine makes it slow.
-            bool exited = proc.WaitForExit(120_000);
-            // Some successful NSIS silent installs still return non-zero.
-            // Treat "exited + engine now detectable" as success instead of
-            // trusting the exit code alone.
-            if (!exited) return false;
-            return IsEngineInstalled() || proc.ExitCode == 0;
+            // Allow up to 3 minutes — first-time extract + reg writes can be slow.
+            bool exited = proc.WaitForExit(180_000);
+            if (!exited)
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                return false;
+            }
+
+            // Give the filesystem a moment, then require the real DLL.
+            System.Threading.Thread.Sleep(1500);
+            return IsEngineInstalled();
         }
         catch
         {
