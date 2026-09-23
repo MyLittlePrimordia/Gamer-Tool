@@ -22,9 +22,9 @@
     <PublishReadyToRun>false</PublishReadyToRun>
     <InvariantGlobalization>true</InvariantGlobalization>
 
-    <!-- GamerTool touches gamma ramps / audio / registry -> request admin once at launch
-         for the initial ACL + APO registration step; everything after that is user-mode. -->
-    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Admin elevation is handled dynamically via Process.Start with "runas" verb
+         when needed (AudioService.RunElevatedSetup), avoiding manifest embedding issues
+         with PublishSingleFile. .NET 5+ WPF is DPI-aware by default. -->
   </PropertyGroup>
 
   <ItemGroup>

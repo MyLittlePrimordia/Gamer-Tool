@@ -25,6 +25,9 @@ public partial class App : Application
             return;
         }
 
+        // Capture the original display gamma ramp at startup so we can restore it later
+        DisplayService.CaptureOriginalRamp();
+
         base.OnStartup(e);
     }
 }

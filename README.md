@@ -3,122 +3,103 @@
 A portable Windows utility combining a driverless display-tuning engine
 (brightness/contrast/gamma/black-equalizer/RGB) with a system-wide 10-band
 audio EQ (via Equalizer APO), global hotkeys, and combo presets — built as a
-single self-contained `.exe` with no installer.
+single self-contained `.exe` with no traditional installer.
 
-## Why this won't mute your audio like the last attempt
+## Honest limitations (read this)
 
-The earlier failure happened because `audiodg.exe` (the Windows audio engine
-host) runs as `NT AUTHORITY\LOCAL SERVICE`, and the EQ config file lived
-somewhere LOCAL SERVICE couldn't read (`%APPDATA%`/`%USERPROFILE%`). When an
-APO can't read its config during the real-time audio callback, Windows mutes
-the device as a failsafe.
+**There is no pure user-mode way** to apply system-wide EQ on Windows 10/11
+without either:
+
+- An **Audio Processing Object (APO)** loaded into `audiodg.exe` (what this
+  app uses via Equalizer APO), or
+- A **signed virtual audio driver** (what FxSound uses).
+
+Microsoft requires the one-time admin step for APO registration. This app
+makes that step as seamless as possible: one UAC prompt, auto-download of
+Equalizer APO, auto-registration of your default playback device, and automatic
+wiring of the config file.
+
+Equalizer APO still works on Windows 11 24H2 (confirmed working as of
+September 2026). The common failure modes are ACLs, missing
+`DisableProtectedAudioDG`, and Windows updates detaching the APO — all of
+which this build addresses.
+
+## Why this won't mute your audio like earlier attempts
+
+The classic failure happens because `audiodg.exe` runs as
+`NT AUTHORITY\LOCAL SERVICE`. If the EQ config lives under `%USERPROFILE%` or
+`%APPDATA%`, LOCAL SERVICE gets Access Denied → the APO faults → Windows
+mutes the endpoint.
 
 This build fixes that at the root:
 
 - EQ config always lives at `C:\ProgramData\GamerTool\EQ\config.txt`.
-- On first use, GamerTool does a **one-time elevated setup** (`icacls`
-  granting `NT SERVICE\Audiosrv` and `LOCAL SERVICE` read+execute on that
-  folder) — see `Services/AudioService.cs`.
-- The app itself runs as a normal user at every other launch — it only
-  re-launches itself elevated (`--elevated-audio-setup`) for that one setup
-  step, and again briefly for `--elevated-panic-reset` if you hit the Panic
-  button (which also restarts `audiosrv` as a last resort).
-- Config writes go through a temp-file + replace so Equalizer APO's file
-  watcher never reads a half-written file.
+- On first "Enable Audio EQ", GamerTool does a **one-time elevated setup**
+  that:
+  1. Grants `NT SERVICE\Audiosrv` and `LOCAL SERVICE` read/execute on that
+     folder via `icacls`.
+  2. Sets `DisableProtectedAudioDG=1` (required for unsigned APOs).
+  3. Downloads + silently installs Equalizer APO if missing.
+  4. Registers the APO on the current default playback device.
+  5. Writes an `Include:` line into Equalizer APO's own `config.txt` so
+     live slider changes take effect.
+- The main app always runs as a normal user. It only re-launches itself
+  elevated for that one setup step (and briefly for Panic Reset).
+- Config writes go through a temp-file + replace so the file watcher never
+  sees a half-written file.
 
-Display tuning needs **no admin at all** — it's pure user-mode GDI
-(`SetDeviceGammaRamp`), so that tab works immediately on a fresh install.
+Display tuning needs **no admin at all** — pure user-mode GDI
+(`SetDeviceGammaRamp`). The original gamma ramp is captured at startup and
+restored on exit / Reset.
 
-## Audio engine setup — now fully automated
+## How to use
 
-Clicking **"Enable Audio EQ"** now does everything in one elevated pass
-(`Services/EqualizerApoInstallerService.cs`):
-
-1. Checks whether Equalizer APO is already installed (checking both the
-   64-bit and WOW6432Node registry views, since 32-bit installers get
-   silently redirected there).
-2. If missing, downloads the current Windows installer from SourceForge's
-   stable `files/latest/download` redirector and sanity-checks it (size +
-   PE header) before running it.
-3. Silently installs the engine (`Setup.exe /S`).
-4. Resolves your current default playback device's endpoint GUID and writes
-   the `FxProperties` registry entry (`PKEY_FX_EndpointEffectClsid` →
-   Equalizer APO's Post-Mix CLSID) that Configurator.exe's checkbox would
-   otherwise write — this is the same live audio-engine key documented at
-   https://github.com/dechamps/APO.
-5. That key's parent (`MMDevices\Audio\...`) is owned by `TrustedInstaller`,
-   so even an elevated admin can't create `FxProperties` on a device that's
-   never had one. `Services/RegistryOwnershipHelper.cs` scripts the same
-   ownership-transfer regedit normally requires (`SeTakeOwnershipPrivilege`
-   + reassigning to Administrators), scoped to just that one device's key.
-6. Restarts `audiosrv` so the change takes effect.
-
-**Built-in safety backstops**, because guessing wrong here is exactly the
-failure mode this whole project exists to avoid:
-
-- If your default device already has a *different* effect configured (i.e.
-  you're already running some other audio enhancement tool), GamerTool does
-  **not** overwrite it — it opens Equalizer APO's own Configurator instead
-  so you can decide.
-- If the automatic registry write fails for any other reason, same
-  fallback: Configurator opens, elevated, so you can finish with an official
-  checkbox instead of GamerTool guessing further.
-- Every step is logged to `C:\ProgramData\GamerTool\EQ\setup.log`.
-- `EqualizerApoInstallerService.UnregisterEfxForEndpoint(guid)` cleanly
-  removes just GamerTool's registration if you ever want to back out,
-  without touching anything else on the device.
-
-No separate manual Equalizer APO install is required anymore — that was
-the old flow, now superseded by the above.
+1. Launch `GamerTool.exe`.
+2. Display tab works immediately.
+3. On the Audio tab click **Enable Audio EQ** (one UAC prompt).
+4. After setup completes, move the 10-band sliders — changes apply
+   system-wide within ~1 second.
+5. Use **Panic / Reset Audio** if anything ever goes wrong (writes flat
+   config + restarts the Windows Audio service).
 
 ## Build
 
 ```powershell
-dotnet publish GamerTool/GamerTool.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o ./publish
+dotnet publish GamerTool/GamerTool.csproj -c Release -r win-x64 --self-contained true `
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+  -p:EnableCompressionInSingleFile=true -o ./publish
 ```
 
-Or just push to `main` — `.github/workflows/build.yml` does this on
-`windows-latest` and uploads `GamerTool.exe` as a build artifact.
+Or push to `main` — `.github/workflows/build.yml` builds on `windows-latest`
+and uploads `GamerTool.exe` as an artifact.
 
 ## Project layout
 
 ```
 GamerTool/
-├── GamerTool.csproj        .NET 9 WPF, single-file publish settings
-├── app.manifest             asInvoker (no forced UAC at launch)
-├── App.xaml / App.xaml.cs   routes elevated-helper relaunches, no window for those
-├── MainWindow.xaml(.cs)     Display / Audio / Hotkeys tabs
-├── Models/                  DisplayPreset, AudioPreset, ComboPreset, HotkeyBinding, AppSettings
+├── GamerTool.csproj
+├── App.xaml / App.xaml.cs          routes elevated helper flags, captures original gamma
+├── MainWindow.xaml(.cs)            Display / Audio / Hotkeys tabs + restore gamma on close
+├── Models/
 ├── Services/
-│   ├── DisplayService.cs     GDI gamma ramp + black-equalizer math
-│   ├── FocusWatcher.cs       re-asserts gamma ramp for fullscreen-exclusive games
-│   ├── AudioService.cs       Equalizer APO config writer, ACL fix, elevated setup entry point, panic reset
-│   ├── EqualizerApoInstallerService.cs  downloads/installs Equalizer APO, registers it per device
-│   ├── RegistryOwnershipHelper.cs       scripted TrustedInstaller ownership takeover for MMDevices keys
-│   ├── AudioDeviceService.cs WASAPI render-endpoint enumeration (COM interop)
-│   ├── HotkeyService.cs     Win32 RegisterHotKey wrapper
-│   └── ProfileManager.cs    JSON persistence under %AppData%\GamerTool
+│   ├── DisplayService.cs           GDI gamma ramp + black-equalizer + original-ramp restore
+│   ├── FocusWatcher.cs             re-asserts gamma for fullscreen-exclusive games
+│   ├── AudioService.cs             config writer, ACLs, Include wiring, elevated entry points
+│   ├── EqualizerApoInstallerService.cs  download/install/register + DisableProtectedAudioDG
+│   ├── RegistryOwnershipHelper.cs  TrustedInstaller ownership takeover for MMDevices
+│   ├── AudioDeviceService.cs       WASAPI endpoint enumeration
+│   ├── HotkeyService.cs
+│   └── ProfileManager.cs
 └── UI/
-    ├── OsdNotification.xaml(.cs)     click-through in-game HUD toast
-    ├── HotkeyCaptureWindow.xaml(.cs) key-combo recorder
-    ├── InputDialog.xaml(.cs)         name-entry modal
-    ├── CustomSliders.xaml            EQ band + HUD slider styles
-    └── Converters.cs
 ```
 
-## Known gaps / next steps
+## Known gaps
 
-- Equalizer APO's installer is unsigned, so there's no official checksum to
-  verify the download against — GamerTool only sanity-checks size + PE
-  header, not authenticity. If that matters for your threat model, install
-  Equalizer APO yourself first (GamerTool detects and skips re-installing).
-- Multi-device setups: auto-registration only targets whatever is the
-  *default* playback device at the moment "Enable Audio EQ" is clicked. If
-  you switch default devices later, click the button again (it's a no-op if
-  that device is already registered).
-- No code-signing on GamerTool.exe itself — Windows SmartScreen will warn on
-  first run of an unsigned exe from an unknown publisher. That's expected
-  for a self-published tool and isn't a bug.
-- `UnregisterEfxForEndpoint()` exists as a clean-removal API but isn't wired
-  to a UI button yet — worth adding an "Uninstall Audio Engine" action if
-  you want a full undo path from within the app.
+- Multi-device: auto-registration targets the *default* playback device at the
+  moment you click Enable. Switch default later → click Enable again.
+- No code-signing on GamerTool.exe → SmartScreen warning on first run (normal
+  for self-published tools).
+- After major Windows feature updates the APO can detach. Click Enable again
+  or open Configurator and re-tick the device.
+- An "Uninstall Audio Engine" UI button is not yet wired (the API exists:
+  `EqualizerApoInstallerService.UnregisterEfxForEndpoint`).

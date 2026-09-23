@@ -67,6 +67,19 @@ public static class EqualizerApoInstallerService
 
         try
         {
+            // Required for any unsigned APO (including Equalizer APO).
+            try
+            {
+                using var audioKey = Registry.LocalMachine.CreateSubKey(
+                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Audio", writable: true);
+                audioKey?.SetValue("DisableProtectedAudioDG", 1, RegistryValueKind.DWord);
+                Log("DisableProtectedAudioDG set to 1.");
+            }
+            catch (Exception ex)
+            {
+                Log($"Could not set DisableProtectedAudioDG: {ex.Message}");
+            }
+
             if (!IsEngineInstalled())
             {
                 Log("Equalizer APO not found, downloading installer...");
@@ -227,7 +240,11 @@ public static class EqualizerApoInstallerService
             // a generous ceiling rather than hanging GamerTool's setup forever
             // if something about the target machine makes it slow.
             bool exited = proc.WaitForExit(120_000);
-            return exited && proc.ExitCode == 0;
+            // Some successful NSIS silent installs still return non-zero.
+            // Treat "exited + engine now detectable" as success instead of
+            // trusting the exit code alone.
+            if (!exited) return false;
+            return IsEngineInstalled() || proc.ExitCode == 0;
         }
         catch
         {
