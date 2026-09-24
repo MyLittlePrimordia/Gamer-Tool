@@ -5,6 +5,8 @@ namespace GamerTool;
 
 public partial class App : Application
 {
+    public const string ElevatedCableSetupArg = "--elevated-cable-setup";
+
     protected override void OnStartup(StartupEventArgs e)
     {
         // Handle re-launches with an elevated helper flag: these runs do their
@@ -25,8 +27,15 @@ public partial class App : Application
             return;
         }
 
-        // Capture the original display gamma ramp at startup so we can restore it later
-        DisplayService.CaptureOriginalRamp();
+        if (e.Args.Contains(ElevatedCableSetupArg))
+        {
+            string logPath = System.IO.Path.Combine(
+                Environment.ExpandEnvironmentVariables(@"%ProgramData%\GamerTool"), "cable-setup.log");
+            try { System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(logPath)!); } catch { }
+            var outcome = VirtualCableInstallerService.RunFullSetup(logPath);
+            Shutdown((int)outcome);
+            return;
+        }
 
         base.OnStartup(e);
     }

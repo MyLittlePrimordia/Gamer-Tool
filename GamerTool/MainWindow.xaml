@@ -43,14 +43,8 @@
             </StackPanel>
 
             <StackPanel Grid.Column="1" Orientation="Horizontal">
-                <Border Width="220" Margin="0,0,8,0" Background="#FF1A1A1A" BorderBrush="#FF333333"
-                        BorderThickness="1" CornerRadius="4" Padding="10,6"
-                        ToolTip="EQ applies to all devices registered during Enable / Repair EQ. Change Windows default output to switch speakers/headphones.">
-                    <TextBlock Text="System Default" Foreground="#FFCCCCCC" VerticalAlignment="Center"/>
-                </Border>
-                <Button Content="Enable / Repair EQ"
-                        Click="EnableAudioEq_Click" Padding="10,4" Margin="0,0,8,0"
-                        ToolTip="Installs Equalizer APO if needed and registers it on your default playback device (one UAC prompt)" />
+                <ComboBox x:Name="OutputDeviceCombo" Width="220" Margin="0,0,8,0"
+                          SelectionChanged="OutputDeviceCombo_SelectionChanged" />
                 <Button x:Name="PanicButton" Content="⚠ Panic / Reset Audio"
                         Click="PanicButton_Click" Padding="10,4"
                         Background="#FF3A1414" Foreground="#FFFF8080" BorderThickness="0" />
@@ -71,19 +65,19 @@
                     <StackPanel Grid.Column="0" Margin="0,0,16,0">
                         <TextBlock Text="BRIGHTNESS" Foreground="#FF9AA0AC" FontSize="11" Margin="0,8,0,2" />
                         <Slider x:Name="BrightnessSlider" Style="{StaticResource HudSliderHorizontal}"
-                                Minimum="-0.3" Maximum="0.3" />
+                                Minimum="-0.3" Maximum="0.3" ValueChanged="DisplaySlider_ValueChanged" />
 
                         <TextBlock Text="CONTRAST" Foreground="#FF9AA0AC" FontSize="11" Margin="0,16,0,2" />
                         <Slider x:Name="ContrastSlider" Style="{StaticResource HudSliderHorizontal}"
-                                Minimum="0.5" Maximum="1.8" />
+                                Minimum="0.5" Maximum="1.8" ValueChanged="DisplaySlider_ValueChanged" />
 
                         <TextBlock Text="GAMMA" Foreground="#FF9AA0AC" FontSize="11" Margin="0,16,0,2" />
                         <Slider x:Name="GammaSlider" Style="{StaticResource HudSliderHorizontal}"
-                                Minimum="1.0" Maximum="3.2" />
+                                Minimum="1.0" Maximum="3.2" ValueChanged="DisplaySlider_ValueChanged" />
 
                         <TextBlock Text="BLACK EQUALIZER (SHADOW BOOST)" Foreground="#FF9AA0AC" FontSize="11" Margin="0,16,0,2" />
                         <Slider x:Name="ShadowBoostSlider" Style="{StaticResource HudSliderHorizontal}"
-                                Minimum="0" Maximum="100" />
+                                Minimum="0" Maximum="100" ValueChanged="DisplaySlider_ValueChanged" />
 
                         <TextBlock Text="RGB BALANCE" Foreground="#FF9AA0AC" FontSize="11" Margin="0,16,0,2" />
                         <Grid>
@@ -93,7 +87,7 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="R" Foreground="#FFFF6B6B" Grid.Column="0" VerticalAlignment="Center" />
                             <Slider x:Name="RedSlider" Grid.Column="1" Style="{StaticResource HudSliderHorizontal}"
-                                    Minimum="0" Maximum="1" />
+                                    Minimum="0" Maximum="1" ValueChanged="DisplaySlider_ValueChanged" />
                         </Grid>
                         <Grid Margin="0,4,0,0">
                             <Grid.ColumnDefinitions>
@@ -102,7 +96,7 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="G" Foreground="#FF6BFF8F" Grid.Column="0" VerticalAlignment="Center" />
                             <Slider x:Name="GreenSlider" Grid.Column="1" Style="{StaticResource HudSliderHorizontal}"
-                                    Minimum="0" Maximum="1" />
+                                    Minimum="0" Maximum="1" ValueChanged="DisplaySlider_ValueChanged" />
                         </Grid>
                         <Grid Margin="0,4,0,0">
                             <Grid.ColumnDefinitions>
@@ -111,7 +105,7 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="B" Foreground="#FF6BB8FF" Grid.Column="0" VerticalAlignment="Center" />
                             <Slider x:Name="BlueSlider" Grid.Column="1" Style="{StaticResource HudSliderHorizontal}"
-                                    Minimum="0" Maximum="1" />
+                                    Minimum="0" Maximum="1" ValueChanged="DisplaySlider_ValueChanged" />
                         </Grid>
 
                         <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
@@ -142,11 +136,9 @@
                                 BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,4,16,12"
                                 Visibility="Collapsed">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock x:Name="EnableAudioBannerText"
-                                           Text="Audio EQ isn't active on your playback device. Click to install/register (one UAC prompt)."
-                                           Foreground="#FFE0C258" VerticalAlignment="Center"
-                                           TextWrapping="Wrap" MaxWidth="420" />
-                                <Button Content="Enable / Repair Audio EQ" Margin="12,0,0,0" Padding="10,4"
+                                <TextBlock Text="Audio EQ isn't set up yet. One-time admin step needed."
+                                           Foreground="#FFE0C258" VerticalAlignment="Center" />
+                                <Button Content="Enable Audio EQ" Margin="12,0,0,0" Padding="10,4"
                                         Click="EnableAudioEq_Click" />
                             </StackPanel>
                         </Border>
@@ -161,10 +153,11 @@
 
                         <TextBlock Text="PRE-AMP" Foreground="#FF9AA0AC" FontSize="11" Margin="0,20,0,2" />
                         <Slider x:Name="PreampSlider" Style="{StaticResource HudSliderHorizontal}"
-                                Minimum="-20" Maximum="15" />
+                                Minimum="-20" Maximum="15" ValueChanged="AudioControl_Changed" />
 
                         <CheckBox x:Name="AntiClipCheck" Content="Anti-Clipping / Auto-Limiter"
-                                  Foreground="White" Margin="0,12,0,0" />
+                                  Foreground="White" Margin="0,12,0,0" Checked="AudioControl_Changed"
+                                  Unchecked="AudioControl_Changed" />
 
                         <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
                             <Button Content="Save As New Preset" Click="SaveAudioPreset_Click" Padding="10,6" Margin="0,0,8,0" />

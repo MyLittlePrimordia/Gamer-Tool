@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using GamerTool.Models;
 using GamerTool.Services;
+using GamerTool.Services.AudioBridge;
 using GamerTool.UI;
 
 namespace GamerTool;
@@ -30,19 +31,8 @@ public partial class MainWindow : Window
 
         BuildBandSliders();
         RefreshPresetLists();
+        RefreshOutputDevices();
         RefreshEngineStatus();
-
-        // Attach event handlers after controls are fully initialized
-        BrightnessSlider.ValueChanged += DisplaySlider_ValueChanged;
-        ContrastSlider.ValueChanged += DisplaySlider_ValueChanged;
-        GammaSlider.ValueChanged += DisplaySlider_ValueChanged;
-        ShadowBoostSlider.ValueChanged += DisplaySlider_ValueChanged;
-        RedSlider.ValueChanged += DisplaySlider_ValueChanged;
-        GreenSlider.ValueChanged += DisplaySlider_ValueChanged;
-        BlueSlider.ValueChanged += DisplaySlider_ValueChanged;
-        PreampSlider.ValueChanged += AudioControl_Changed;
-        AntiClipCheck.Checked += AudioControl_Changed;
-        AntiClipCheck.Unchecked += AudioControl_Changed;
 
         // Restore last-applied state
         _currentDisplay = _settings.DisplayPresets.FirstOrDefault(p => p.Name == _settings.LastDisplayPreset)
@@ -53,10 +43,18 @@ public partial class MainWindow : Window
         LoadDisplayIntoControls(_currentDisplay);
         LoadAudioIntoControls(_currentAudio);
         ApplyCurrentDisplay();
-        // Audio isn't force-applied at startup unless the engine is already ready,
-        // so we never trip the "engine not set up" exception on a fresh install.
-        if (AudioService.IsEngineReady())
-            TryApplyCurrentAudio();
+
+        // Startup self-heal: if BridgeActive is still true from a previous
+        // session, GamerTool didn't shut down cleanly last time (crash, task
+        // kill, power loss). That means Windows' default playback device may
+        // still be pointed at the virtual cable with nothing running to
+        // bridge it onward — i.e. silent system-wide audio. Fix it before
+        // the user even notices, the same way Panic Reset would.
+        if (_settings.BridgeActive)
+        {
+            StopBridgeAndRestoreDevice();
+            RefreshEngineStatus();
+        }
 
         _focusWatcher = new FocusWatcher();
         _focusWatcher.Start();
@@ -208,20 +206,9 @@ public partial class MainWindow : Window
 
     private void TryApplyCurrentAudio()
     {
-        try
-        {
-            AudioService.ApplyPreset(_currentAudio);
-            _settings.LastAudioPreset = _currentAudio.Name;
-            ProfileManager.Save(_settings);
-        }
-        catch (InvalidOperationException)
-        {
-            // Engine not ready yet; the banner already tells the user what to do.
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, ex.Message, "Audio", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
+        AudioBridgeService.ApplyPreset(_currentAudio);
+        _settings.LastAudioPreset = _currentAudio.Name;
+        ProfileManager.Save(_settings);
     }
 
     private void SaveAudioPreset_Click(object sender, RoutedEventArgs e)
@@ -255,90 +242,158 @@ public partial class MainWindow : Window
 
     private void EnableAudioEq_Click(object sender, RoutedEventArgs e)
     {
-        EngineStatusText.Text = "Audio Engine: setting up (check for a UAC prompt)...";
+        EngineStatusText.Text = "Audio Engine: checking...";
 
-        var outcome = AudioService.RunElevatedSetup();
-        RefreshEngineStatus();
-
-        string message = outcome switch
+        var cableInput = AudioBridgeService.FindVirtualCableInput();
+        if (cableInput == null)
         {
-            EqualizerApoInstallerService.SetupOutcome.Success =>
-                "Audio EQ is ready — Equalizer APO was installed and registered for your default playback device.",
-            EqualizerApoInstallerService.SetupOutcome.AlreadyInstalled =>
-                "Audio EQ was already set up. You're good to go.",
-            EqualizerApoInstallerService.SetupOutcome.DownloadFailed =>
-                "Couldn't download Equalizer APO automatically.\n\n" +
-                "Manual fix:\n" +
-                "1. Open https://sourceforge.net/projects/equalizerapo/files/latest/download\n" +
-                "2. Run EqualizerAPO-x64-….exe\n" +
-                "3. When Configurator opens, tick your speakers/headphones → OK\n" +
-                "4. Click Enable / Repair EQ here again.",
-            EqualizerApoInstallerService.SetupOutcome.InstallFailed =>
-                "Installer ran but EqualizerAPO.dll was not found afterward.\n\n" +
-                "Manual fix:\n" +
-                "1. Download https://sourceforge.net/projects/equalizerapo/files/latest/download\n" +
-                "2. Run the installer as Administrator\n" +
-                "3. Tick your playback device in Configurator → OK\n" +
-                "4. Click Enable / Repair EQ here again.\n\n" +
-                "Log: C:\\ProgramData\\GamerTool\\EQ\\setup.log",
-            EqualizerApoInstallerService.SetupOutcome.DeviceAutoRegisterFailed_ConfiguratorOpened =>
-                "Equalizer APO files are present, but it is not attached to your playback device yet.\n\n" +
-                "If Configurator opened: tick your speakers/headphones (SFX/EFX) → OK.\n\n" +
-                "If not, run:\nC:\\Program Files\\EqualizerAPO\\Configurator.exe\n" +
-                "tick your device, then click Enable / Repair EQ again.",
-            EqualizerApoInstallerService.SetupOutcome.DeviceAlreadyHasOtherEffects_ConfiguratorOpened =>
-                "Your default device already has another audio enhancement tool.\n" +
-                "Configurator opened so you can choose how to combine or replace it.",
-            null =>
-                "Setup needs admin approval to install/configure Equalizer APO and grant the Windows audio " +
-                "service access to the EQ config folder. Without it, audio EQ can't run reliably.",
-            _ => "Setup finished with an unexpected result."
-        };
+            EngineStatusText.Text = "Audio Engine: installing virtual cable (check for a UAC prompt)...";
+            var setupOutcome = VirtualCableInstallerService.RunElevated();
 
-        MessageBox.Show(this, message, "Audio Engine", MessageBoxButton.OK,
-            outcome == EqualizerApoInstallerService.SetupOutcome.Success ||
-            outcome == EqualizerApoInstallerService.SetupOutcome.AlreadyInstalled
-                ? MessageBoxImage.Information
-                : MessageBoxImage.Warning);
+            string setupMessage = setupOutcome switch
+            {
+                VirtualCableInstallerService.SetupOutcome.Success or
+                VirtualCableInstallerService.SetupOutcome.AlreadyInstalled =>
+                    "Virtual cable installed.",
+                VirtualCableInstallerService.SetupOutcome.InstalledButRebootRequired =>
+                    "VB-CABLE installed, but Windows needs a reboot before the new audio device is fully " +
+                    "registered. Please restart your PC, then click \"Enable Audio EQ\" again.",
+                VirtualCableInstallerService.SetupOutcome.DownloadFailed =>
+                    "Couldn't download the VB-CABLE driver (check your internet connection). You can install it " +
+                    "yourself from vb-audio.com/Cable and click \"Enable Audio EQ\" again.",
+                VirtualCableInstallerService.SetupOutcome.ChecksumMismatch_Aborted =>
+                    "The downloaded VB-CABLE installer didn't match its expected checksum, so GamerTool refused " +
+                    "to run it for safety. Please install VB-CABLE yourself from vb-audio.com/Cable and click " +
+                    "\"Enable Audio EQ\" again.",
+                VirtualCableInstallerService.SetupOutcome.InstallFailed =>
+                    "VB-CABLE's installer ran but setup couldn't confirm it worked. Check " +
+                    "C:\\ProgramData\\GamerTool\\cable-setup.log for details, or install it manually.",
+                null =>
+                    "Setup needs admin approval to install the virtual audio driver the Bridge routes through.",
+                _ => "Setup finished with an unexpected result."
+            };
 
-        if (outcome is EqualizerApoInstallerService.SetupOutcome.Success or
-            EqualizerApoInstallerService.SetupOutcome.AlreadyInstalled)
-        {
-            TryApplyCurrentAudio();
+            RefreshEngineStatus();
+
+            if (setupOutcome is not (VirtualCableInstallerService.SetupOutcome.Success or
+                VirtualCableInstallerService.SetupOutcome.AlreadyInstalled))
+            {
+                MessageBox.Show(this, setupMessage, "Audio Engine", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            cableInput = AudioBridgeService.FindVirtualCableInput();
+            if (cableInput == null)
+            {
+                MessageBox.Show(this,
+                    "VB-CABLE reported success but GamerTool still can't find the device — a reboot may be " +
+                    "needed before it's fully registered. Restart your PC and try again.",
+                    "Audio Engine", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
         }
+
+        StartBridge(cableInput);
+        RefreshEngineStatus();
+    }
+
+    /// <summary>Remembers the current real device, switches Windows default
+    /// output to the virtual cable, and starts the capture/EQ/render
+    /// pipeline. Centralized here so both the manual button and the startup
+    /// self-heal path share the exact same sequencing.</summary>
+    private void StartBridge(NAudio.CoreAudioApi.MMDevice cableInput)
+    {
+        var realDevice = AudioBridgeService.GetCurrentDefaultRenderDevice();
+
+        // Don't redirect through ourselves if the cable is somehow already default.
+        if (realDevice.ID == cableInput.ID)
+        {
+            MessageBox.Show(this,
+                "Your default playback device is currently the virtual cable itself, which means GamerTool " +
+                "can't tell what your real speakers/headphones are. Set your real device as default in Windows " +
+                "Sound Settings first, then click \"Enable Audio EQ\" again.",
+                "Audio Engine", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        _settings.BridgeRealDeviceName = realDevice.FriendlyName;
+        ProfileManager.Save(_settings);
+
+        bool switched = DefaultDeviceService.SetDefaultPlaybackDevice(cableInput.ID);
+        if (!switched)
+        {
+            MessageBox.Show(this,
+                "GamerTool couldn't switch your default playback device to the virtual cable, so audio EQ " +
+                "can't run. Nothing else has changed — your normal audio is unaffected.",
+                "Audio Engine", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        AudioBridgeService.Start(cableInput, realDevice, _currentAudio);
+
+        _settings.BridgeActive = true;
+        ProfileManager.Save(_settings);
+    }
+
+    /// <summary>The inverse of StartBridge: stops the pipeline and switches
+    /// the default device back to the real one. Used by Panic Reset, clean
+    /// shutdown, and the startup self-heal check.</summary>
+    private void StopBridgeAndRestoreDevice()
+    {
+        AudioBridgeService.Stop();
+
+        var cableId = DefaultDeviceService.FindPlaybackDeviceIdByNameContains(
+            AudioBridgeService.VirtualCableInputNameHint);
+        var currentDefaultId = DefaultDeviceService.GetDefaultPlaybackDeviceId();
+
+        // Only switch back if the cable is actually still default — avoids
+        // clobbering a device change the user made themselves in the meantime.
+        if (cableId != null && currentDefaultId == cableId &&
+            !string.IsNullOrEmpty(_settings.BridgeRealDeviceName))
+        {
+            var realId = DefaultDeviceService.FindPlaybackDeviceIdByNameContains(
+                _settings.BridgeRealDeviceName);
+            if (realId != null)
+                DefaultDeviceService.SetDefaultPlaybackDevice(realId.Value);
+        }
+
+        _settings.BridgeActive = false;
+        ProfileManager.Save(_settings);
     }
 
     private void RefreshEngineStatus()
     {
-        bool installed = EqualizerApoInstallerService.IsEngineInstalled();
-        bool registered = EqualizerApoInstallerService.IsApoRegisteredOnDefaultDevice();
-        bool ready = AudioService.IsEngineReady();
-
-        if (ready)
-        {
-            EngineStatusText.Text = "Audio Engine: Ready";
-            EngineStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(0x4A, 0xDE, 0x80));
-            EnableAudioBanner.Visibility = Visibility.Collapsed;
-        }
-        else if (installed && !registered)
-        {
-            EngineStatusText.Text = "Audio Engine: Installed but NOT on your device";
-            EngineStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(0xF5, 0xA6, 0x23));
-            EnableAudioBanner.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            EngineStatusText.Text = "Audio Engine: Setup Required";
-            EngineStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(0x9A, 0xA0, 0xAC));
-            EnableAudioBanner.Visibility = Visibility.Visible;
-        }
+        bool running = AudioBridgeService.IsRunning;
+        EngineStatusText.Text = running ? "Audio Engine: Bridge Active" : "Audio Engine: Off";
+        EnableAudioBanner.Visibility = running ? Visibility.Collapsed : Visibility.Visible;
     }
 
     // ============================ OUTPUT DEVICE =============================
 
+    private void RefreshOutputDevices()
+    {
+        var devices = AudioDeviceService.EnumerateRenderDevices();
+        OutputDeviceCombo.Items.Clear();
+        OutputDeviceCombo.Items.Add("System Default");
+
+        foreach (var d in devices)
+            OutputDeviceCombo.Items.Add(d.FriendlyName);
+
+        OutputDeviceCombo.SelectedIndex = 0;
+    }
+
+    private void OutputDeviceCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // Equalizer APO applies per-endpoint; full device-specific re-registration
+        // is out of scope here since it requires re-running the elevated installer
+        // targeted at a specific device GUID. We persist the friendly name choice
+        // so a future setup pass can use it.
+        if (OutputDeviceCombo.SelectedItem is string name)
+        {
+            _settings.OutputDeviceId = name;
+            ProfileManager.Save(_settings);
+        }
+    }
 
     // ============================== HOTKEYS TAB ==============================
 
@@ -468,7 +523,7 @@ public partial class MainWindow : Window
                 break;
 
             case BindingAction.PanicReset:
-                AudioService.PanicReset();
+                StopBridgeAndRestoreDevice();
                 ShowOsd("Audio Reset");
                 break;
         }
@@ -502,7 +557,7 @@ public partial class MainWindow : Window
 
     private void PanicButton_Click(object sender, RoutedEventArgs e)
     {
-        AudioService.PanicReset();
+        StopBridgeAndRestoreDevice();
         ShowOsd("Audio Reset");
         RefreshEngineStatus();
     }
@@ -511,11 +566,11 @@ public partial class MainWindow : Window
 
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        if (AudioBridgeService.IsRunning)
+            StopBridgeAndRestoreDevice();
+
         ProfileManager.Save(_settings);
         _focusWatcher?.Dispose();
         _hotkeyService.Dispose();
-        // Always restore the original Windows gamma ramp on exit so the
-        // user is never left with a permanent tint / brightness change.
-        DisplayService.ResetToIdentity();
     }
 }

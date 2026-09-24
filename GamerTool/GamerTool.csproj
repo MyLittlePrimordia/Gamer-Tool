@@ -22,17 +22,38 @@
     <PublishReadyToRun>false</PublishReadyToRun>
     <InvariantGlobalization>true</InvariantGlobalization>
 
-    <!-- Admin elevation is handled dynamically via Process.Start with "runas" verb
-         when needed (AudioService.RunElevatedSetup), avoiding manifest embedding issues
-         with PublishSingleFile. .NET 5+ WPF is DPI-aware by default. -->
+    <!-- No custom ApplicationManifest here on purpose. A hand-written manifest
+         embedded via PublishSingleFile is what caused
+         "side-by-side configuration is incorrect" on launch — the SxS loader
+         couldn't parse the merged manifest resource. We don't actually need
+         one: .NET 5+ WPF apps are Per-Monitor-V2 DPI aware BY DEFAULT with no
+         manifest at all, and asInvoker (no forced UAC) is already Windows'
+         default execution level for an exe that has no manifest. The one
+         place GamerTool needs admin (installing the VB-CABLE virtual audio
+         driver, one time) is handled entirely at runtime via
+         ProcessStartInfo{ Verb = "runas" } in
+         Services/VirtualCableInstallerService.cs, which needs no manifest either. -->
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="WPF-UI" Version="3.0.5" />
     <PackageReference Include="System.Text.Json" Version="9.0.0" />
     <PackageReference Include="Microsoft.Win32.Registry.AccessControl" Version="9.0.0" />
-    <!-- Proper WASAPI / MMDevice wrappers — replaces fragile hand-rolled COM that crashed the device dropdown -->
+
+    <!-- Audio Bridge engine (see README "Audio engine architecture"):
+         NAudio pinned to the stable 2.2.1 line on purpose. NAudio 3.x is
+         still in preview as of this writing and has obsoleted/renamed the
+         exact APIs this project uses (WasapiLoopbackCapture, WasapiOut) in
+         favor of new WasapiRecorder/WasapiPlayer types — 2.2.1 is the
+         well-established, thoroughly documented, non-moving target. -->
     <PackageReference Include="NAudio" Version="2.2.1" />
+
+    <!-- Used only to set the system default playback device. Deliberately
+         NOT hand-rolled: the underlying Windows mechanism (IPolicyConfig) is
+         an undocumented COM interface whose vtable layout differs across
+         Windows versions — getting it wrong risks a hard crash rather than a
+         clean failure, so we lean on this actively-used, well-tested library. -->
+    <PackageReference Include="AudioSwitcher.AudioApi.CoreAudio" Version="3.0.3" />
   </ItemGroup>
 
 </Project>

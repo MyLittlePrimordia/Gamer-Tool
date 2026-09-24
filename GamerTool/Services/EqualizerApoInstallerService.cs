@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
+using System.Threading;
 using Microsoft.Win32;
 
 namespace GamerTool.Services;
@@ -26,19 +27,14 @@ namespace GamerTool.Services;
 /// </summary>
 public static class EqualizerApoInstallerService
 {
-    // Primary: SourceForge "latest" redirect. Fallback: pinned 1.4.2 x64 direct path.
+    // SourceForge's "latest" redirector always resolves to the current
+    // Windows installer for this project, so we don't have to scrape a
+    // version number or hardcode a URL that goes stale.
     private const string DownloadUrl = "https://sourceforge.net/projects/equalizerapo/files/latest/download";
-    private const string DownloadUrlFallback =
-        "https://downloads.sourceforge.net/project/equalizerapo/1.4.2/EqualizerAPO-x64-1.4.2.exe";
 
     private const string EngineRegistryCheckKey = @"SOFTWARE\EqualizerAPO";
-    // Equalizer APO Post-Mix (GFX / EFX) CLSID — used for SFX/EFX install mode.
     private const string PostMixEfxClsid = "{EC1CC9CE-FAED-4822-828A-82A81A6F018F}";
-    // Property keys under FxProperties (PKEY_FX_*).
-    private const string FxStreamEffect = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},5";   // SFX
-    private const string FxModeEffect = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},6";     // MFX
-    private const string FxEndpointEffect = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},7"; // EFX
-    private const string FxPropertiesEndpointEffectValueName = FxEndpointEffect;
+    private const string FxPropertiesEndpointEffectValueName = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},7";
 
     public static string DefaultInstallDir =>
         Environment.ExpandEnvironmentVariables(@"%ProgramFiles%\EqualizerAPO");
@@ -72,19 +68,6 @@ public static class EqualizerApoInstallerService
 
         try
         {
-            // Required for any unsigned APO (including Equalizer APO).
-            try
-            {
-                using var audioKey = Registry.LocalMachine.CreateSubKey(
-                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Audio", writable: true);
-                audioKey?.SetValue("DisableProtectedAudioDG", 1, RegistryValueKind.DWord);
-                Log("DisableProtectedAudioDG set to 1.");
-            }
-            catch (Exception ex)
-            {
-                Log($"Could not set DisableProtectedAudioDG: {ex.Message}");
-            }
-
             if (!IsEngineInstalled())
             {
                 Log("Equalizer APO not found, downloading installer...");
@@ -96,17 +79,14 @@ public static class EqualizerApoInstallerService
                 }
 
                 Log($"Downloaded to {installerPath}, running silent install...");
-                if (!SilentInstallEngine(installerPath))
-                {
-                    Log("Silent install failed or timed out.");
-                    return SetupOutcome.InstallFailed;
-                }
+                bool ranCleanly = SilentInstallEngine(installerPath, out int exitCode);
+                Log($"Installer process finished (ranCleanly={ranCleanly}, exitCode={exitCode}).");
 
                 TryDeleteFile(installerPath);
 
                 if (!IsEngineInstalled())
                 {
-                    Log("Install reported success but engine still not detected in registry.");
+                    Log("Engine still not detected in registry after install — treating as failed.");
                     return SetupOutcome.InstallFailed;
                 }
                 Log("Engine installed successfully.");
@@ -116,72 +96,43 @@ public static class EqualizerApoInstallerService
                 Log("Equalizer APO engine already installed, skipping download/install.");
             }
 
-            // Register on EVERY active playback device so speakers + headphones both
-            // get EQ without the user opening Configurator. Skip endpoints that
-            // already have a *different* third-party enhancement (don't stomp).
-            var devices = AudioDeviceService.EnumerateRenderDevices();
-            if (devices.Count == 0)
+            string? endpointGuid = GetDefaultRenderEndpointGuid();
+            if (endpointGuid == null)
             {
-                Log("No active render endpoints found; opening Configurator.");
+                Log("Could not resolve default playback device GUID; opening Configurator for manual selection.");
                 LaunchConfiguratorElevated();
                 return SetupOutcome.DeviceAutoRegisterFailed_ConfiguratorOpened;
             }
 
-            int registeredCount = 0;
-            int skippedOther = 0;
-            int alreadyOurs = 0;
-            int failed = 0;
-
-            foreach (var dev in devices)
+            var existing = ReadExistingEffectConfig(endpointGuid);
+            if (existing.HasOtherEffects)
             {
-                string? guid = ExtractEndpointGuid(dev.Id);
-                if (string.IsNullOrEmpty(guid))
-                {
-                    Log($"Skip device '{dev.FriendlyName}': could not parse endpoint GUID from {dev.Id}");
-                    failed++;
-                    continue;
-                }
+                Log($"Endpoint {endpointGuid} already has non-Equalizer-APO effects configured " +
+                    "(another audio enhancement tool is active) — not overwriting. Opening Configurator " +
+                    "so the user can decide.");
+                LaunchConfiguratorElevated();
+                return SetupOutcome.DeviceAlreadyHasOtherEffects_ConfiguratorOpened;
+            }
 
-                var existing = ReadExistingEffectConfig(guid);
-                if (existing.HasOtherEffects)
-                {
-                    Log($"Skip '{dev.FriendlyName}' ({guid}): other enhancements present.");
-                    skippedOther++;
-                    continue;
-                }
-                if (existing.AlreadyHasEqualizerApo)
-                {
-                    Log($"'{dev.FriendlyName}' already has Equalizer APO.");
-                    alreadyOurs++;
-                    registeredCount++;
-                    continue;
-                }
+            if (existing.AlreadyHasEqualizerApo)
+            {
+                Log($"Endpoint {endpointGuid} already has Equalizer APO registered. Nothing to do.");
+                RestartAudioService();
+                return SetupOutcome.AlreadyInstalled;
+            }
 
-                Log($"Registering Equalizer APO on '{dev.FriendlyName}' ({guid})...");
-                if (TryRegisterEfxForEndpoint(guid))
-                {
-                    registeredCount++;
-                    Log($"  OK: registered {guid}");
-                }
-                else
-                {
-                    failed++;
-                    Log($"  FAILED: registry write for {guid}");
-                }
+            Log($"Registering Equalizer APO EFX for endpoint {endpointGuid}...");
+            bool registered = TryRegisterEfxForEndpoint(endpointGuid);
+            if (!registered)
+            {
+                Log("Direct registry registration failed; opening Configurator for manual completion.");
+                LaunchConfiguratorElevated();
+                return SetupOutcome.DeviceAutoRegisterFailed_ConfiguratorOpened;
             }
 
             RestartAudioService();
-            Log($"Done. registered/kept={registeredCount}, skippedOther={skippedOther}, failed={failed}");
-
-            if (registeredCount > 0)
-                return alreadyOurs == devices.Count && failed == 0 && skippedOther == 0
-                    ? SetupOutcome.AlreadyInstalled
-                    : SetupOutcome.Success;
-
-            // Nothing registered — fall back to official UI.
-            Log("No endpoints registered; opening Configurator for manual selection.");
-            LaunchConfiguratorElevated();
-            return SetupOutcome.DeviceAutoRegisterFailed_ConfiguratorOpened;
+            Log("Setup complete.");
+            return SetupOutcome.Success;
         }
         catch (Exception ex)
         {
@@ -192,139 +143,98 @@ public static class EqualizerApoInstallerService
         }
     }
 
-    /// <summary>
-    /// True only when EqualizerAPO.dll is actually on disk.
-    /// A leftover HKLM\SOFTWARE\EqualizerAPO key (partial/failed install) used
-    /// to make this return true and skip the download — that is exactly the
-    /// bug the user hit. Always require the real DLL file.
-    /// </summary>
     public static bool IsEngineInstalled()
     {
-        string[] candidateDlls =
-        {
-            Path.Combine(DefaultInstallDir, "EqualizerAPO.dll"),
-            Path.Combine(Environment.ExpandEnvironmentVariables(@"%ProgramFiles(x86)%\EqualizerAPO"), "EqualizerAPO.dll"),
-        };
-        foreach (string dll in candidateDlls)
-        {
-            if (File.Exists(dll))
-                return true;
-        }
+        using var key = Registry.LocalMachine.OpenSubKey(EngineRegistryCheckKey);
+        if (key != null) return true;
 
-        // Registry InstallPath only counts if it points at a real DLL.
-        try
-        {
-            string? installPath = null;
-            using (var key = Registry.LocalMachine.OpenSubKey(EngineRegistryCheckKey))
-                installPath = key?.GetValue("InstallPath") as string;
+        // 32-bit installers get redirected away from the 64-bit registry view
+        // by WOW6432Node unless read with the right view explicitly — check
+        // both, since this exact gap is a known source of false negatives.
+        using var baseKey64 = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+        using var key64 = baseKey64.OpenSubKey(EngineRegistryCheckKey);
+        if (key64 != null) return true;
 
-            if (string.IsNullOrEmpty(installPath))
-            {
-                using var baseKey64 = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
-                using var key64 = baseKey64.OpenSubKey(EngineRegistryCheckKey);
-                installPath = key64?.GetValue("InstallPath") as string;
-            }
-
-            if (!string.IsNullOrEmpty(installPath))
-            {
-                string dll = Path.Combine(installPath, "EqualizerAPO.dll");
-                if (File.Exists(dll))
-                    return true;
-            }
-        }
-        catch { /* ignore */ }
-
-        return false;
-    }
-
-    /// <summary>
-    /// True if the current default playback device has Equalizer APO's Post-Mix
-    /// CLSID written into its FxProperties. This is what actually puts EQ in
-    /// the audio path — merely having the DLL installed is not enough.
-    /// </summary>
-    public static bool IsApoRegisteredOnDefaultDevice()
-    {
-        try
-        {
-            string? endpointGuid = GetDefaultRenderEndpointGuid();
-            if (string.IsNullOrEmpty(endpointGuid)) return false;
-
-            var existing = ReadExistingEffectConfig(endpointGuid);
-            return existing.AlreadyHasEqualizerApo;
-        }
-        catch
-        {
-            return false;
-        }
+        using var baseKey32 = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry32);
+        using var key32 = baseKey32.OpenSubKey(EngineRegistryCheckKey);
+        return key32 != null;
     }
 
     private static string? DownloadInstaller()
     {
-        string tempPath = Path.Combine(Path.GetTempPath(), $"EqualizerAPO-Setup-{Guid.NewGuid():N}.exe");
-        string[] urls = { DownloadUrl, DownloadUrlFallback };
-
-        foreach (string url in urls)
-        {
-            try
-            {
-                using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-                http.DefaultRequestHeaders.UserAgent.ParseAdd(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GamerTool/1.0");
-
-                using var response = http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead)
-                    .GetAwaiter().GetResult();
-                if (!response.IsSuccessStatusCode) continue;
-
-                using (var fileStream = File.Create(tempPath))
-                using (var httpStream = response.Content.ReadAsStream())
-                    httpStream.CopyTo(fileStream);
-
-                var info = new FileInfo(tempPath);
-                // Real installer is several MB; reject HTML error pages / stubs.
-                if (info.Length < 1_000_000) { TryDeleteFile(tempPath); continue; }
-
-                byte[] header = new byte[2];
-                using (var fs = File.OpenRead(tempPath))
-                    fs.ReadExactly(header, 0, 2);
-                if (header[0] != 'M' || header[1] != 'Z') { TryDeleteFile(tempPath); continue; }
-
-                return tempPath;
-            }
-            catch
-            {
-                TryDeleteFile(tempPath);
-            }
-        }
-
-        return null;
-    }
-
-    private static bool SilentInstallEngine(string installerPath)
-    {
         try
         {
-            // /S = NSIS silent. Already running elevated from the parent setup,
-            // so no extra UAC needed for the installer itself.
+            string tempPath = Path.Combine(Path.GetTempPath(), $"EqualizerAPO-Setup-{Guid.NewGuid():N}.exe");
+
+            using var http = new HttpClient
+            {
+                Timeout = TimeSpan.FromMinutes(3)
+            };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("GamerTool/1.0");
+
+            using var response = http.GetAsync(DownloadUrl, HttpCompletionOption.ResponseHeadersRead)
+                .GetAwaiter().GetResult();
+            response.EnsureSuccessStatusCode();
+
+            using (var fileStream = File.Create(tempPath))
+            using (var httpStream = response.Content.ReadAsStream())
+            {
+                httpStream.CopyTo(fileStream);
+            }
+
+            // Sanity checks: a real installer is a multi-MB PE executable.
+            // Anything smaller is almost certainly an error page or redirect
+            // stub, not the actual installer — bail rather than "installing" garbage.
+            var info = new FileInfo(tempPath);
+            if (info.Length < 500_000)
+            {
+                TryDeleteFile(tempPath);
+                return null;
+            }
+
+            byte[] header = new byte[2];
+            using (var fs = File.OpenRead(tempPath))
+                fs.ReadExactly(header, 0, 2);
+            if (header[0] != 'M' || header[1] != 'Z') // PE header magic
+            {
+                TryDeleteFile(tempPath);
+                return null;
+            }
+
+            return tempPath;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool SilentInstallEngine(string installerPath, out int exitCode)
+    {
+        exitCode = -1;
+        try
+        {
             var psi = new ProcessStartInfo(installerPath, "/S")
             {
-                UseShellExecute = true,
-                CreateNoWindow = true,
-                WindowStyle = ProcessWindowStyle.Hidden
+                UseShellExecute = false,
+                CreateNoWindow = true
             };
             using var proc = Process.Start(psi);
             if (proc == null) return false;
 
-            // Allow up to 3 minutes — first-time extract + reg writes can be slow.
-            bool exited = proc.WaitForExit(180_000);
-            if (!exited)
-            {
-                try { proc.Kill(entireProcessTree: true); } catch { }
-                return false;
-            }
+            // The NSIS installer's silent mode is normally quick, but give it
+            // a generous ceiling rather than hanging GamerTool's setup forever
+            // if something about the target machine makes it slow.
+            bool exited = proc.WaitForExit(120_000);
+            exitCode = exited ? proc.ExitCode : -1;
 
-            // Give the filesystem a moment, then require the real DLL.
-            System.Threading.Thread.Sleep(1500);
-            return IsEngineInstalled();
+            // Give the installer's own child processes (it launches a few) a
+            // moment to finish writing registry entries after the main
+            // process reports exit — avoids a race where IsEngineInstalled()
+            // checks a split second too early.
+            if (exited) Thread.Sleep(2000);
+
+            return exited;
         }
         catch
         {
@@ -342,22 +252,16 @@ public static class EqualizerApoInstallerService
     private static string? GetDefaultRenderEndpointGuid()
     {
         var devices = AudioDeviceService.EnumerateRenderDevices();
-        var defaultDevice = devices.Find(d => d.IsDefault) ?? devices.FirstOrDefault();
-        return defaultDevice == null ? null : ExtractEndpointGuid(defaultDevice.Id);
-    }
-
-    /// <summary>
-    /// Endpoint IDs look like "{0.0.0.00000000}.{5D16E8DA-...}" — registry
-    /// needs the segment after the last dot, including braces.
-    /// </summary>
-    private static string? ExtractEndpointGuid(string endpointId)
-    {
+        var defaultDevice = devices.Find(d => d.IsDefault);
+        string? endpointId = defaultDevice?.Id;
         if (string.IsNullOrEmpty(endpointId)) return null;
+
+        // Endpoint IDs look like "{0.0.0.00000000}.{5D16E8DA-...}" — the
+        // GUID we need for the registry path is the segment after the last dot.
         int lastDot = endpointId.LastIndexOf('.');
-        if (lastDot < 0 || lastDot >= endpointId.Length - 1) return null;
-        string guid = endpointId[(lastDot + 1)..];
-        if (!guid.StartsWith('{')) guid = "{" + guid.Trim('{', '}') + "}";
-        return guid;
+        return lastDot >= 0 && lastDot < endpointId.Length - 1
+            ? endpointId[(lastDot + 1)..]
+            : null;
     }
 
     private readonly record struct ExistingEffectConfig(bool AlreadyHasEqualizerApo, bool HasOtherEffects);
@@ -368,29 +272,19 @@ public static class EqualizerApoInstallerService
         using var key = Registry.LocalMachine.OpenSubKey(keyPath);
         if (key == null) return new ExistingEffectConfig(false, false);
 
-        string[] slots =
+        object? efx = key.GetValue(FxPropertiesEndpointEffectValueName);
+        if (efx is string efxClsid)
         {
-            FxStreamEffect, FxModeEffect, FxEndpointEffect,
-            "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1", // legacy LFX
-            "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},2", // legacy GFX
-        };
-
-        bool foundOurs = false;
-        bool foundOther = false;
-        foreach (string slot in slots)
-        {
-            if (key.GetValue(slot) is not string clsid || string.IsNullOrWhiteSpace(clsid))
-                continue;
-            if (string.Equals(clsid.Trim(), PostMixEfxClsid, StringComparison.OrdinalIgnoreCase))
-                foundOurs = true;
-            else
-                foundOther = true;
+            bool isOurs = string.Equals(efxClsid.Trim(), PostMixEfxClsid, StringComparison.OrdinalIgnoreCase);
+            return new ExistingEffectConfig(isOurs, !isOurs);
         }
 
-        // "Ours" wins if Equalizer APO is in any slot, even if OEM APO is also present
-        // (Equalizer APO is designed to chain). Only treat pure-other as HasOtherEffects.
-        if (foundOurs) return new ExistingEffectConfig(true, false);
-        if (foundOther) return new ExistingEffectConfig(false, true);
+        // No EFX set, but check the legacy GFX slot too — some older driver
+        // configs still use it and we don't want to fight with them either.
+        object? gfx = key.GetValue(@"{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},2");
+        if (gfx is string gfxClsid && !string.IsNullOrWhiteSpace(gfxClsid))
+            return new ExistingEffectConfig(false, true);
+
         return new ExistingEffectConfig(false, false);
     }
 
@@ -402,23 +296,32 @@ public static class EqualizerApoInstallerService
         try
         {
             WriteEfxValue(fxPropertiesPath);
-            return true;
+            if (VerifyEfxValue(fxPropertiesPath)) return true;
         }
-        catch (UnauthorizedAccessException)
-        {
-            // Expected on a fresh endpoint: FxProperties doesn't exist yet and
-            // the parent key is TrustedInstaller-owned. Take ownership (the
-            // scripted equivalent of the documented regedit workaround) and retry once.
-        }
-        catch (System.Security.SecurityException)
-        {
-        }
+        catch (UnauthorizedAccessException) { /* fall through to ownership takeover below */ }
+        catch (System.Security.SecurityException) { /* fall through to ownership takeover below */ }
+
+        // Two distinct cases need two distinct fixes:
+        //  - FxProperties already exists (e.g. Windows created it with some
+        //    default) but we can't write to it: take ownership of
+        //    FxProperties itself. Taking ownership of the PARENT key and
+        //    relying on ACL inheritance to cascade down to an EXISTING child
+        //    is not reliable — Windows only auto-propagates inheritable ACEs
+        //    to children created AFTER the parent's ACL changes.
+        //  - FxProperties doesn't exist yet: we need CreateSubKey rights on
+        //    the parent ({endpointGuid}) key instead, since that's what's
+        //    actually missing.
+        bool fxPropertiesExists;
+        using (var probe = Registry.LocalMachine.OpenSubKey(fxPropertiesPath))
+            fxPropertiesExists = probe != null;
 
         try
         {
-            RegistryOwnershipHelper.TakeOwnershipAndGrantAdmins(endpointKeyPath);
+            RegistryOwnershipHelper.TakeOwnershipAndGrantAdmins(
+                fxPropertiesExists ? fxPropertiesPath : endpointKeyPath);
+
             WriteEfxValue(fxPropertiesPath);
-            return true;
+            return VerifyEfxValue(fxPropertiesPath);
         }
         catch
         {
@@ -426,15 +329,22 @@ public static class EqualizerApoInstallerService
         }
     }
 
+    /// <summary>Reads the value straight back to confirm the write actually
+    /// landed — a registry call that "succeeds" but silently no-ops (e.g.
+    /// virtualized write redirection) would otherwise look identical to a
+    /// real success and leave the endpoint un-EQ'd with no error shown.</summary>
+    private static bool VerifyEfxValue(string fxPropertiesPath)
+    {
+        using var key = Registry.LocalMachine.OpenSubKey(fxPropertiesPath);
+        return key?.GetValue(FxPropertiesEndpointEffectValueName) is string v &&
+               string.Equals(v.Trim(), PostMixEfxClsid, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static void WriteEfxValue(string fxPropertiesPath)
     {
         using var key = Registry.LocalMachine.CreateSubKey(fxPropertiesPath, writable: true)
             ?? throw new InvalidOperationException($"Could not create/open {fxPropertiesPath}");
 
-        // SFX/EFX mode (preferred on Win10/11): put Equalizer APO in stream + endpoint slots.
-        key.SetValue(FxStreamEffect, PostMixEfxClsid, RegistryValueKind.String);
-        key.SetValue(FxEndpointEffect, PostMixEfxClsid, RegistryValueKind.String);
-        // Also set EFX under the name we used for detection.
         key.SetValue(FxPropertiesEndpointEffectValueName, PostMixEfxClsid, RegistryValueKind.String);
     }
 

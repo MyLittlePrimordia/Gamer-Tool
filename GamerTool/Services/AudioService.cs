@@ -24,43 +24,22 @@ namespace GamerTool.Services;
 /// </summary>
 public static class AudioService
 {
-    // GamerTool keeps its own copy under ProgramData (ACL-protected for LOCAL SERVICE).
-    // Equalizer APO itself always loads from its install dir. During elevated setup we
-    // write an Include line into Equalizer APO's config.txt so both stay in sync.
     public static readonly string EqDirectory = @"C:\ProgramData\GamerTool\EQ";
     public static readonly string ConfigPath = Path.Combine(EqDirectory, "config.txt");
-
-    public static string EqualizerApoConfigPath =>
-        Path.Combine(
-            Environment.ExpandEnvironmentVariables(@"%ProgramFiles%\EqualizerAPO\config"),
-            "config.txt");
-
     private const string ElevatedSetupFlag = "--elevated-audio-setup";
 
     /// <summary>
-    /// True only when Equalizer APO is installed AND registered on the current
-    /// default playback device AND DisableProtectedAudioDG is set.
-    /// A weak check (folder exists + installer present) was falsely reporting
-    /// "Ready" while EQ had no effect — this is the stricter version.
+    /// True once C:\ProgramData\GamerTool\EQ exists, is ACL'd correctly, and
+    /// Equalizer APO's engine DLL is registered for the active render device.
+    /// Checked at startup so the UI can show "Audio Engine: Ready" vs
+    /// "Audio Engine: Setup Required" instead of silently failing later.
     /// </summary>
     public static bool IsEngineReady()
     {
         try
         {
-            if (!EqualizerApoInstallerService.IsEngineInstalled())
-                return false;
-
-            // Unsigned APOs require this flag on modern Windows.
-            using (var audioKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
-                       @"SOFTWARE\Microsoft\Windows\CurrentVersion\Audio"))
-            {
-                object? v = audioKey?.GetValue("DisableProtectedAudioDG");
-                if (v is not int i || i != 1)
-                    return false;
-            }
-
-            // APO must be attached to the default render endpoint.
-            return EqualizerApoInstallerService.IsApoRegisteredOnDefaultDevice();
+            if (!Directory.Exists(EqDirectory)) return false;
+            return EqualizerApoInstallerService.IsEngineInstalled();
         }
         catch
         {
@@ -128,59 +107,12 @@ public static class AudioService
             if (!File.Exists(ConfigPath))
                 File.WriteAllText(ConfigPath, BuildConfigText(AudioPreset.Flat), Encoding.UTF8);
 
-            // Critical: allow unsigned APOs (Equalizer APO is unsigned).
-            // Without this, audiodg.exe silently refuses to load the DLL on
-            // modern Windows 10/11.
-            try
-            {
-                using var key = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(
-                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Audio", writable: true);
-                key?.SetValue("DisableProtectedAudioDG", 1, Microsoft.Win32.RegistryValueKind.DWord);
-            }
-            catch { /* best-effort; installer service also tries */ }
-
             var outcome = EqualizerApoInstallerService.RunFullAutoSetup(logPath);
-
-            // After engine install, point Equalizer APO's own config at ours
-            // so live slider changes take effect.
-            TryWireIncludeConfig();
-
             return (int)outcome;
         }
         catch
         {
             return -1;
-        }
-    }
-
-    /// <summary>
-    /// Makes Equalizer APO load GamerTool's config by writing a single Include
-    /// line into its standard config.txt. Safe to call repeatedly.
-    /// </summary>
-    public static void TryWireIncludeConfig()
-    {
-        try
-        {
-            string apoConfigDir = Path.GetDirectoryName(EqualizerApoConfigPath)!;
-            if (!Directory.Exists(apoConfigDir)) return;
-
-            // Ensure LOCAL SERVICE can also read the ProgramData config
-            // (already done in setup, but re-assert here for safety).
-            string includeLine = $"Include: {ConfigPath}";
-            string content =
-                "# Managed by GamerTool — do not edit by hand\r\n" +
-                "# All EQ settings live in the Include file below.\r\n" +
-                includeLine + "\r\n";
-
-            File.WriteAllText(EqualizerApoConfigPath, content, Encoding.UTF8);
-
-            // Also grant the APO install folder read access just in case
-            RunIcacls($"\"{apoConfigDir}\" /grant \"NT SERVICE\\Audiosrv\":(OI)(CI)RX /T /C /Q");
-            RunIcacls($"\"{apoConfigDir}\" /grant \"LOCAL SERVICE\":(OI)(CI)RX /T /C /Q");
-        }
-        catch
-        {
-            // Non-fatal: user can still open Configurator and tick the device.
         }
     }
 
@@ -219,15 +151,10 @@ public static class AudioService
         // Write to a temp file then move-replace, so audiodg.exe's file watcher
         // never observes a half-written config (the earlier root cause of
         // filter-parse failures and sudden mutes).
-        Directory.CreateDirectory(EqDirectory);
         string tempPath = ConfigPath + ".tmp";
         File.WriteAllText(tempPath, text, Encoding.UTF8);
         File.Copy(tempPath, ConfigPath, overwrite: true);
-        try { File.Delete(tempPath); } catch { }
-
-        // Keep the Include wire-up healthy in case the user (or another tool)
-        // overwrote Equalizer APO's config.txt.
-        TryWireIncludeConfig();
+        File.Delete(tempPath);
     }
 
     private static string BuildConfigText(AudioPreset preset)
