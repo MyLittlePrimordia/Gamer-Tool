@@ -319,7 +319,24 @@ public partial class MainWindow : Window
         _settings.BridgeRealDeviceName = realDevice.FriendlyName;
         ProfileManager.Save(_settings);
 
-        bool switched = DefaultDeviceService.SetDefaultPlaybackDevice(cableInput.ID);
+        // NAudio's MMDevice.ID (a WASAPI endpoint ID string) and
+        // AudioSwitcher's device Id (a Guid) are two different identifier
+        // systems for the same underlying device — there's no safe direct
+        // conversion between them, so we look the device up again by name
+        // through whichever library needs it, rather than guessing at a
+        // string-to-Guid mapping.
+        var cableGuid = DefaultDeviceService.FindPlaybackDeviceIdByNameContains(
+            AudioBridgeService.VirtualCableInputNameHint);
+        if (cableGuid == null)
+        {
+            MessageBox.Show(this,
+                "GamerTool found the virtual cable via one audio API but couldn't locate it via another — " +
+                "this shouldn't normally happen. Try again, or reboot if you just installed VB-CABLE.",
+                "Audio Engine", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        bool switched = DefaultDeviceService.SetDefaultPlaybackDevice(cableGuid.Value);
         if (!switched)
         {
             MessageBox.Show(this,
