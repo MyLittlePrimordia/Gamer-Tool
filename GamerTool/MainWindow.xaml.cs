@@ -12,8 +12,6 @@ public partial class MainWindow : Window
     private readonly HotkeyService _hotkeyService = new();
     private FocusWatcher? _focusWatcher;
     private readonly List<Slider> _bandSliders = new();
-    // Maps dropdown display name -> endpoint Id (for future per-device setup).
-    private readonly Dictionary<string, string> _deviceNameToId = new(StringComparer.OrdinalIgnoreCase);
 
     private DisplayPreset _currentDisplay = DisplayPreset.Daylight;
     private AudioPreset _currentAudio = AudioPreset.Flat;
@@ -32,7 +30,6 @@ public partial class MainWindow : Window
 
         BuildBandSliders();
         RefreshPresetLists();
-        RefreshOutputDevices();
         RefreshEngineStatus();
 
         // Attach event handlers after controls are fully initialized
@@ -342,84 +339,6 @@ public partial class MainWindow : Window
 
     // ============================ OUTPUT DEVICE =============================
 
-    private void RefreshOutputDevices()
-    {
-        // IMPORTANT: only put plain strings in the ComboBox.
-        // Putting ComboBoxItem instances in Items causes WPF to double-wrap them
-        // and can hard-crash (AccessViolation) when the dropdown opens — especially
-        // with third-party control themes like WPF-UI.
-        try
-        {
-            OutputDeviceCombo.SelectionChanged -= OutputDeviceCombo_SelectionChanged;
-            OutputDeviceCombo.Items.Clear();
-            _deviceNameToId.Clear();
-
-            OutputDeviceCombo.Items.Add("System Default");
-
-            List<AudioDeviceInfo> devices;
-            try
-            {
-                devices = AudioDeviceService.EnumerateRenderDevices();
-            }
-            catch
-            {
-                devices = new List<AudioDeviceInfo>();
-            }
-
-            int selectIndex = 0;
-            for (int i = 0; i < devices.Count; i++)
-            {
-                var d = devices[i];
-                // Avoid duplicate display names colliding in the map.
-                string label = d.FriendlyName;
-                if (_deviceNameToId.ContainsKey(label))
-                    label = $"{d.FriendlyName} ({i})";
-
-                _deviceNameToId[label] = d.Id;
-                OutputDeviceCombo.Items.Add(label);
-                if (d.IsDefault)
-                    selectIndex = OutputDeviceCombo.Items.Count - 1;
-            }
-
-            OutputDeviceCombo.SelectedIndex = selectIndex >= 0 ? selectIndex : 0;
-        }
-        catch
-        {
-            try
-            {
-                OutputDeviceCombo.Items.Clear();
-                OutputDeviceCombo.Items.Add("System Default");
-                OutputDeviceCombo.SelectedIndex = 0;
-            }
-            catch { /* last resort */ }
-        }
-        finally
-        {
-            OutputDeviceCombo.SelectionChanged += OutputDeviceCombo_SelectionChanged;
-        }
-    }
-
-    private void OutputDeviceCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        try
-        {
-            if (OutputDeviceCombo.SelectedItem is not string name)
-                return;
-
-            if (name == "System Default")
-                _settings.OutputDeviceId = "";
-            else if (_deviceNameToId.TryGetValue(name, out var id))
-                _settings.OutputDeviceId = id;
-            else
-                _settings.OutputDeviceId = name;
-
-            ProfileManager.Save(_settings);
-        }
-        catch
-        {
-            // Never crash the UI over a settings write.
-        }
-    }
 
     // ============================== HOTKEYS TAB ==============================
 

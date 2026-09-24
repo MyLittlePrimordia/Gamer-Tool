@@ -43,7 +43,11 @@
             </StackPanel>
 
             <StackPanel Grid.Column="1" Orientation="Horizontal">
-                <ComboBox x:Name="OutputDeviceCombo" Width="220" Margin="0,0,8,0" />
+                <Border Width="220" Margin="0,0,8,0" Background="#FF1A1A1A" BorderBrush="#FF333333"
+                        BorderThickness="1" CornerRadius="4" Padding="10,6"
+                        ToolTip="EQ applies to all devices registered during Enable / Repair EQ. Change Windows default output to switch speakers/headphones.">
+                    <TextBlock Text="System Default" Foreground="#FFCCCCCC" VerticalAlignment="Center"/>
+                </Border>
                 <Button Content="Enable / Repair EQ"
                         Click="EnableAudioEq_Click" Padding="10,4" Margin="0,0,8,0"
                         ToolTip="Installs Equalizer APO if needed and registers it on your default playback device (one UAC prompt)" />
