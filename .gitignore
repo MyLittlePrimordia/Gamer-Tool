@@ -1,5 +1,23 @@
+# Build output - regenerated every time you build or publish
 bin/
 obj/
 publish/
-*.user
+
+# Visual Studio / Rider / VS Code
 .vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+
+# Test and tooling output
+TestResults/
+*.trx
+[Bb]in/
+[Oo]bj/
+*.log
+
+# OS noise
+Thumbs.db
+Desktop.ini
+.DS_Store

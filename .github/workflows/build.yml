@@ -1,13 +1,24 @@
-name: Build GamerTool Standalone EXE
+﻿name: Build GamerTool Standalone EXE
 
 on:
   push:
     branches: [ "main" ]
   workflow_dispatch:
 
+# Required so the built EXE can be written to a release.
+permissions:
+  contents: write
+
+# One release at a time: never let two pushes race on the same asset.
+concurrency:
+  group: gamertool-release
+  cancel-in-progress: false
+
 jobs:
   build:
+    name: Build and publish
     runs-on: windows-latest
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -18,21 +29,84 @@ jobs:
           dotnet-version: '9.0.x'
 
       - name: Restore
-        run: dotnet restore GamerTool/GamerTool.csproj
+        run: dotnet restore app/GamerTool.csproj
 
-      - name: Publish Single File
-        run: >
-          dotnet publish GamerTool/GamerTool.csproj
-          -c Release
-          -r win-x64
-          --self-contained true
-          -p:PublishSingleFile=true
-          -p:IncludeNativeLibrariesForSelfExtract=true
-          -p:EnableCompressionInSingleFile=true
-          -o ./publish
+      # Catches regressions before anything is published.
+      - name: Build (warnings are errors)
+        run: dotnet build app/GamerTool.csproj -c Release --no-restore -warnaserror
 
-      - name: Upload Artifact
+      # Single file, self contained, compressed. The publish settings live in
+      # GamerTool.csproj so the local and CI builds cannot drift apart.
+      - name: Publish Standalone Executable
+        run: dotnet publish app/GamerTool.csproj -c Release -o ./publish
+
+      - name: Verify the EXE was produced
+        shell: pwsh
+        run: |
+          $exe = './publish/GamerTool.exe'
+          if (-not (Test-Path $exe)) { throw 'GamerTool.exe was not produced.' }
+          $mb = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+          Write-Host "GamerTool.exe = $mb MB"
+          if ($mb -lt 1) { throw "GamerTool.exe is only $mb MB, which is far too small." }
+
+      - name: Upload GamerTool Artifact
         uses: actions/upload-artifact@v4
         with:
           name: GamerTool-Standalone
           path: ./publish/GamerTool.exe
+          if-no-files-found: error
+
+      # Keeps a single rolling "latest" release whose EXE is replaced on every
+      # push, so the permanent download URL stays stable:
+      #   https://github.com/<owner>/<repo>/releases/latest/download/GamerTool.exe
+      - name: Add or overwrite the EXE on the latest release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # PowerShell 7.3+ raises on non-zero native exit codes. This script checks
+          # $LASTEXITCODE itself, so turn that behaviour off.
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          $tag   = 'latest'
+          $asset = 'GamerTool.exe'
+          $exe   = './publish/GamerTool.exe'
+
+          $version = (Select-String -Path 'app/GamerTool.csproj' -Pattern '<Version>([^<]+)</Version>').Matches[0].Groups[1].Value
+          $short   = $env:GITHUB_SHA.Substring(0, 7)
+          $stamp   = Get-Date -Format 'yyyy-MM-dd HH:mm zzz'
+          $runUrl  = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+
+          $notes = @(
+            "Gamer Tool $version - automatic build"
+            ''
+            "- Commit: $short"
+            "- Branch: $($env:GITHUB_REF_NAME)"
+            "- Built: $stamp"
+            ''
+            "[View the workflow run]($runUrl)"
+          ) -join "`n"
+
+          # Find the existing release, or create it once.
+          $release = gh release view $tag --json id --jq '.id'
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($release)) {
+            Write-Host "No '$tag' release yet, creating it."
+            gh release create $tag --title 'Gamer Tool (latest)' --notes $notes --latest
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to create the release.' }
+          }
+          else {
+            Write-Host "Reusing existing '$tag' release $release"
+          }
+
+          # --clobber replaces the EXE already attached to the release.
+          gh release upload $tag $exe --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to upload the EXE.' }
+
+          # Refresh the notes with this build's commit and keep it flagged latest.
+          gh release edit $tag --title 'Gamer Tool (latest)' --notes $notes --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to update the release.' }
+
+          Write-Host "Published $asset to the '$tag' release."

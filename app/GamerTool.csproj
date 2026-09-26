@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>GamerTool</AssemblyName>
+    <RootNamespace>GamerTool</RootNamespace>
+    <StartupObject>GamerTool.App</StartupObject>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\GamerTool.ico</ApplicationIcon>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <Product>Gamer Tool</Product>
+    <AssemblyTitle>Gamer Tool</AssemblyTitle>
+    <Company>Gamer Tool</Company>
+    <Description>Arcade HUD display and audio booster for gamers.</Description>
+    <Version>1.0.0</Version>
+    <FileVersion>1.0.0.0</FileVersion>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <PublishTrimmed>false</PublishTrimmed>
+    <DebugType>embedded</DebugType>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="Assets\day.jpg" />
+    <None Remove="Assets\night.jpg" />
+    <None Remove="Assets\preview.mp3" />
+    <None Remove="Assets\icon.png" />
+    <None Remove="Assets\GamerTool.ico" />
+    <None Remove="Assets\display.png" />
+    <None Remove="Assets\audio.png" />
+    <None Remove="Assets\hotkeys.png" />
+    <None Remove="Assets\settings.png" />
+    <EmbeddedResource Include="Assets\day.jpg" LogicalName="GamerTool.assets.day.jpg" />
+    <EmbeddedResource Include="Assets\night.jpg" LogicalName="GamerTool.assets.night.jpg" />
+    <EmbeddedResource Include="Assets\preview.mp3" LogicalName="GamerTool.assets.preview.mp3" />
+    <EmbeddedResource Include="Assets\icon.png" LogicalName="GamerTool.assets.icon.png" />
+    <EmbeddedResource Include="Assets\GamerTool.ico" LogicalName="GamerTool.assets.GamerTool.ico" />
+    <EmbeddedResource Include="Assets\display.png" LogicalName="GamerTool.assets.display.png" />
+    <EmbeddedResource Include="Assets\audio.png" LogicalName="GamerTool.assets.audio.png" />
+    <EmbeddedResource Include="Assets\hotkeys.png" LogicalName="GamerTool.assets.hotkeys.png" />
+    <EmbeddedResource Include="Assets\settings.png" LogicalName="GamerTool.assets.settings.png" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+  </PropertyGroup>
+
+</Project>
