@@ -2,8 +2,6 @@
 
 A small Windows app for gamers. Set your screen and sound up once, then switch between them with a single key.
 
-![Display tab](screenshots/display.png)
-
 ## What it does
 
 **Display** - ready-made screen presets (Competitive, Cinema, Night, Daylight and more) plus manual gamma, brightness, contrast and colour controls. There is also optional control of the monitor's real backlight over DDC/CI, for displays that support it.
@@ -26,12 +24,12 @@ Nothing is applied until you press **Apply** or a slot key, so you can look firs
 
 <table>
   <tr>
+    <td width="50%"><img src="screenshots/display.png" alt="Display tab"></td>
     <td width="50%"><img src="screenshots/audio.png" alt="Audio tab"></td>
-    <td width="50%"><img src="screenshots/hotkeys.png" alt="Hotkeys tab"></td>
   </tr>
   <tr>
+    <td width="50%"><img src="screenshots/hotkeys.png" alt="Hotkeys tab"></td>
     <td width="50%"><img src="screenshots/settings.png" alt="Settings tab"></td>
-    <td width="50%"></td>
   </tr>
 </table>
 
