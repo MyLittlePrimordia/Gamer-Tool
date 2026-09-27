@@ -34,6 +34,7 @@ public partial class MainWindow : Window
         _settings.GammaLock = GammaLockBox.IsChecked == true;
         _settings.ShowOsd = OsdBox.IsChecked == true;
         _settings.AutoSwitch = AutoSwitchBox.IsChecked == true;
+        _settings.AutoRevertOnExit = AutoRevertBox.IsChecked == true;
         _settings.StartHidden = StartHiddenBox.IsChecked == true;
         _settings.CloseToTray = CloseToTrayBox.IsChecked == true;
         _settings.HardwareBrightnessEnabled = HardwareBrightnessBox.IsChecked == true;

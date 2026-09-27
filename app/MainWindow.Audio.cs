@@ -812,14 +812,41 @@ public partial class MainWindow : Window
     /// </summary>
     public async System.Threading.Tasks.Task GoSoundNeutralAsync()
     {
-        int bands = _bandSliders.Count > 0 ? _bandSliders.Count : AudioPreset.PresetBandCount;
-        await _audio.ResetSoundAsync();
-        SessionState.Current.AudioTouched = false;
-        _liveAudioName = "FLAT";
-        _activeAudioId = "flat";
-        LoadTune(_workDisplay, AudioPreset.Flat(bands));
-        RefreshPresetBoxes();
-        UpdateLiveLabels();
+        // Off the dispatcher first. ResetSoundAsync is three engine calls that
+        // each wait on a child process, and this is reached from paths where the
+        // user is waiting on the result: a hotkey, the reset button, and now a
+        // game closing. The window work after it goes back across explicitly, so
+        // the only thing that moves off the UI thread is the blocking part.
+        try
+        {
+            await Task.Run(() => _audio.ResetSoundAsync());
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("SOUND RESET", ex);
+        }
+
+        try
+        {
+            await Dispatcher.InvokeAsync(() =>
+            {
+                SessionState.Current.AudioTouched = false;
+                _liveAudioName = "FLAT";
+                _activeAudioId = "flat";
+
+                // Read here rather than before the wait, so it is the band count
+                // the panel has now rather than the one it had several seconds ago.
+                int bands = _bandSliders.Count > 0 ? _bandSliders.Count : AudioPreset.PresetBandCount;
+                LoadTune(_workDisplay, AudioPreset.Flat(bands));
+                RefreshPresetBoxes();
+                UpdateLiveLabels();
+            });
+        }
+        catch (Exception ex)
+        {
+            // Only reachable if the window is shutting down underneath the reset.
+            TraceLog.Write("SOUND RESET UI", ex);
+        }
     }
 
 

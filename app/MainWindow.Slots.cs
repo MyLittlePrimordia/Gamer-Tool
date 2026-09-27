@@ -792,6 +792,52 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>
+    /// A game the app loaded a slot for has closed, so the screen and sound go
+    /// back to neutral rather than staying boosted for whatever comes next.
+    /// <para>
+    /// Only ever undoes a slot this app applied by itself. The guard is the id
+    /// left behind by the auto-apply that matched, so if the user has since
+    /// pressed Reset, hit the slot's own key, or loaded a different tune, there is
+    /// nothing to undo and the exit is ignored. Without that, quitting a game
+    /// would stomp a preset the user had chosen on purpose.
+    /// </para>
+    /// </summary>
+    private void OnTargetExited(string processName)
+    {
+        if (!_settings.AutoRevertOnExit || _quitting)
+        {
+            return;
+        }
+
+        HotkeySlot? slot = SlotService.MatchProcessName(_settings.Slots, processName);
+        if (slot is null)
+        {
+            return;
+        }
+
+        if (!string.Equals(_autoSlotId, slot.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            TraceLog.Write("AUTO EXIT SKIP " + processName + " <- not the auto loaded slot");
+            return;
+        }
+
+        TraceLog.Write("AUTO EXIT " + slot.Name + " <- " + processName);
+
+        // GoScreenNeutral stands the auto-apply guard down as it goes, so a second
+        // exit for the same slot cannot fire a second revert.
+        GoScreenNeutral();
+
+        // Off the dispatcher. This is three engine calls that each wait on a child
+        // process, and it runs at the moment a game exits, which is the worst
+        // possible time to stop the window answering. GoSoundNeutralAsync puts its
+        // own window work back on the dispatcher before it returns.
+        _ = GoSoundNeutralAsync();
+
+        Flash(slot.Name + " closed, back to normal");
+    }
+
+
     private bool ShouldAutoApply(HotkeySlot slot, string processName)
     {
         if (string.Equals(_autoSlotId, slot.Id, StringComparison.OrdinalIgnoreCase)

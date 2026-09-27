@@ -198,6 +198,7 @@ public partial class MainWindow : Window
         _hotkeys.Failed += OnHotkeyFailed;
         _watcher.ForegroundChanged += OnForegroundChanged;
         _watcher.TargetLaunched += OnTargetLaunched;
+        _watcher.TargetExited += OnTargetExited;
 
         PreviewKeyDown += OnPreviewKeyDown;
         Closing += OnClosing;
@@ -210,6 +211,7 @@ public partial class MainWindow : Window
         GammaLockBox.IsChecked = _settings.GammaLock;
         OsdBox.IsChecked = _settings.ShowOsd;
         AutoSwitchBox.IsChecked = _settings.AutoSwitch;
+        AutoRevertBox.IsChecked = _settings.AutoRevertOnExit;
         StartHiddenBox.IsChecked = _settings.StartHidden;
         CloseToTrayBox.IsChecked = _settings.CloseToTray;
         StartWithWindowsBox.IsChecked = _startup.IsEnabled;

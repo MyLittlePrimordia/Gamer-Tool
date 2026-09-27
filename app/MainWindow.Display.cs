@@ -302,6 +302,15 @@ public partial class MainWindow : Window
         _display.Reset();
         _liveDisplayName = "STANDARD";
         _activeDisplayId = "flat";
+
+        // Taking the screen back to neutral by hand takes over from the app, so
+        // the auto-apply guard is stood down here. Without this, a slot the app
+        // loaded would still be remembered as ours after the user had reset it,
+        // and quitting that game would run a second, redundant revert on top of
+        // a screen the user had already put back themselves.
+        _autoSlotId = string.Empty;
+        _autoProcess = string.Empty;
+
         LoadTune(DisplayPreset.Flat(), _workAudio);
         RefreshPresetBoxes();
         UpdateLiveLabels();

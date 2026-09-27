@@ -956,6 +956,11 @@
                                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
                                                  ToolTip="Auto Switch" />
                                 <Border Style="{StaticResource Hairline}" />
+                                <ui:OptionToggle x:Name="AutoRevertBox" Style="{StaticResource OptionRow}"
+                                                 Glyph="refresh" Label="Auto-revert on game exit"
+                                                 Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                                 ToolTip="Auto Revert" />
+                                <Border Style="{StaticResource Hairline}" />
                                 <ui:OptionToggle x:Name="CloseToTrayBox" Style="{StaticResource OptionRow}"
                                                  Glyph="folder" Label="Close to tray"
                                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"

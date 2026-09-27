@@ -50,6 +50,14 @@ public sealed class ProcessWatcherService
 
     public event Action<WatchedWindow>? TargetLaunched;
 
+    /// <summary>
+    /// A watched target that had been announced has since stopped running. Carries
+    /// the process name, which is the same identity the launch event used, so a
+    /// caller can match an exit against the slot it applied without holding on to
+    /// a process id that may already be meaningless.
+    /// </summary>
+    public event Action<string>? TargetExited;
+
     public void PrimeProcesses(IEnumerable<string> names)
     {
         _knownProcesses.Clear();
@@ -126,6 +134,12 @@ public sealed class ProcessWatcherService
         Process[] running = Process.GetProcesses();
         try
         {
+            // Every watched name seen in this pass, whether or not it has already
+            // been announced. This has to be recorded before the fired check
+            // below, or a target that launched on an earlier pass would never
+            // appear here and would read as having exited.
+            HashSet<string> alive = new(StringComparer.OrdinalIgnoreCase);
+
             foreach (Process process in running)
             {
                 string name = process.ProcessName;
@@ -133,6 +147,8 @@ public sealed class ProcessWatcherService
                 {
                     continue;
                 }
+
+                alive.Add(name);
 
                 if (_firedProcesses.Contains(name))
                 {
@@ -156,6 +172,18 @@ public sealed class ProcessWatcherService
                     ExePath = path,
                     ProcessName = name
                 });
+            }
+
+            // Anything announced and not seen this time has gone. Matched on
+            // process name rather than id on purpose, so a second instance of the
+            // same game, or a restart, is not mistaken for an exit while it is
+            // still running. The list is snapshotted because the event handler is
+            // free to call back in here and re-enter, and this loop is mutating
+            // the very set being walked.
+            foreach (string gone in _firedProcesses.Where(n => !alive.Contains(n)).ToList())
+            {
+                _firedProcesses.Remove(gone);
+                TargetExited?.Invoke(gone);
             }
         }
         catch (Exception ex)

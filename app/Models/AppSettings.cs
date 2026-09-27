@@ -42,6 +42,19 @@ public sealed class AppSettings
     public bool AutoSwitch { get; set; } = false;
 
     /// <summary>
+    /// Put the screen and sound back to neutral when a game that was auto loaded
+    /// closes, instead of leaving the boost running for whatever comes next.
+    /// <para>
+    /// On by default because the failure it prevents is the common one: the app is
+    /// left looking correct for a game that is no longer running, which reads as a
+    /// bug in Gamer Tool rather than as a boost the user asked for and forgot
+    /// about. It only ever undoes a slot the app applied by itself, so a tune the
+    /// user loaded on purpose is never touched.
+    /// </para>
+    /// </summary>
+    public bool AutoRevertOnExit { get; set; } = true;
+
+    /// <summary>
     /// Auto preamp: trims master gain by the largest EQ boost so boosted bands
     /// cannot hit 0 dBFS and hard-clip.
     /// </summary>
