@@ -19,6 +19,22 @@ public sealed class AudioPreviewPlayer : IDisposable
 
     public bool IsPlaying => _playing;
 
+    /// <summary>Where the track is right now, used to drive the spectrum.</summary>
+    public TimeSpan Position
+    {
+        get
+        {
+            try
+            {
+                return _player.Position;
+            }
+            catch (Exception)
+            {
+                return TimeSpan.Zero;
+            }
+        }
+    }
+
     public bool Ready { get; private set; }
 
     public string? FilePath { get; private set; }
@@ -27,11 +43,60 @@ public sealed class AudioPreviewPlayer : IDisposable
 
     public event Action<string>? Failed;
 
-    public void Prepare()
+    /// <summary>
+    /// Which of the two preview loops is loaded. A game preset and a music preset
+    /// can pull the same curve in opposite directions at the extremes, so the only
+    /// honest way to hear one is against both kinds of material.
+    /// </summary>
+    public enum PreviewTrack
     {
-        if (Ready)
+        Game,
+        Music,
+        Footsteps
+    }
+
+    /// <summary>The loop currently loaded.</summary>
+    public PreviewTrack Track { get; private set; } = PreviewTrack.Game;
+
+    /// <summary>Raised when the loaded loop changes, so the page can restyle its toggle.</summary>
+    public event Action? TrackChanged;
+
+    /// <summary>Switches loop, keeping playback running across the change where possible.</summary>
+    public void SetTrack(PreviewTrack track)
+    {
+        if (track == Track)
         {
             return;
+        }
+
+        Track = track;
+        TrackChanged?.Invoke();
+        Prepare();
+    }
+
+    /// <summary>The next loop in the cycle, so one button steps through all three samples.</summary>
+    public PreviewTrack NextTrack() => Track switch
+    {
+        PreviewTrack.Game => PreviewTrack.Music,
+        PreviewTrack.Music => PreviewTrack.Footsteps,
+        _ => PreviewTrack.Game
+    };
+
+    private static string AssetFor(PreviewTrack track) => track switch
+    {
+        PreviewTrack.Music => "music.mp3",
+        PreviewTrack.Footsteps => "footsteps.mp3",
+        _ => "game.mp3"
+    };
+
+    public void Prepare()
+    {
+        bool resume = _playing;
+        if (Ready)
+        {
+            _player.Stop();
+            _player.Close();
+            Ready = false;
         }
 
         try
@@ -41,8 +106,9 @@ public sealed class AudioPreviewPlayer : IDisposable
                 "GamerTool");
             Directory.CreateDirectory(folder);
 
-            string target = Path.Combine(folder, "preview.mp3");
-            byte[] data = DisplayPreview.ReadAsset("preview.mp3");
+            string asset = AssetFor(Track);
+            string target = Path.Combine(folder, asset);
+            byte[] data = DisplayPreview.ReadAsset(asset);
             if (data.Length == 0)
             {
                 Failed?.Invoke("PREVIEW TRACK MISSING");
@@ -58,6 +124,11 @@ public sealed class AudioPreviewPlayer : IDisposable
             _player.Open(new Uri(target));
             FilePath = target;
             Ready = true;
+
+            if (resume)
+            {
+                _player.Play();
+            }
         }
         catch (Exception ex)
         {

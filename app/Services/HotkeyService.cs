@@ -173,8 +173,35 @@ public sealed class HotkeyService : IDisposable
         return builder.ToString();
     }
 
-    public static string FromInput(Key key, HotkeyModifiers mods)
+    /// <summary>
+    /// Reduces a key string to a form two of them can be compared by. Keys reach
+    /// the app from three places that all format differently: the live capture
+    /// writes "ALT+1", a restored backup can hold "alt+1" or "ALT + 1", and a
+    /// hand edited file can hold anything. Comparing the raw strings would let a
+    /// duplicate through on spacing alone, which is exactly the case the duplicate
+    /// check exists to prevent.
+    /// </summary>
+    public static string Normalise(string? text)
     {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        StringBuilder builder = new(text.Length);
+        foreach (char c in text)
+        {
+            if (!char.IsWhiteSpace(c))
+            {
+                builder.Append(char.ToUpperInvariant(c));
+            }
+        }
+
+        return builder.ToString();
+    }
+
+
+    public static string FromInput(Key key, HotkeyModifiers mods)    {
         StringBuilder builder = new();
         if ((mods & HotkeyModifiers.Control) != 0)
         {

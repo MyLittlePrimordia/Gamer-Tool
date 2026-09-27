@@ -56,6 +56,13 @@ public partial class App : Application
             return;
         }
 
+        // Opened before anything else can fail, so the first line in the file is
+        // the one that explains a start that never got any further.
+        AppLog.Info("start " + (typeof(App).Assembly.GetName().Version?.ToString() ?? "?")
+            + " on " + Environment.OSVersion.VersionString
+            + " " + (Environment.Is64BitProcess ? "x64" : "x86")
+            + " args=" + SanitiseArgs(string.Join(' ', e.Args)));
+
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
         AppDomain.CurrentDomain.ProcessExit += (_, _) => EmergencyReset.Run();
@@ -210,20 +217,19 @@ public partial class App : Application
         }
     }
 
+    /// <summary>
+    /// The crash handler's way out. Goes to the same rolling log as everything
+    /// else so there is one file to look at, and writes synchronously, because
+    /// this runs on the way down and a buffered line would be lost.
+    /// </summary>
     public static void WriteLog(string tag, Exception ex)
     {
-        try
-        {
-            string folder = ProfileManager.AppDataFolder;
-            Directory.CreateDirectory(folder);
-            File.AppendAllText(
-                Path.Combine(folder, "error.log"),
-                DateTime.Now.ToString("s") + " [" + tag + "] " + ex + Environment.NewLine + Environment.NewLine);
-        }
-        catch (Exception)
-        {
-        }
+        AppLog.Error(tag, ex);
     }
+
+
+    /// <summary>Command line arguments, with the user profile taken out of them.</summary>
+    private static string SanitiseArgs(string args) => AppLog.Sanitise(args);
 
     protected override void OnExit(ExitEventArgs e)
     {

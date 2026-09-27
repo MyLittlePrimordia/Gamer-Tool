@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -36,7 +36,24 @@ public partial class MainWindow : Window
         _settings.AutoSwitch = AutoSwitchBox.IsChecked == true;
         _settings.StartHidden = StartHiddenBox.IsChecked == true;
         _settings.CloseToTray = CloseToTrayBox.IsChecked == true;
+        _settings.HardwareBrightnessEnabled = HardwareBrightnessBox.IsChecked == true;
         _display.SetLock(_settings.GammaLock);
+
+        // Switching this on is the only thing that ever starts a probe, and the
+        // probe runs off the UI thread because it talks to a monitor over I2C.
+        if (_settings.HardwareBrightnessEnabled && !Backlight.HasProbed)
+        {
+            _ = Task.Run(() =>
+            {
+                Backlight.Probe();
+                Dispatcher.InvokeAsync(RefreshBacklightRows);
+            });
+        }
+        else
+        {
+            RefreshBacklightRows();
+        }
+
         ApplyWatchState();
         Commit();
     }
@@ -57,7 +74,7 @@ public partial class MainWindow : Window
         if (!ok && wanted)
         {
             StartWithWindowsBox.IsChecked = false;
-            Flash("[ COULD NOT ENABLE ]", "TRY AGAIN OR RUN AS ADMIN");
+            Flash("Could not enable, try again as admin", true);
         }
     }
 
@@ -79,7 +96,7 @@ public partial class MainWindow : Window
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (_captureSlotId is null || _captureBox is null)
+        if (_captureBox is null)
         {
             return;
         }
@@ -99,19 +116,27 @@ public partial class MainWindow : Window
         }
 
         string text = HotkeyService.FromInput(e.Key, mods);
+
+        if (_captureSlotId is null)
+        {
+            return;
+        }
+
         HotkeySlot? slot = _settings.Slots.FirstOrDefault(s => s.Id == _captureSlotId);
         if (slot is not null)
         {
+            // Slots steal a contested key: the one you are editing wins, because
+            // that is the one you are actively pointing at.
+            string wanted = HotkeyService.Normalise(text);
             HotkeySlot? clash = _settings.Slots.FirstOrDefault(s =>
                 s.Id != slot.Id
                 && s.Enabled
-                && !string.IsNullOrWhiteSpace(s.Hotkey)
-                && string.Equals(s.Hotkey, text, StringComparison.OrdinalIgnoreCase));
+                && HotkeyService.Normalise(s.Hotkey) == wanted);
 
             if (clash is not null)
             {
                 clash.Hotkey = string.Empty;
-                Flash("[ KEY MOVED ]", "TAKEN FROM " + clash.Name.ToUpperInvariant());
+                Flash("Key moved, taken from " + clash.Name);
             }
 
             slot.Hotkey = text;
@@ -122,7 +147,7 @@ public partial class MainWindow : Window
         Commit();
         BuildSlots();
         RegisterHotkeys();
-        Flash("[ KEY SET ]", text);
+        Flash(text + " set");
         e.Handled = true;
     }
 
@@ -136,6 +161,12 @@ public partial class MainWindow : Window
     private void OnDirectInstallClick(object sender, RoutedEventArgs e)
     {
         _ = InstallAsync(false);
+    }
+
+
+    private void OnUpgradeFxSoundClick(object sender, RoutedEventArgs e)
+    {
+        _ = UpgradeFxSoundAsync();
     }
 
 
@@ -157,14 +188,50 @@ public partial class MainWindow : Window
         UpdateFxBanner();
         if (ok)
         {
+            _fxUpdateAvailable = false;
+            _fxUpdateVersion = string.Empty;
             LoadDevices();
             RefreshFxState(true);
+            UpdateFxBanner();
             ApplyAudio(_workAudio.Copy(), false);
-            Flash("[ FXSOUND READY ]", "SOUND IS LIVE");
+            Flash("FxSound ready, sound is live");
         }
         else
         {
-            Flash("[ INSTALL FAILED ]", "TRY AGAIN");
+            Flash("Install failed, try again", true);
+        }
+    }
+
+
+    private async System.Threading.Tasks.Task UpgradeFxSoundAsync()
+    {
+        _install?.Cancel();
+        _install = new CancellationTokenSourceHolder();
+
+        Pages.IsEnabled = false;
+        RailStatus.Text = "UPDATING FXSOUND";
+        FxUpgradeButton.IsEnabled = false;
+
+        System.Progress<SetupStage> progress = new(stage => RailStatus.Text = "FXSOUND " + stage.Text);
+        bool ok = await _setup.UpgradeAsync(_audio, progress, _install.Token);
+
+        Pages.IsEnabled = true;
+        FxUpgradeButton.IsEnabled = true;
+        if (ok)
+        {
+            _fxUpdateAvailable = false;
+            _fxUpdateVersion = string.Empty;
+            _audio.InvalidateCache();
+            LoadDevices();
+            RefreshFxState(true);
+            UpdateFxBanner();
+            ApplyAudio(_workAudio.Copy(), false);
+            Flash("FxSound updated to the latest");
+        }
+        else
+        {
+            UpdateFxBanner();
+            Flash("Update failed, try again", true);
         }
     }
 
@@ -201,6 +268,7 @@ public partial class MainWindow : Window
         _watcher.Stop();
         _display.StopLock();
         _audioPreview.Dispose();
+        _spectrum?.Release();
         EmergencyReset.Run();
         if (_stateTimer is not null)
         {

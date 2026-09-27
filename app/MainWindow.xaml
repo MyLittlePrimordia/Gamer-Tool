@@ -1,92 +1,212 @@
-﻿<Window x:Class="GamerTool.MainWindow"
+<Window x:Class="GamerTool.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="clr-namespace:GamerTool.UI"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="Gamer Tool"
-        Width="1300"
-        Height="920"
-        MinWidth="1080"
-        MinHeight="720"
+        Width="1200"
+        Height="790"
+        WindowStyle="None"
+        ResizeMode="NoResize"
         WindowStartupLocation="CenterScreen"
-        Background="{StaticResource AppBg}"
+        Background="Transparent"
+        AllowsTransparency="True"
         FontFamily="{StaticResource Sans}"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True">
+
+    <!-- Custom chrome: the OS caption strip is gone, so the whole window is one
+         unbroken black surface and the caption buttons are ours to draw. -->
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="0" GlassFrameThickness="0"
+                            CornerRadius="0" UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
 
     <Window.Resources>
         <ui:InverseBoolToVisibilityConverter x:Key="InverseBool" />
         <ui:BoolToVisibilityConverter x:Key="BoolVis" />
     </Window.Resources>
 
-    <Grid x:Name="ShellGrid" Background="{StaticResource AppBg}">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
-        </Grid.RowDefinitions>
-        <!-- Without an explicit star column the implicit column is Auto, so the
-             whole shell grows to the widest page and overflows the window. -->
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*" />
-        </Grid.ColumnDefinitions>
+        <!-- The whole app is drawn as one rounded card floating inside a
+             transparent window, so the frame, the tab switcher, the caption
+             buttons and the status line all sit inside the same rounded edge
+             instead of running to the corners of a black rectangle.
 
-        <Grid Grid.Row="0" Margin="26,16,26,0">
+             The frame line is the card showing through a one pixel inset rather
+             than a Border brush, because a border is drawn on the card's own
+             edge and the card is what the rounded clip has to line up with. -->
+    <Border x:Name="AppFrame" CornerRadius="14" Background="{StaticResource LineStrong}">
+        <Grid x:Name="ShellGrid" Margin="1" Background="{StaticResource AppBg}">
+        <!-- A Border's CornerRadius does not clip its child, so the contents get
+             their own matching clip. The numbers are the card's inner size: the
+             window is a fixed 1200 x 790 and the inset above takes one pixel off
+             each edge, leaving 1198 x 788 with the corner radius one less. The
+             old clip said 1200 x 790, which sat outside this grid entirely, so
+             the rounded corners never applied and the opaque status bar painted
+             square over the two bottom ones. -->
+        <Grid.Clip>
+            <RectangleGeometry Rect="0,0,1198,788" RadiusX="13" RadiusY="13" />
+        </Grid.Clip>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="58" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="30" />
+        </Grid.RowDefinitions>
+
+        <!-- ============ TITLE BAR ============ -->
+        <!-- Title on the left, the tab switcher in the middle and the window
+             buttons on the right, all on one strip inside the frame. -->
+        <Grid x:Name="TitleBar" Grid.Row="0" Background="Transparent"
+              MouseLeftButtonDown="OnTitleBarDragDown">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <TextBlock x:Name="PageTitleText" Grid.Column="0" Style="{StaticResource PageTitle}" Text="Display" VerticalAlignment="Center" />
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"
+                        Margin="16,0,0,0" Background="Transparent">
+                <ui:EmojiImage Glyph="gamepad" Width="19" Height="19" VerticalAlignment="Center" />
+                <TextBlock Text="Gamer Tool" Margin="9,0,0,0" FontSize="12" FontWeight="SemiBold"
+                           Foreground="{StaticResource TextHi}" VerticalAlignment="Center" />
+            </StackPanel>
 
-            <Image x:Name="HeroImage" Grid.Column="1" Width="46" Height="46" Stretch="Uniform" VerticalAlignment="Center" />
+            <Border Grid.Column="1" Style="{StaticResource NavTrack}" VerticalAlignment="Center">
+                <UniformGrid Columns="4" Rows="1">
+                    <ui:NavPill x:Name="NavDisplay" Style="{StaticResource NavDisplay}" GroupName="Nav"
+                                IsChecked="True" Checked="OnNavChanged" />
+                    <ui:NavPill x:Name="NavAudio" Style="{StaticResource NavAudio}" GroupName="Nav" Checked="OnNavChanged" />
+                    <ui:NavPill x:Name="NavHotkeys" Style="{StaticResource NavHotkeys}" GroupName="Nav" Checked="OnNavChanged" />
+                    <ui:NavPill x:Name="NavSettings" Style="{StaticResource NavSettings}" GroupName="Nav" Checked="OnNavChanged" />
+                </UniformGrid>
+            </Border>
+
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button x:Name="CaptionMinButton" Style="{StaticResource CaptionButton}"
+                                        Click="OnCaptionMinClick" ToolTip="Hide">
+                                    <Path Data="M 0 0 L 10 0" StrokeThickness="1" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
+                                </Button>
+                                <Button x:Name="CaptionCloseButton" Style="{StaticResource CaptionClose}"
+                                        Click="OnCaptionCloseClick" ToolTip="Close">
+                                    <Path Data="M 0 0 L 9 9 M 9 0 L 0 9" StrokeThickness="1.1"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
+                                </Button>
+                            </StackPanel>
         </Grid>
 
-        <Border Grid.Row="1" Style="{StaticResource TabPillTrack}" Margin="24,14,24,0">
-            <UniformGrid Columns="4" MaxWidth="880" HorizontalAlignment="Center">
-                <RadioButton x:Name="NavDisplay" Style="{StaticResource TabPillDisplay}" GroupName="Nav" IsChecked="True" Checked="OnNavChanged" Tag="0" Content="Display" />
-                <RadioButton x:Name="NavAudio" Style="{StaticResource TabPillAudio}" GroupName="Nav" Checked="OnNavChanged" Tag="1" Content="Audio" />
-                <RadioButton x:Name="NavHotkeys" Style="{StaticResource TabPillHotkeys}" GroupName="Nav" Checked="OnNavChanged" Tag="2" Content="Hotkeys" />
-                <RadioButton x:Name="NavSettings" Style="{StaticResource TabPillSettings}" GroupName="Nav" Checked="OnNavChanged" Tag="3" Content="Settings" />
-            </UniformGrid>
-        </Border>
+        <!-- ============ BODY ============ -->
+        <Grid Grid.Row="1" Margin="18,4,18,8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
 
-        <TabControl Grid.Row="2" x:Name="Pages" Style="{StaticResource HiddenTabs}" Margin="24,14,24,8">
+            <TabControl Grid.Row="0" x:Name="Pages" Style="{StaticResource HiddenTabs}">
+                <!-- ================================================================
+                     DISPLAY  Â·  16:9 preview on the left, every control on the right
+                     ================================================================ -->
+                <TabItem>
+                    <Border Style="{StaticResource PagePanel}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="54" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="50" />
+                            </Grid.RowDefinitions>
 
-            <TabItem>
-                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
+                            <Grid Grid.Row="0" Margin="18,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="300" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <ComboBox x:Name="DisplayPresetBox" Grid.Column="1" Style="{StaticResource PresetCombo}"
+                                          ItemContainerStyle="{StaticResource ModernComboItem}"
+                                          ItemTemplate="{StaticResource PresetChoiceItem}"
+                                          HorizontalContentAlignment="Center" SelectionChanged="OnDisplayPresetSelected"
+                                          ToolTip="Screen preset" />
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                    <ui:IconButton x:Name="DisplaySaveButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Plus}"
+                                                   Margin="0,0,6,0" Click="OnSaveAsScreenClick" ToolTip="Save Preset" />
+                                    <ui:IconButton x:Name="DisplayRenameButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Pencil}"
+                                                   Margin="0,0,6,0" Click="OnRenameScreenClick" ToolTip="Rename Preset" />
+                                    <ui:IconButton x:Name="DisplayDeleteButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Trash}"
+                                                   Click="OnDeleteScreenClick" ToolTip="Delete Preset" />
+                                </StackPanel>
+                            </Grid>
+                            <Border Grid.Row="0" Style="{StaticResource Hairline}" VerticalAlignment="Bottom" Margin="18,0" />
 
-                        <StackPanel Grid.Row="0">
-                            <TextBlock Style="{StaticResource SectionHeader}" Text="SCREEN PRESETS" />
-                            <UniformGrid x:Name="DisplayPresetGrid" Columns="4" />
-                        </StackPanel>
+                            <Grid Grid.Row="1" Margin="18,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="430" />
+                                    <ColumnDefinition Width="24" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
 
-                        <Grid Grid.Row="1" Margin="0,16,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="16" />
-                                <ColumnDefinition Width="420" MinWidth="340" />
-                            </Grid.ColumnDefinitions>
+                                <!-- left: the 16:9 preview and nothing else. Pinned to
+                                     the top so the spare height collects below it rather
+                                     than splitting into a gap above and below. -->
+                                <StackPanel Grid.Column="0" VerticalAlignment="Top" Margin="0,18,0,18">
+                                    <Border Style="{StaticResource Hero}" Padding="10">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="230" />
+                                            </Grid.RowDefinitions>
+                                            <Grid Grid.Row="0" Margin="0,0,0,10">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Style="{StaticResource SectionHeader}" Text="PREVIEW" Margin="0" VerticalAlignment="Center" />
+                                                <!-- One control, not two. Two buttons with a
+                                                     highlight each read as a pair of unrelated
+                                                     buttons; a single button that shows the
+                                                     mode you would switch to reads as one
+                                                     switch. -->
+                                                <Button x:Name="PreviewSceneButton" Grid.Column="1"
+                                                        Style="{StaticResource PillTab}"
+                                                        Click="OnPreviewSceneClick" ToolTip="Night">
+                                                    <ui:EmojiImage x:Name="PreviewSceneGlyph" Glyph="moon" Width="18" Height="18" />
+                                                </Button>
+                                            </Grid>
+                                            <!-- 410 x 230 is exactly 16:9, so the scene is
+                                                 never letterboxed or cropped. The rounded
+                                                 corners are a clip on the image itself:
+                                                 a Border's CornerRadius does not clip
+                                                 its child, and ClipToBounds only cuts
+                                                 to the square slot, so the scene would
+                                                 otherwise spill over the rounding. -->
+                                            <Border Grid.Row="1" x:Name="PreviewFrame" CornerRadius="10" Background="#020202"
+                                                    SizeChanged="OnPreviewFrameSizeChanged">
+                                                <Image x:Name="PreviewImage" Stretch="UniformToFill"
+                                                       RenderOptions.BitmapScalingMode="HighQuality" />
+                                            </Border>
+                                        </Grid>
+                                    </Border>
 
-                            <Border Grid.Column="0" Style="{StaticResource Card}" Height="440">
-                                <Grid>
+                                </StackPanel>
+
+                                <Border Grid.Column="1" Style="{StaticResource VHairline}" Margin="0,18" />
+
+                                <!-- right: every control, grouped by what it does -->
+                                <Grid Grid.Column="2" Margin="0,18,0,18">
                                     <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
                                         <RowDefinition Height="*" />
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
-                                    <TextBlock Grid.Row="0" Style="{StaticResource SectionHeader}" Text="TUNE" />
-                                    <Grid Grid.Row="1" VerticalAlignment="Center">
+
+                                    <!-- Auto rows with the block centred, rather than two
+                                         star rows that push the top pair to the ceiling
+                                         and the bottom pair to the floor. -->
+                                    <Grid Grid.Row="0" VerticalAlignment="Center">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="20" />
+                                            <ColumnDefinition Width="40" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <Grid.RowDefinitions>
@@ -94,7 +214,7 @@
                                             <RowDefinition Height="Auto" />
                                         </Grid.RowDefinitions>
 
-                                        <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,0,6">
+                                        <StackPanel Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,0,20">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -103,9 +223,12 @@
                                                 <TextBlock Style="{StaticResource Label}" Text="Gamma" />
                                                 <TextBlock x:Name="GammaValue" Grid.Column="1" Style="{StaticResource Value}" Text="1.00" />
                                             </Grid>
-                                            <Slider x:Name="GammaSlider" Style="{StaticResource ModernSlider}" Minimum="1" Maximum="3" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged" />
+                                            <Slider x:Name="GammaSlider" ui:SliderSnap.Neutral="1.0" ui:SliderSnap.Threshold="0.02" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentDisplay}"
+                                                    Minimum="1" Maximum="3" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged"
+                                                    ToolTip="Gamma" />
                                         </StackPanel>
-                                        <StackPanel Grid.Row="0" Grid.Column="2" Margin="0,0,0,6">
+
+                                        <StackPanel Grid.Row="0" Grid.Column="2" VerticalAlignment="Center" Margin="0,0,0,20">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -114,9 +237,12 @@
                                                 <TextBlock Style="{StaticResource Label}" Text="Shadow boost" />
                                                 <TextBlock x:Name="ShadowValue" Grid.Column="1" Style="{StaticResource Value}" Text="+0%" />
                                             </Grid>
-                                            <Slider x:Name="ShadowSlider" Style="{StaticResource ModernSlider}" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged" />
+                                            <Slider x:Name="ShadowSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="1.2" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentDisplay}"
+                                                    Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged"
+                                                    ToolTip="Brightness" />
                                         </StackPanel>
-                                        <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,6,0,0">
+
+                                        <StackPanel Grid.Row="1" Grid.Column="0" VerticalAlignment="Center" Margin="0,20,0,0">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -125,9 +251,12 @@
                                                 <TextBlock Style="{StaticResource Label}" Text="Brightness" />
                                                 <TextBlock x:Name="BrightValue" Grid.Column="1" Style="{StaticResource Value}" Text="+0%" />
                                             </Grid>
-                                            <Slider x:Name="BrightSlider" Style="{StaticResource ModernSlider}" Minimum="-50" Maximum="50" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged" />
+                                            <Slider x:Name="BrightSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="1.2" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentDisplay}"
+                                                    Minimum="-50" Maximum="50" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged"
+                                                    ToolTip="Brightness" />
                                         </StackPanel>
-                                        <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,6,0,0">
+
+                                        <StackPanel Grid.Row="1" Grid.Column="2" VerticalAlignment="Center" Margin="0,20,0,0">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -136,512 +265,777 @@
                                                 <TextBlock Style="{StaticResource Label}" Text="Contrast" />
                                                 <TextBlock x:Name="ContrastValue" Grid.Column="1" Style="{StaticResource Value}" Text="+0%" />
                                             </Grid>
-                                            <Slider x:Name="ContrastSlider" Style="{StaticResource ModernSlider}" Minimum="-50" Maximum="50" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged" />
+                                            <Slider x:Name="ContrastSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="1.2" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentDisplay}"
+                                                    Minimum="-50" Maximum="50" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged"
+                                                    ToolTip="Contrast" />
                                         </StackPanel>
                                     </Grid>
 
-                                    <!-- Per channel colour trim, sitting with the other tuning sliders. -->
-                                    <Grid Grid.Row="2" Margin="0,14,0,0">
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="Auto" />
-                                        </Grid.RowDefinitions>
-                                        <Grid Grid.Row="0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="10" />
-                                                <ColumnDefinition Width="*" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Style="{StaticResource Label}" Text="Colour trim" VerticalAlignment="Center" />
-                                            <Button Grid.Column="2" Content="Neutral" Style="{StaticResource GhostButton}" MinWidth="0" HorizontalAlignment="Right" Click="OnNeutralColourClick" ToolTip="Set red, green and blue back to 1.00" />
+                                    <Border Grid.Row="1" Style="{StaticResource Hairline}" Margin="0,18,0,16" />
+
+                                    <!-- Hardware backlight. Built in code because it is
+                                         one row per display and each row decides for
+                                         itself whether it is live: a machine can have
+                                         one monitor that answers DDC/CI and another
+                                         with no pathway at all, and the two must not
+                                         share a single enabled state. The software
+                                         brightness above is untouched either way. -->
+                                    <StackPanel x:Name="BacklightPanel" Grid.Row="2" Margin="0,0,0,4" />
+
+                                    <Border Grid.Row="3" Style="{StaticResource Hairline}" Margin="0,14,0,16" />
+
+                                    <Grid Grid.Row="4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="40" />
+                                            <ColumnDefinition Width="232" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- No neutral button here on purpose. The footer
+                                             reset already puts all three channels back to
+                                             1.00 along with everything else, and the
+                                             blue light box on the right is the warm and
+                                             cool control, so a second button that only did
+                                             a third of the reset was clutter. -->
+                                        <Grid Grid.Column="0">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <TextBlock Grid.Row="0" Style="{StaticResource SectionHeader}" Text="COLOUR TRIM" />
+                                            <TextBlock Grid.Row="0" Style="{StaticResource CardSub}" HorizontalAlignment="Right"
+                                                       VerticalAlignment="Center" Text="NEUTRAL IS 1.00" />
+                                            <Grid Grid.Row="1" Height="112" Margin="0,10,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <StackPanel Grid.Column="0">
+                                                    <Slider x:Name="RedSlider" ui:SliderSnap.Neutral="1.0" ui:SliderSnap.Threshold="0.012" Style="{StaticResource BandSliderVertical}" Foreground="#F87171"
+                                                            Width="28" Height="92" Minimum="0.7" Maximum="1.3" TickFrequency="0.01"
+                                                            IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged" ToolTip="Red" />
+                                                    <TextBlock Style="{StaticResource SectionHeader}" Text="RED" HorizontalAlignment="Center" Margin="0,4,0,0" />
+                                                </StackPanel>
+
+                                                <StackPanel Grid.Column="1">
+                                                    <Slider x:Name="GreenSlider" ui:SliderSnap.Neutral="1.0" ui:SliderSnap.Threshold="0.012" Style="{StaticResource BandSliderVertical}" Foreground="#34D399"
+                                                            Width="28" Height="92" Minimum="0.7" Maximum="1.3" TickFrequency="0.01"
+                                                            IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged" ToolTip="Green" />
+                                                    <TextBlock Style="{StaticResource SectionHeader}" Text="GREEN" HorizontalAlignment="Center" Margin="0,4,0,0" />
+                                                </StackPanel>
+
+                                                <StackPanel Grid.Column="2">
+                                                    <Slider x:Name="BlueSlider" ui:SliderSnap.Neutral="1.0" ui:SliderSnap.Threshold="0.012" Style="{StaticResource BandSliderVertical}" Foreground="#60A5FA"
+                                                            Width="28" Height="92" Minimum="0.7" Maximum="1.3" TickFrequency="0.01"
+                                                            IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged" ToolTip="Blue" />
+                                                    <TextBlock Style="{StaticResource SectionHeader}" Text="BLUE" HorizontalAlignment="Center" Margin="0,4,0,0" />
+                                                </StackPanel>
+                                            </Grid>
                                         </Grid>
-                                        <UniformGrid Grid.Row="1" Margin="0,8,0,0" Columns="3">
-                                            <StackPanel Margin="0,0,8,0">
-                                                <TextBlock x:Name="RedValue" Style="{StaticResource Value}" Text="1.00" HorizontalAlignment="Center" FontSize="11" />
-                                                <Slider x:Name="RedSlider" Style="{StaticResource ModernSlider}" Minimum="0.7" Maximum="1.3" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged" />
-                                            </StackPanel>
-                                            <StackPanel Margin="0,0,8,0">
-                                                <TextBlock x:Name="GreenValue" Style="{StaticResource Value}" Text="1.00" HorizontalAlignment="Center" FontSize="11" />
-                                                <Slider x:Name="GreenSlider" Style="{StaticResource ModernSlider}" Minimum="0.7" Maximum="1.3" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged" />
-                                            </StackPanel>
-                                            <StackPanel>
-                                                <TextBlock x:Name="BlueValue" Style="{StaticResource Value}" Text="1.00" HorizontalAlignment="Center" FontSize="11" />
-                                                <Slider x:Name="BlueSlider" Style="{StaticResource ModernSlider}" Minimum="0.7" Maximum="1.3" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged" />
-                                            </StackPanel>
-                                        </UniformGrid>
-                                    </Grid>
 
-                                    <StackPanel Grid.Row="3" Margin="0,16,0,0">
-                                        <TextBlock x:Name="ScreenHintText" Style="{StaticResource CardSub}" Text="Tweaking here only changes the preview. Press Apply or a slot key to change your screen." TextWrapping="Wrap" />
-
-                                        <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
-                                            <Button Content="Apply" Style="{StaticResource PrimaryButton}" MinWidth="112" Margin="0,0,8,0" Click="OnApplyScreenClick" />
-                                            <Button Content="Save as..." Style="{StaticResource GhostButton}" MinWidth="0" Margin="0,0,8,0" Click="OnSaveAsScreenClick" />
-                                            <Button Content="Rename" Style="{StaticResource GhostButton}" MinWidth="0" Margin="0,0,8,0" Click="OnRenameScreenClick" />
-                                            <Button Content="Reset screen" Style="{StaticResource GhostButton}" MinWidth="0" Click="OnResetScreenClick" />
+                                        <StackPanel Grid.Column="2" VerticalAlignment="Top">
+                                            <TextBlock Style="{StaticResource SectionHeader}" Text="BLUE LIGHT FILTER" Margin="0,0,0,10" />
+                                            <ComboBox x:Name="BlueLightBox" Style="{StaticResource ModernCombo}"
+                                                      ItemContainerStyle="{StaticResource ModernComboItem}" SelectionChanged="OnBlueLightChanged"
+                                                      ToolTip="Blue Light" />
                                         </StackPanel>
-                                    </StackPanel>
+                                    </Grid>
                                 </Grid>
-                            </Border>
+                            </Grid>
 
-                            <Border Grid.Column="2" Style="{StaticResource Card}" Height="440">
-                                <Grid>
+                            <Border Grid.Row="2" Style="{StaticResource Hairline}" VerticalAlignment="Top" Margin="18,0" />
+                            <!-- Actions centred, live state tucked right. The three tabs
+                                 share this shape so the divider sits at the same height
+                                 everywhere. -->
+                            <Grid Grid.Row="2" Margin="18,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button Content="Apply" Style="{StaticResource PrimaryButton}" MinWidth="116"
+                                            Click="OnApplyScreenClick" ToolTip="Apply" />
+                                    <ui:IconButton Icon="{x:Static ui:Icons.Refresh}" Style="{StaticResource IconButton}" Margin="10,0,0,0"
+                                                   Click="OnResetScreenClick" ToolTip="Reset" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" Orientation="Horizontal"
+                                            VerticalAlignment="Center" HorizontalAlignment="Right">
+                                    <Ellipse x:Name="ScreenLiveDot" Width="6" Height="6" Fill="{StaticResource Green}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <TextBlock x:Name="ScreenLiveText" Style="{StaticResource CardSub}" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Grid>
+                        </Grid>
+                    </Border>
+                </TabItem>
+
+                <!-- ================================================================
+                     AUDIO  Â·  16:9 spectrum on the left, 16:9 equalizer on the right
+                     ================================================================ -->
+                <TabItem>
+                    <Border Style="{StaticResource PagePanel}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="54" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="62" />
+                            </Grid.RowDefinitions>
+
+                            <Grid Grid.Row="0" Margin="18,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="280" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="300" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <ComboBox x:Name="AudioPresetBox" Grid.Column="1" Style="{StaticResource PresetCombo}"
+                                          ItemContainerStyle="{StaticResource ModernComboItem}"
+                                          ItemTemplate="{StaticResource PresetChoiceItem}"
+                                          HorizontalContentAlignment="Center" SelectionChanged="OnAudioPresetSelected"
+                                          ToolTip="Sound preset" />
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                    <ui:IconButton x:Name="AudioSaveButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Plus}"
+                                                   Margin="0,0,6,0" Click="OnSaveAsSoundClick" ToolTip="Save Preset" />
+                                    <ui:IconButton x:Name="AudioRenameButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Pencil}"
+                                                   Margin="0,0,6,0" Click="OnRenameSoundClick" ToolTip="Rename Preset" />
+                                    <ui:IconButton x:Name="AudioDeleteButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Trash}"
+                                                   Click="OnDeleteSoundClick" ToolTip="Delete Preset" />
+                                </StackPanel>
+                            </Grid>
+                            <Border Grid.Row="0" Style="{StaticResource Hairline}" VerticalAlignment="Bottom" Margin="18,0" />
+
+                            <Grid Grid.Row="1" Margin="18,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="430" />
+                                    <ColumnDefinition Width="20" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <!-- left: 16:9 spectrum, then the effect sliders packed
+                                     tight underneath so the faders keep their room -->
+                                <Grid Grid.Column="0" Margin="0,18,0,18">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="*" />
+                                        <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
 
-                                    <Grid Grid.Row="0" Margin="0,0,0,12">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Style="{StaticResource SectionHeader}" Text="PREVIEW" Margin="0" />
-                                        <Border Grid.Column="1" Style="{StaticResource PillTrack}" VerticalAlignment="Center" Padding="3">
-                                            <StackPanel Orientation="Horizontal">
-                                                <Button x:Name="DayPillButton" Content="&#x1F31E;" Style="{StaticResource PillTabActive}" Click="OnDayPreviewClick" ToolTip="Day scene" />
-                                                <Button x:Name="NightPillButton" Content="&#x1F319;" Style="{StaticResource PillTab}" Margin="3,0,0,0" Click="OnNightPreviewClick" ToolTip="Night scene" />
-                                            </StackPanel>
-                                        </Border>
-                                    </Grid>
-
-                                    <Border Grid.Row="1" Style="{StaticResource PreviewFrameStyle}" Margin="0,0,0,12" ClipToBounds="True">
-                                        <Image x:Name="PreviewImage" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" />
+                                    <Border Grid.Row="0" Style="{StaticResource Hero}" Padding="10">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="230" />
+                                            </Grid.RowDefinitions>
+                                            <Grid Grid.Row="0" Margin="0,0,0,10">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Style="{StaticResource SectionHeader}" Text="SPECTRUM" Margin="0" VerticalAlignment="Center" />
+                                                <!-- Centred, with the track toggle on the right
+                                                     mirroring the day and night control on the
+                                                     display preview, so the two boxes read the
+                                                     same way. -->
+                                                <ui:IconButton x:Name="AudioPreviewButton" Grid.Column="1" Style="{StaticResource IconButton}"
+                                                              IconSize="15" Click="OnAudioPreviewClick" ToolTip="Play" />
+                                                <Button x:Name="PreviewTrackButton" Grid.Column="2" Style="{StaticResource PillTab}"
+                                                        HorizontalAlignment="Right" Margin="0"
+                                                        Click="OnPreviewTrackClick" ToolTip="Music">
+                                                    <ui:EmojiImage x:Name="PreviewTrackGlyph" Glyph="gamepad" Width="18" Height="18" />
+                                                </Button>
+                                            </Grid>
+                                            <Border Grid.Row="1" CornerRadius="10" ClipToBounds="True" Background="#000000" Padding="5,4,0,0">
+                                                <Grid x:Name="SpectrumHost" />
+                                            </Border>
+                                        </Grid>
                                     </Border>
 
-                                    <StackPanel Grid.Row="2">
-                                        <Grid Margin="0,14,0,0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="12" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Style="{StaticResource Label}" Text="Blue light filter" VerticalAlignment="Center" />
-                                            <ComboBox x:Name="BlueLightBox" Grid.Column="2" Style="{StaticResource ModernCombo}" ItemContainerStyle="{StaticResource ModernComboItem}" SelectionChanged="OnBlueLightChanged" MinWidth="132" />
-                                        </Grid>
+                                    <Border Grid.Row="1" Style="{StaticResource Hairline}" Margin="0,14,0,10" />
 
-                                        <Border Style="{StaticResource InnerCard}">
-                                            <StackPanel>
-                                                <TextBlock x:Name="ScreenActiveName" Text="FLAT" FontSize="16" FontWeight="SemiBold" />
-                                                <TextBlock x:Name="ScreenActiveSpec" Text="SHADOW +0%" Style="{StaticResource CardSub}" Margin="0,4,0,0" TextWrapping="Wrap" />
-                                                <TextBlock x:Name="ScreenActiveRgb" Text="RGB 1.00 1.00 1.00" FontSize="11" Foreground="{StaticResource TextLow}" Margin="0,4,0,0" />
-                                                <TextBlock x:Name="ScreenLiveText" Text="ON SCREEN NOW: NOTHING" Style="{StaticResource CardSub}" Margin="0,10,0,0" TextWrapping="Wrap" />
-                                            </StackPanel>
-                                        </Border>
+                                    <StackPanel Grid.Row="2">
+                                        <TextBlock Style="{StaticResource SectionHeader}" Text="EFFECTS AND ENGINE" Margin="0,0,0,12" />
+                                        <!-- Label, slider and readout share one line. The stacked
+
+                                             version needed 80 more pixels than the panel had, which
+
+                                             silently cut the last two effects off the bottom. -->
+
+                                        <Grid>
+
+                                            <Grid.ColumnDefinitions>
+
+                                                <ColumnDefinition Width="*" />
+
+                                                <ColumnDefinition Width="24" />
+
+                                                <ColumnDefinition Width="*" />
+
+                                            </Grid.ColumnDefinitions>
+
+                                            <Grid.RowDefinitions>
+
+                                                <RowDefinition Height="Auto" />
+
+                                                <RowDefinition Height="Auto" />
+
+                                                <RowDefinition Height="Auto" />
+
+                                                <RowDefinition Height="Auto" />
+
+                                                <RowDefinition Height="Auto" />
+
+                                            </Grid.RowDefinitions>
+
+
+
+                                            <Grid Grid.Row="0" Grid.Column="0" Margin="0,0,0,7" VerticalAlignment="Center">
+
+                                                <Grid.ColumnDefinitions>
+
+                                                    <ColumnDefinition Width="80" />
+
+                                                    <ColumnDefinition Width="*" />
+
+                                                    <ColumnDefinition Width="32" />
+
+                                                </Grid.ColumnDefinitions>
+
+                                                <TextBlock Style="{StaticResource Label}" Text="Clarity" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+
+                                                <Slider x:Name="ClaritySlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="0.25" Grid.Column="1" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentAudio}"
+
+                                                        Minimum="0" Maximum="10" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged"
+
+                                                        Margin="8,0" VerticalAlignment="Center" ToolTip="Clarity" />
+
+                                                <TextBlock x:Name="ClarityValue" Grid.Column="2" Style="{StaticResource Value}" Text="0.0" HorizontalAlignment="Right" />
+
+                                            </Grid>
+
+
+
+                                            <Grid Grid.Row="0" Grid.Column="2" Margin="0,0,0,7" VerticalAlignment="Center">
+
+                                                <Grid.ColumnDefinitions>
+
+                                                    <ColumnDefinition Width="80" />
+
+                                                    <ColumnDefinition Width="*" />
+
+                                                    <ColumnDefinition Width="32" />
+
+                                                </Grid.ColumnDefinitions>
+
+                                                <TextBlock Style="{StaticResource Label}" Text="Ambience" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+
+                                                <Slider x:Name="AmbienceSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="0.25" Grid.Column="1" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentAudio}"
+
+                                                        Minimum="0" Maximum="10" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged"
+
+                                                        Margin="8,0" VerticalAlignment="Center" ToolTip="Ambience" />
+
+                                                <TextBlock x:Name="AmbienceValue" Grid.Column="2" Style="{StaticResource Value}" Text="0.0" HorizontalAlignment="Right" />
+
+                                            </Grid>
+
+
+
+                                            <Grid Grid.Row="1" Grid.Column="0" Margin="0,0,0,7" VerticalAlignment="Center">
+
+                                                <Grid.ColumnDefinitions>
+
+                                                    <ColumnDefinition Width="80" />
+
+                                                    <ColumnDefinition Width="*" />
+
+                                                    <ColumnDefinition Width="32" />
+
+                                                </Grid.ColumnDefinitions>
+
+                                                <TextBlock Style="{StaticResource Label}" Text="Surround" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+
+                                                <Slider x:Name="SurroundSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="0.25" Grid.Column="1" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentAudio}"
+
+                                                        Minimum="0" Maximum="10" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged"
+
+                                                        Margin="8,0" VerticalAlignment="Center" ToolTip="Surround" />
+
+                                                <TextBlock x:Name="SurroundValue" Grid.Column="2" Style="{StaticResource Value}" Text="0.0" HorizontalAlignment="Right" />
+
+                                            </Grid>
+
+
+
+                                            <Grid Grid.Row="1" Grid.Column="2" Margin="0,0,0,7" VerticalAlignment="Center">
+
+                                                <Grid.ColumnDefinitions>
+
+                                                    <ColumnDefinition Width="80" />
+
+                                                    <ColumnDefinition Width="*" />
+
+                                                    <ColumnDefinition Width="32" />
+
+                                                </Grid.ColumnDefinitions>
+
+                                                <TextBlock Style="{StaticResource Label}" Text="Dynamic boost" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+
+                                                <Slider x:Name="DynamicBoostSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="0.25" Grid.Column="1" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentAudio}"
+
+                                                        Minimum="0" Maximum="10" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged"
+
+                                                        Margin="8,0" VerticalAlignment="Center" ToolTip="Dynamic Boost" />
+
+                                                <TextBlock x:Name="DynamicBoostValue" Grid.Column="2" Style="{StaticResource Value}" Text="0.0" HorizontalAlignment="Right" />
+
+                                            </Grid>
+
+
+
+                                            <Grid Grid.Row="2" Grid.Column="0" Margin="0,0,0,7" VerticalAlignment="Center">
+
+                                                <Grid.ColumnDefinitions>
+
+                                                    <ColumnDefinition Width="80" />
+
+                                                    <ColumnDefinition Width="*" />
+
+                                                    <ColumnDefinition Width="32" />
+
+                                                </Grid.ColumnDefinitions>
+
+                                                <TextBlock Style="{StaticResource Label}" Text="Bass boost" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+
+                                                <Slider x:Name="BassBoostSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="0.25" Grid.Column="1" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentAudio}"
+
+                                                        Minimum="0" Maximum="10" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged"
+
+                                                        Margin="8,0" VerticalAlignment="Center" ToolTip="Bass Boost" />
+
+                                                <TextBlock x:Name="BassBoostValue" Grid.Column="2" Style="{StaticResource Value}" Text="0.0" HorizontalAlignment="Right" />
+
+                                            </Grid>
+
+
+
+                                            <Grid Grid.Row="2" Grid.Column="2" Margin="0,0,0,7" VerticalAlignment="Center">
+
+                                                <Grid.ColumnDefinitions>
+
+                                                    <ColumnDefinition Width="80" />
+
+                                                    <ColumnDefinition Width="*" />
+
+                                                    <ColumnDefinition Width="32" />
+
+                                                </Grid.ColumnDefinitions>
+
+                                                <TextBlock Style="{StaticResource Label}" Text="Master gain" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+
+                                                <Slider x:Name="MasterGainSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="0.3" Grid.Column="1" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentAudio}"
+
+                                                        Minimum="-20" Maximum="20" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged"
+
+                                                        Margin="8,0" VerticalAlignment="Center" ToolTip="Master Gain" />
+
+                                                <TextBlock x:Name="MasterGainValue" Grid.Column="2" Style="{StaticResource Value}" Text="0.0" HorizontalAlignment="Right" />
+
+                                            </Grid>
+
+
+
+                                            <Grid Grid.Row="3" Grid.Column="0" Margin="0,0,0,7" VerticalAlignment="Center">
+
+                                                <Grid.ColumnDefinitions>
+
+                                                    <ColumnDefinition Width="80" />
+
+                                                    <ColumnDefinition Width="*" />
+
+                                                    <ColumnDefinition Width="32" />
+
+                                                </Grid.ColumnDefinitions>
+
+                                                <TextBlock Style="{StaticResource Label}" Text="Steady vol" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+
+                                                <Slider x:Name="LevelingSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="0.15" Grid.Column="1" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentAudio}"
+
+                                                        Minimum="0" Maximum="4" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged"
+
+                                                        Margin="8,0" VerticalAlignment="Center" ToolTip="Volume Leveling" />
+
+                                                <TextBlock x:Name="LevelingValue" Grid.Column="2" Style="{StaticResource Value}" Text="0.0" HorizontalAlignment="Right" />
+
+                                            </Grid>
+
+
+
+                                            <Grid Grid.Row="3" Grid.Column="2" Margin="0,0,0,7" VerticalAlignment="Center">
+
+                                                <Grid.ColumnDefinitions>
+
+                                                    <ColumnDefinition Width="80" />
+
+                                                    <ColumnDefinition Width="*" />
+
+                                                    <ColumnDefinition Width="32" />
+
+                                                </Grid.ColumnDefinitions>
+
+                                                <TextBlock Style="{StaticResource Label}" Text="Q width" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+
+                                                <Slider x:Name="FilterQSlider" ui:SliderSnap.Neutral="1.0" ui:SliderSnap.Threshold="0.04" Grid.Column="1" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentAudio}"
+
+                                                        Minimum="1" Maximum="3" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged"
+
+                                                        Margin="8,0" VerticalAlignment="Center" ToolTip="Q Width" />
+
+                                                <TextBlock x:Name="FilterQValue" Grid.Column="2" Style="{StaticResource Value}" Text="0.0" HorizontalAlignment="Right" />
+
+                                            </Grid>
+
+
+
+                                            <Grid Grid.Row="4" Grid.Column="0" Margin="0,0,0,7" VerticalAlignment="Center">
+
+                                                <Grid.ColumnDefinitions>
+
+                                                    <ColumnDefinition Width="80" />
+
+                                                    <ColumnDefinition Width="*" />
+
+                                                    <ColumnDefinition Width="32" />
+
+                                                </Grid.ColumnDefinitions>
+
+                                                <TextBlock Style="{StaticResource Label}" Text="Balance" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+
+                                                <Slider x:Name="BalanceSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="0.3" Grid.Column="1" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentAudio}"
+
+                                                        Minimum="-20" Maximum="20" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged"
+
+                                                        Margin="8,0" VerticalAlignment="Center" ToolTip="Balance" />
+
+                                                <TextBlock x:Name="BalanceValue" Grid.Column="2" Style="{StaticResource Value}" Text="0.0" HorizontalAlignment="Right" />
+
+                                            </Grid>
+                                        </Grid>
                                     </StackPanel>
                                 </Grid>
-                            </Border>
-                        </Grid>
-                    </Grid>
-                </ScrollViewer>
-            </TabItem>
 
-            <TabItem>
-                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
+                                <Border Grid.Column="1" Style="{StaticResource VHairline}" Margin="0,18" />
 
-                        <StackPanel Grid.Row="0">
-                            <TextBlock Style="{StaticResource SectionHeader}" Text="SOUND PRESETS" />
-                            <UniformGrid x:Name="AudioPresetGrid" Columns="4" />
-                        </StackPanel>
+                                <!-- right: the equalizer, also 16:9, with the band
+                                     faders filling it and scaling to the count -->
+                                <Grid Grid.Column="2" Margin="0,18,0,18">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
 
-                        <Grid Grid.Row="1" Margin="0,14,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="16" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
+                                    <Border Grid.Row="0" Style="{StaticResource Hero}" Padding="10">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="331" />
+                                            </Grid.RowDefinitions>
+                                            <TextBlock Grid.Row="0" Style="{StaticResource SectionHeader}" Text="EQUALIZER" Margin="0,0,0,10" />
+                                            <!-- The curve is drawn behind the faders rather
+                                                 than as a row of dials of its own: it
+                                                 shows the shape of the EQ at a glance, and
+                                                 it costs no extra controls. -->
+                                            <Border Grid.Row="1" CornerRadius="8" ClipToBounds="True" Background="#020202" Padding="4,4,4,2">
+                                                <Grid>
+                                                    <Canvas x:Name="EqCurveCanvas" IsHitTestVisible="False" SizeChanged="OnEqCurveCanvasSizeChanged" />
+                                                    <UniformGrid x:Name="BandGrid" Columns="10" />
+                                                </Grid>
+                                            </Border>
+                                        </Grid>
+                                    </Border>
 
-                            <Border Grid.Column="0" Style="{StaticResource Card}" VerticalAlignment="Top">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource SectionHeader}" Text="EFFECTS" />
-                                    <Grid>
+                                    <Grid Grid.Row="1" Margin="0,16,0,0">
                                         <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="14" />
                                             <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="20" />
-                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="Auto" />
-                                        </Grid.RowDefinitions>
-
-                                        <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,0,6">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Style="{StaticResource Label}" Text="Clarity" />
-                                                <TextBlock x:Name="ClarityValue" Grid.Column="1" Style="{StaticResource Value}" Text="0.0" />
-                                            </Grid>
-                                            <Slider x:Name="ClaritySlider" Style="{StaticResource PinkSlider}" Minimum="0" Maximum="10" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Row="0" Grid.Column="2" Margin="0,0,0,6">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Style="{StaticResource Label}" Text="Ambience" />
-                                                <TextBlock x:Name="AmbienceValue" Grid.Column="1" Style="{StaticResource Value}" Text="0.0" />
-                                            </Grid>
-                                            <Slider x:Name="AmbienceSlider" Style="{StaticResource PinkSlider}" Minimum="0" Maximum="10" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,6,0,6">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Style="{StaticResource Label}" Text="Surround" />
-                                                <TextBlock x:Name="SurroundValue" Grid.Column="1" Style="{StaticResource Value}" Text="0.0" />
-                                            </Grid>
-                                            <Slider x:Name="SurroundSlider" Style="{StaticResource PinkSlider}" Minimum="0" Maximum="10" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,6,0,6">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Style="{StaticResource Label}" Text="Dynamic boost" />
-                                                <TextBlock x:Name="DynamicBoostValue" Grid.Column="1" Style="{StaticResource Value}" Text="0.0" />
-                                            </Grid>
-                                            <Slider x:Name="DynamicBoostSlider" Style="{StaticResource PinkSlider}" Minimum="0" Maximum="10" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Row="2" Grid.Column="0" Margin="0,6,0,0">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Style="{StaticResource Label}" Text="Bass boost" />
-                                                <TextBlock x:Name="BassBoostValue" Grid.Column="1" Style="{StaticResource Value}" Text="0.0" />
-                                            </Grid>
-                                            <Slider x:Name="BassBoostSlider" Style="{StaticResource PinkSlider}" Minimum="0" Maximum="10" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged" />
-                                        </StackPanel>
+                                        <CheckBox x:Name="AntiClipBox" Grid.Column="0" Style="{StaticResource ModernToggle}" Foreground="{StaticResource AccentAudio}" VerticalAlignment="Center"
+                                                  Checked="OnAntiClipChanged" Unchecked="OnAntiClipChanged"
+                                                  ToolTip="Anti-Clip" />
+                                        <TextBlock x:Name="AntiClipValue" Grid.Column="2" Style="{StaticResource Value}" Text="PREAMP OFF"
+                                                   HorizontalAlignment="Left" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Column="3" Style="{StaticResource Label}" Text="Bands" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                        <ComboBox x:Name="BandCountBox" Grid.Column="4" Style="{StaticResource ModernCombo}" MinWidth="68"
+                                                  ItemContainerStyle="{StaticResource ModernComboItem}" SelectionChanged="OnBandCountChanged"
+                                                  ToolTip="Bands" />
                                     </Grid>
+                                </Grid>
+                            </Grid>
+
+                            <!-- footer: the actions, centred, and nothing else.
+                                 The old readout strip (power, loaded preset, master,
+                                 steady, Q, balance, output device) was dropped
+                                 because every value on it was already visible
+                                 somewhere that matters: the faders show the gains,
+                                 Settings shows whether the engine is running and
+                                 which output is selected. -->
+                            <Border Grid.Row="2" Style="{StaticResource Hairline}" VerticalAlignment="Top" Margin="18,0" />
+                            <Grid Grid.Row="2" Margin="18,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button Content="Apply" Style="{StaticResource PrimaryButton}" MinWidth="116"
+                                            Click="OnApplySoundClick" ToolTip="Apply" />
+                                    <ui:IconButton Icon="{x:Static ui:Icons.Refresh}" Style="{StaticResource IconButton}" Margin="10,0,0,0"
+                                                   Click="OnResetSoundClick" ToolTip="Reset" />
+                                    <Button x:Name="SaveToFxSoundButton" Content="Save in FxSound" Style="{StaticResource GhostButton}" Margin="10,0,0,0"
+                                            Click="OnSaveInFxSoundClick" ToolTip="Save in FxSound" />
                                 </StackPanel>
-                            </Border>
-
-                            <Border Grid.Column="2" Style="{StaticResource Card}" VerticalAlignment="Top">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource SectionHeader}" Text="ENGINE" />
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="20" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="Auto" />
-                                        </Grid.RowDefinitions>
-
-                                        <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,0,6">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Style="{StaticResource Label}" Text="Master gain" />
-                                                <TextBlock x:Name="MasterGainValue" Grid.Column="1" Style="{StaticResource Value}" Text="+0.0" />
-                                            </Grid>
-                                            <Slider x:Name="MasterGainSlider" Style="{StaticResource PinkSlider}" Minimum="-20" Maximum="20" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Row="0" Grid.Column="2" Margin="0,0,0,6">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Style="{StaticResource Label}" Text="Steady vol" />
-                                                <TextBlock x:Name="LevelingValue" Grid.Column="1" Style="{StaticResource Value}" Text="0.0" />
-                                            </Grid>
-                                            <Slider x:Name="LevelingSlider" Style="{StaticResource PinkSlider}" Minimum="0" Maximum="4" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,6,0,6">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Style="{StaticResource Label}" Text="Q width" />
-                                                <TextBlock x:Name="FilterQValue" Grid.Column="1" Style="{StaticResource Value}" Text="1.0" />
-                                            </Grid>
-                                            <Slider x:Name="FilterQSlider" Style="{StaticResource PinkSlider}" Minimum="1" Maximum="3" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,6,0,6">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Style="{StaticResource Label}" Text="Balance" />
-                                                <TextBlock x:Name="BalanceValue" Grid.Column="1" Style="{StaticResource Value}" Text="0.0" />
-                                            </Grid>
-                                            <Slider x:Name="BalanceSlider" Style="{StaticResource PinkSlider}" Minimum="-20" Maximum="20" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged" />
-                                        </StackPanel>
-                                    </Grid>
-
-                                    <Grid Margin="0,10,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="8" />
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="12" />
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="8" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <CheckBox x:Name="AntiClipBox" Grid.Column="0" Style="{StaticResource ModernToggle}" Content="Anti-clip" FontSize="12" Foreground="{StaticResource TextMid}" VerticalAlignment="Center" Checked="OnAntiClipChanged" Unchecked="OnAntiClipChanged" ToolTip="Trims master gain by the largest EQ boost so boosted bands cannot clip" />
-                                        <TextBlock x:Name="AntiClipValue" Grid.Column="2" Style="{StaticResource Value}" Text="PREAMP 0.0 dB" VerticalAlignment="Center" />
-                                        <TextBlock Grid.Column="5" Style="{StaticResource Label}" Text="Bands" VerticalAlignment="Center" />
-                                        <ComboBox x:Name="BandCountBox" Grid.Column="7" Style="{StaticResource ModernCombo}" ItemContainerStyle="{StaticResource ModernComboItem}" SelectionChanged="OnBandCountChanged" MinWidth="78" VerticalAlignment="Center" />
-                                    </Grid>
-
-                                    <Grid Margin="0,10,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="10" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <ComboBox x:Name="DeviceBox" Grid.Column="0" Style="{StaticResource ModernCombo}" ItemContainerStyle="{StaticResource ModernComboItem}" SelectionChanged="OnDeviceSelected" MinWidth="180" HorizontalAlignment="Left" />
-                                        <Button Grid.Column="2" Content="Rescan" Style="{StaticResource GhostButton}" MinWidth="0" Click="OnRescanDevicesClick" />
-                                    </Grid>
-                                </StackPanel>
-                            </Border>
+                            </Grid>
                         </Grid>
+                    </Border>
+                </TabItem>
 
-                        <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,14,0,0">
-                            <Grid>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
+                <!-- ================================================================
+                     HOTKEYS  Â·  the slot board is the hero, and the one page
+                     that scrolls, on a slim dark bar
+                     ================================================================ -->
+                <TabItem>
+                    <Border Style="{StaticResource PagePanel}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="54" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="50" />
+                            </Grid.RowDefinitions>
 
-                                <Grid Grid.Row="0" Margin="0,0,0,12">
+                            <Grid Grid.Row="0" Margin="18,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="SlotCountText" Grid.Column="0" Style="{StaticResource SectionHeader}"
+                                           Text="SLOTS" VerticalAlignment="Center" />
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <ui:IconButton x:Name="ScanGamesButton" Icon="{x:Static ui:Icons.Search}" Style="{StaticResource IconButton}" Margin="0,0,6,0"
+                                                   Click="OnScanAppsClick" ToolTip="Scan" />
+                                    <ui:IconButton Icon="{x:Static ui:Icons.Plus}" Style="{StaticResource IconButton}" Margin="0,0,6,0"
+                                                   Click="OnAddSlotClick" ToolTip="Add Slot" />
+                                    <ui:IconButton Icon="{x:Static ui:Icons.Refresh}" Style="{StaticResource IconButton}"
+                                                   Click="OnResetSlotsClick" ToolTip="Reset Slots" />
+                                </StackPanel>
+                            </Grid>
+                            <Border Grid.Row="0" Style="{StaticResource Hairline}" VerticalAlignment="Bottom" Margin="18,0" />
+
+                            <ScrollViewer Grid.Row="1" x:Name="SlotScroll" Padding="18,16,6,0"
+                                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                <ScrollViewer.Resources>
+                                    <Style TargetType="ScrollBar" BasedOn="{StaticResource SlimScroll}" />
+                                </ScrollViewer.Resources>
+                                <Grid x:Name="SlotList" />
+                            </ScrollViewer>
+
+                            <Border Grid.Row="2" Style="{StaticResource Hairline}" VerticalAlignment="Top" Margin="18,0" />
+                            <TextBlock x:Name="SlotHint" Grid.Row="2" Style="{StaticResource CardSub}"
+                                       Margin="18,0" VerticalAlignment="Center" TextAlignment="Center"
+                                       HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                       Text="Click a key box, then hold Ctrl or Alt and press the combo you want. Press it again to switch that slot back off." />
+                        </Grid>
+                    </Border>
+                </TabItem>
+
+                <!-- ================================================================
+                     SETTINGS  Â·  banner on top, then one centred column
+                     ================================================================ -->
+                <TabItem>
+                    <Border Style="{StaticResource PagePanel}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <Grid Grid.Row="0" Height="76" Margin="18,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="14" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <Border Grid.Column="0" Width="40" Height="40" CornerRadius="10" Background="#0E1F26"
+                                        BorderBrush="{StaticResource AccentDisplay}" BorderThickness="1" VerticalAlignment="Center">
+                                    <ui:EmojiImage Glyph="speaker" Width="24" Height="24" />
+                                </Border>
+
+                                <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock x:Name="FxStateText" Text="MISSING" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                        <TextBlock x:Name="FxVersionText" Margin="10,0,0,0" Style="{StaticResource CardSub}"
+                                                   VerticalAlignment="Center" Text="FxSound powers every sound change in this app" />
+                                    </StackPanel>
+                                    <TextBlock x:Name="FxPathText" Style="{StaticResource CardSub}" Margin="0,4,0,0"
+                                               FontFamily="{StaticResource Mono}" FontSize="10" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button x:Name="FxInstallButton" Style="{StaticResource PrimaryButton}"
+                                            MinWidth="168" Margin="0,0,8,0" Click="OnInstallClick"
+                                            ToolTip="Install">
+                                        <StackPanel Orientation="Horizontal">
+                                            <ui:EmojiImage Glyph="download" Width="17" Height="17" Margin="0,0,8,0" />
+                                            <TextBlock Text="Install FxSound" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button x:Name="FxUpgradeButton" Style="{StaticResource PrimaryButton}"
+                                            MinWidth="150" Margin="0,0,8,0" Visibility="Collapsed" Click="OnUpgradeFxSoundClick"
+                                            ToolTip="Update">
+                                        <StackPanel Orientation="Horizontal">
+                                            <ui:EmojiImage Glyph="refresh" Width="17" Height="17" Margin="0,0,8,0" />
+                                            <TextBlock Text="Update" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button x:Name="FxStartEngineButton" Style="{StaticResource GhostButton}"
+                                            MinWidth="128" Click="OnStartEngineClick" ToolTip="Start">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Path Data="{x:Static ui:Icons.Play}" Fill="{StaticResource TextHi}" Stretch="Uniform"
+                                                  Width="15" Height="15" Margin="0,0,8,0" />
+                                            <TextBlock Text="Start engine" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+
+                            <Border Grid.Row="0" Style="{StaticResource Hairline}" VerticalAlignment="Bottom" Margin="18,0" />
+
+                            <!-- one centred column, everything in reading order -->
+                            <StackPanel Grid.Row="1" Width="620" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="18,0">
+
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="OPTIONS" />
+                                <ui:OptionToggle x:Name="HardwareBrightnessBox" Style="{StaticResource OptionRow}" Margin="0,6,0,0"
+                                                 Glyph="sun" Label="Hardware brightness (DDC/CI)"
+                                                 Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                                 ToolTip="Controls the monitor's own backlight over DDC/CI instead of only bending gamma. Off by default: it talks to the monitor over I2C, which on a small number of displays with broken firmware has been known to crash Windows itself. The software controls are unaffected either way." />
+                                <Border Style="{StaticResource Hairline}" />
+                                <ui:OptionToggle x:Name="GammaLockBox" Style="{StaticResource OptionRow}" Margin="0,6,0,0"
+                                                 Glyph="lock" Label="Keep screen locked"
+                                                 Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                                 ToolTip="Gamma Lock" />
+                                <Border Style="{StaticResource Hairline}" />
+                                <ui:OptionToggle x:Name="OsdBox" Style="{StaticResource OptionRow}"
+                                                 Glyph="chat" Label="In-game popup"
+                                                 Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                                 ToolTip="Show Popup" />
+                                <Border Style="{StaticResource Hairline}" />
+                                <ui:OptionToggle x:Name="AutoSwitchBox" Style="{StaticResource OptionRow}"
+                                                 Glyph="gamepad" Label="Auto load slots by game"
+                                                 Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                                 ToolTip="Auto Switch" />
+                                <Border Style="{StaticResource Hairline}" />
+                                <ui:OptionToggle x:Name="CloseToTrayBox" Style="{StaticResource OptionRow}"
+                                                 Glyph="folder" Label="Close to tray"
+                                                 Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                                 ToolTip="Close to Tray" />
+                                <Border Style="{StaticResource Hairline}" />
+                                <ui:OptionToggle x:Name="StartHiddenBox" Style="{StaticResource OptionRow}"
+                                                 Glyph="hide" Label="Start hidden in tray"
+                                                 Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                                 ToolTip="Start Hidden" />
+                                <Border Style="{StaticResource Hairline}" />
+                                <ui:OptionToggle x:Name="StartWithWindowsBox" Style="{StaticResource OptionRow}"
+                                                 Glyph="rocket" Label="Start with Windows"
+                                                 Checked="OnStartupOptionChanged" Unchecked="OnStartupOptionChanged"
+                                                 ToolTip="Start with Windows" />
+
+                                <Border Style="{StaticResource Hairline}" Margin="0,22" />
+
+                                <!-- Copy diagnostics. The only control on this tab that
+                                     is not a setting: it reads the rolling log and puts
+                                     a sanitised summary on the clipboard, because the
+                                     first question about any bug is "what does the log
+                                     say" and the answer should not need the file
+                                     system. -->
+                                <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Style="{StaticResource SectionHeader}" Text="EQ BANDS" Margin="0" />
-                                    <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                        <Button x:Name="AudioPreviewButton" Style="{StaticResource RoundIconButton}" Width="40" Height="40" Margin="0,0,10,0" Click="OnAudioPreviewClick" ToolTip="Play or pause the preview loop" />
-                                        <TextBlock x:Name="AudioPreviewStateText" Text="PAUSED" Style="{StaticResource CardSub}" VerticalAlignment="Center" Margin="0,0,10,0" />
-                                        <Button Content="Apply sound" Style="{StaticResource PrimaryButton}" MinWidth="120" Margin="0,0,8,0" Click="OnApplySoundClick" />
-                                        <Button Content="Save as..." Style="{StaticResource GhostButton}" MinWidth="0" Margin="0,0,8,0" Click="OnSaveAsSoundClick" />
-                                        <Button Content="Rename" Style="{StaticResource GhostButton}" MinWidth="0" Margin="0,0,8,0" Click="OnRenameSoundClick" />
-                                        <Button Content="Reset sound" Style="{StaticResource GhostButton}" MinWidth="0" Margin="0,0,8,0" Click="OnResetSoundClick" />
-                                        <Button Content="Save in FxSound" Style="{StaticResource GhostButton}" MinWidth="0" Click="OnSaveInFxSoundClick" />
+
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource Label}" Text="Diagnostics" />
+                                        <TextBlock x:Name="DiagHintText" Style="{StaticResource CardSub}"
+                                                   Text="Keeps a rolling log of what the app did, ready to paste." />
                                     </StackPanel>
+
+                                    <Button x:Name="CopyDiagButton" Grid.Column="1" Style="{StaticResource GhostButton}"
+                                            Width="34" Height="30" MinWidth="0" Padding="0"
+                                            HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                            Click="OnCopyDiagnosticsClick" ToolTip="Copy Log">
+                                        <ui:EmojiImage Glyph="bug" Width="19" Height="19" />
+                                    </Button>
                                 </Grid>
 
-                                <Grid Grid.Row="1">
+                                <Border Style="{StaticResource Hairline}" Margin="0,22" />
+
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="SOUND OUT" />
+                                <Grid Margin="0,10,0,0">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="16" />
-                                        <ColumnDefinition Width="330" MinWidth="290" />
+                                        <ColumnDefinition Width="10" />
+                                        <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <Border Grid.Column="0" Style="{StaticResource Well}" Padding="8,6" VerticalAlignment="Top">
-                                        <UniformGrid x:Name="BandGrid" Columns="10" />
-                                    </Border>
-                                    <Border Grid.Column="2" Style="{StaticResource Well}" Padding="14" VerticalAlignment="Top">
-                                        <StackPanel>
-                                            <Grid Margin="0,0,0,10">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="Auto" />
-                                                    <ColumnDefinition Width="10" />
-                                                    <ColumnDefinition Width="*" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Grid.Column="0" Style="{StaticResource SectionHeader}" Text="ON SYSTEM NOW" Margin="0" />
-                                                <TextBlock x:Name="AudioLiveText" Grid.Column="2" Text="NOTHING" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource AccentAudio}" TextTrimming="CharacterEllipsis" />
-                                            </Grid>
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="12" />
-                                                    <ColumnDefinition Width="*" />
-                                                </Grid.ColumnDefinitions>
-                                                <Grid.RowDefinitions>
-                                                    <RowDefinition Height="Auto" />
-                                                    <RowDefinition Height="Auto" />
-                                                    <RowDefinition Height="Auto" />
-                                                </Grid.RowDefinitions>
-
-                                                <TextBlock Grid.Row="0" Grid.Column="0" x:Name="LivePowerText" Text="POWER OFF" FontSize="12" FontWeight="SemiBold" />
-                                                <TextBlock Grid.Row="0" Grid.Column="2" x:Name="LiveEngineText" Text="MASTER 0.0" FontSize="12" FontWeight="SemiBold" />
-                                                <TextBlock Grid.Row="1" Grid.Column="0" x:Name="LivePresetText" Text="NO PRESET" Style="{StaticResource CardSub}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
-                                                <TextBlock Grid.Row="1" Grid.Column="2" x:Name="LiveEngineSubText" Text="STEADY 0.0" Style="{StaticResource CardSub}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
-                                                <TextBlock Grid.Row="2" Grid.Column="0" x:Name="LiveVersionText" Text="FXSOUND" FontSize="11" Foreground="{StaticResource TextLow}" Margin="0,3,0,0" />
-                                                <TextBlock Grid.Row="2" Grid.Column="2" x:Name="LiveOutputText" Text="NO OUTPUT" FontSize="11" Foreground="{StaticResource TextLow}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
-                                            </Grid>
-                                        </StackPanel>
-                                    </Border>
+                                    <ComboBox x:Name="DeviceBox" Grid.Column="0" Style="{StaticResource ModernCombo}"
+                                              ItemContainerStyle="{StaticResource ModernComboItem}" SelectionChanged="OnDeviceSelected"
+                                              ToolTip="Output Device" />
+                                    <ui:IconButton Grid.Column="2" Icon="{x:Static ui:Icons.Refresh}" Style="{StaticResource IconButton}"
+                                                   Click="OnRescanDevicesClick" ToolTip="Rescan" />
                                 </Grid>
-                            </Grid>
-                        </Border>
-                    </Grid>
-                </ScrollViewer>
-            </TabItem>
 
-            <TabItem>
-                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
+                                <Border Style="{StaticResource Hairline}" Margin="0,22" />
 
-                        <Grid Grid.Row="0" Margin="0,0,0,14">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Style="{StaticResource SectionHeader}" Text="SLOTS  -  PICK A SCREEN AND SOUND, SET A KEY, AND LOAD IT PER GAME" Margin="0" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                        <Button Content="Scan games" Style="{StaticResource GhostButton}" MinWidth="0" Margin="0,0,8,0" Click="OnScanAppsClick" />
-                                        <Button Content="Add slot" Style="{StaticResource GhostButton}" MinWidth="0" Margin="0,0,8,0" Click="OnAddSlotClick" />
-                                <Button Content="Reset slots" Style="{StaticResource GhostButton}" MinWidth="0" Click="OnResetSlotsClick" />
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="BACKUP" />
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0" HorizontalAlignment="Center">
+                                    <Button Style="{StaticResource PrimaryButton}" MinWidth="140" Click="OnBackupClick"
+                                            ToolTip="Backup">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Viewbox Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center">
+                                                <Path Data="{x:Static ui:Icons.Save}" Stroke="#EAFBF7" StrokeThickness="1.7"
+                                                      StrokeLineJoin="Round" Fill="Transparent" />
+                                            </Viewbox>
+                                            <TextBlock Text="Backup" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource GhostButton}" MinWidth="140" Margin="10,0,0,0"
+                                            Click="OnRestoreClick" ToolTip="Restore">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Viewbox Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center">
+                                                <Path Data="{x:Static ui:Icons.Restore}" Stroke="{StaticResource TextMid}" StrokeThickness="1.7"
+                                                      StrokeLineJoin="Round" Fill="Transparent" />
+                                            </Viewbox>
+                                            <TextBlock Text="Restore" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                </StackPanel>
+                                <TextBlock x:Name="BackupHintText" Style="{StaticResource CardSub}" Margin="0,12,0,0" TextTrimming="CharacterEllipsis" />
+                                <TextBlock x:Name="BackupNoteText" Style="{StaticResource CardSub}" Margin="0,4,0,0"
+                                           TextWrapping="Wrap" MaxHeight="70" />
                             </StackPanel>
                         </Grid>
+                    </Border>
+                </TabItem>
+            </TabControl>
+        </Grid>
 
-                        <Grid Grid.Row="1">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-                            <Grid Grid.Row="0" Margin="0,0,0,8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="120" />
-                                    <ColumnDefinition Width="210" />
-                                    <ColumnDefinition Width="16" />
-                                    <ColumnDefinition Width="210" />
-                                    <ColumnDefinition Width="96" />
-                                    <ColumnDefinition Width="8" />
-                                    <ColumnDefinition Width="160" />
-                                    <ColumnDefinition Width="8" />
-                                    <ColumnDefinition Width="210" />
-                                    <ColumnDefinition Width="8" />
-                                    <ColumnDefinition Width="44" />
-                                    <ColumnDefinition Width="36" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Style="{StaticResource SectionHeader}" Text="SLOT" Margin="0" />
-                                <TextBlock Grid.Column="1" Style="{StaticResource SectionHeader}" Text="SCREEN" Margin="0" />
-                                <TextBlock Grid.Column="3" Style="{StaticResource SectionHeader}" Text="SOUND" Margin="0" />
-                                <TextBlock Grid.Column="4" Style="{StaticResource SectionHeader}" Text="KEY" Margin="0" TextAlignment="Center" />
-                                <TextBlock Grid.Column="6" Style="{StaticResource SectionHeader}" Text="ON SCREEN" Margin="0" />
-                                <TextBlock Grid.Column="8" Style="{StaticResource SectionHeader}" Text="LOAD WHEN" Margin="0" />
-                                <TextBlock Grid.Column="10" Style="{StaticResource SectionHeader}" Text="AUTO" Margin="0" TextAlignment="Center" />
-                            </Grid>
-                            <StackPanel Grid.Row="1">
-                                <StackPanel x:Name="SlotList" />
-                                <TextBlock x:Name="SlotHint" Style="{StaticResource CardSub}" Text="None on a side means that half is skipped." Margin="4,14,0,0" />
-                            </StackPanel>
-                        </Grid>
-                    </Grid>
-                </ScrollViewer>
-            </TabItem>
-
-            <TabItem>
-                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-
-                        <Grid Grid.Row="0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="16" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-
-                            <Border Grid.Column="0" Style="{StaticResource Card}">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource SectionHeader}" Text="SOUND ENGINE" />
-                                    <Border Style="{StaticResource InnerCard}">
-                                        <StackPanel>
-                                            <TextBlock x:Name="FxPathText" Text="FXSOUND PATH" Style="{StaticResource CardSub}" TextTrimming="CharacterEllipsis" />
-                                            <TextBlock x:Name="FxStateText" Text="MISSING" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource Amber}" Margin="0,6,0,0" />
-                                        </StackPanel>
-                                    </Border>
-                                    <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
-                                        <Button Content="Install FxSound" Style="{StaticResource PrimaryButton}" MinWidth="0" Margin="0,0,8,0" Click="OnInstallClick" />
-                                        <Button Content="Direct download" Style="{StaticResource GhostButton}" MinWidth="0" Margin="0,0,8,0" Click="OnDirectInstallClick" />
-                                        <Button Content="Start engine" Style="{StaticResource GhostButton}" MinWidth="0" Click="OnStartEngineClick" />
-                                    </StackPanel>
-                                </StackPanel>
-                            </Border>
-
-                            <Border Grid.Column="2" Style="{StaticResource Card}">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource SectionHeader}" Text="SOUND OUT" />
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <ComboBox x:Name="SetupDeviceBox" Grid.Column="0" Style="{StaticResource ModernCombo}" ItemContainerStyle="{StaticResource ModernComboItem}" MinWidth="220" HorizontalAlignment="Left" Margin="0,0,10,0" />
-                                        <Button Grid.Column="1" Content="Apply" Style="{StaticResource GhostButton}" MinWidth="0" Click="OnApplyDeviceClick" />
-                                    </Grid>
-                                    <TextBlock Style="{StaticResource CardSub}" Text="FxSound routes every app through this output." Margin="2,12,0,0" />
-                                </StackPanel>
-                            </Border>
-                        </Grid>
-
-                        <Grid Grid.Row="1" Margin="0,14,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="16" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-
-                            <Border Grid.Column="0" Style="{StaticResource Card}">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource SectionHeader}" Text="OPTIONS" />
-                                    <CheckBox x:Name="GammaLockBox" Content="Keep screen locked" Style="{StaticResource ToggleRow}" Margin="0,4" Checked="OnOptionChanged" Unchecked="OnOptionChanged" />
-                                    <CheckBox x:Name="OsdBox" Content="Show in-game popup" Style="{StaticResource ToggleRow}" Margin="0,4" Checked="OnOptionChanged" Unchecked="OnOptionChanged" />
-                                    <CheckBox x:Name="AutoSwitchBox" Content="Auto load slots by game" Style="{StaticResource ToggleRow}" Margin="0,4" Checked="OnOptionChanged" Unchecked="OnOptionChanged" />
-                                    <CheckBox x:Name="CloseToTrayBox" Content="Close to tray (keeps hotkeys live)" Style="{StaticResource ToggleRow}" Margin="0,4" Checked="OnOptionChanged" Unchecked="OnOptionChanged" />
-                                    <CheckBox x:Name="StartWithWindowsBox" Content="Start with Windows" Style="{StaticResource ToggleRow}" Margin="0,4" Checked="OnStartupOptionChanged" Unchecked="OnStartupOptionChanged" />
-                                    <CheckBox x:Name="StartHiddenBox" Content="Start hidden in tray" Style="{StaticResource ToggleRow}" Margin="0,4" Checked="OnOptionChanged" Unchecked="OnOptionChanged" />
-                                    <TextBlock Style="{StaticResource CardSub}" Text="Screen and sound go back to normal when Gamer Tool quits." Margin="2,10,0,0" />
-                                </StackPanel>
-                            </Border>
-
-                            <Border Grid.Column="2" Style="{StaticResource Card}">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource SectionHeader}" Text="BACKUP" />
-                                    <Border Style="{StaticResource InnerCard}">
-                                        <StackPanel>
-                                            <TextBlock x:Name="BackupHintText" Style="{StaticResource CardSub}" Text="One file with your settings, custom presets, slots and hotkeys." TextWrapping="Wrap" />
-                                            <TextBlock x:Name="BackupNoteText" Style="{StaticResource CardSub}" Text="Backup writes a file anywhere you like. Restore reads it back and matches it to this PC, so anything missing here just comes back as not set." Margin="0,8,0,0" TextWrapping="Wrap" />
-                                        </StackPanel>
-                                    </Border>
-                                    <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
-                                        <Button Content="Backup" Style="{StaticResource PrimaryButton}" MinWidth="0" Margin="0,0,8,0" Click="OnBackupClick" />
-                                        <Button Content="Restore" Style="{StaticResource GhostButton}" MinWidth="0" Click="OnRestoreClick" />
-                                    </StackPanel>
-                                </StackPanel>
-                            </Border>
-                        </Grid>
-                    </Grid>
-                </ScrollViewer>
-            </TabItem>
-        </TabControl>
-
-        <Border Grid.Row="3" Style="{StaticResource StatusBar}">
+        <!-- ============ STATUS BAR ============ -->
+        <Border Grid.Row="2" Style="{StaticResource StatusBar}">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
@@ -650,17 +1044,12 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Ellipse x:Name="StatusDot" Width="7" Height="7" Fill="{StaticResource Green}" VerticalAlignment="Center" Margin="0,0,10,0" />
-                    <TextBlock x:Name="RailStatus" Text="READY" FontSize="12" Foreground="{StaticResource TextMid}" VerticalAlignment="Center" />
+                    <Ellipse x:Name="StatusDot" Width="6" Height="6" Fill="{StaticResource Green}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBlock x:Name="RailStatus" Text="READY" FontSize="10.5" Foreground="{StaticResource TextMid}" VerticalAlignment="Center" />
                 </StackPanel>
 
-                <TextBlock Grid.Column="1" Style="{StaticResource CardSub}" HorizontalAlignment="Center" VerticalAlignment="Center" Text="Screen and sound only change when you press Apply or hit a slot key" />
-
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Ellipse Width="6" Height="6" Fill="{StaticResource AccentSettings}" VerticalAlignment="Center" Margin="0,0,8,0" />
-                    <TextBlock Text="GAMER TOOL 1.0" FontSize="11" Foreground="{StaticResource TextLow}" VerticalAlignment="Center" />
-                </StackPanel>
             </Grid>
         </Border>
     </Grid>
+        </Border>
 </Window>

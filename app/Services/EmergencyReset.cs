@@ -14,6 +14,14 @@ public sealed class SessionState
 
     public AudioService? Audio { get; set; }
 
+    /// <summary>
+    /// Puts every display's backlight back where it was found. Kept beside the
+    /// reset rather than inside it because a monitor left at 5% because the app
+    /// died is its own kind of bad outcome, and the gamma ramp being flat does
+    /// not fix that.
+    /// </summary>
+    public Action? RestoreBacklight { get; set; }
+
     public static SessionState Current { get; } = new();
 
     private int _done;
@@ -29,6 +37,19 @@ public static class EmergencyReset
     public static void Run()
     {
         SessionState state = SessionState.Current;
+
+        // The backlight goes back first and on its own account. Whether the gamma
+        // ramp or the audio were ever touched is beside the point here: a display
+        // this app dimmed has to come back whatever else happened.
+        try
+        {
+            state.RestoreBacklight?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("BACKLIGHT RESTORE", ex);
+        }
+
         if (!state.DisplayTouched && !state.AudioTouched)
         {
             return;

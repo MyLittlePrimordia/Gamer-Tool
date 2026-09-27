@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -48,9 +48,6 @@ public partial class MainWindow : Window
     private readonly AudioDeviceManager _devices = new();
 
 
-    private readonly AudioDeviceService _audioDevices = new();
-
-
     private readonly AppLibraryService _library = new();
 
 
@@ -66,6 +63,9 @@ public partial class MainWindow : Window
     private readonly RetroOsd _osd = new();
 
 
+    private SpectrumView? _spectrum;
+
+
     private readonly List<Slider> _bandSliders = new();
 
 
@@ -75,13 +75,8 @@ public partial class MainWindow : Window
     private readonly List<TextBlock> _bandLabelBlocks = new();
 
 
-    private readonly Dictionary<string, Border> _displayCards = new(StringComparer.OrdinalIgnoreCase);
-
-
-    private readonly Dictionary<string, Border> _audioCards = new(StringComparer.OrdinalIgnoreCase);
-
-
-    private readonly Dictionary<string, Border> _slotRows = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Only populated for the band counts whose centre frequencies can move.</summary>
+    private readonly List<FrequencyDial> _frequencyDials = new();
 
 
     private AppSettings _settings;
@@ -111,6 +106,10 @@ public partial class MainWindow : Window
     private bool _suppressDeviceEvents;
 
 
+    /// <summary>Default playback endpoint name, cached for the audio footer.</summary>
+    private string _systemOutput = string.Empty;
+
+
     private string? _captureSlotId;
 
 
@@ -135,6 +134,13 @@ public partial class MainWindow : Window
     private string _liveAudioName = "NOTHING";
 
 
+    /// <summary>Set by the launch-time winget query in SetupService.</summary>
+    private bool _fxUpdateAvailable;
+
+
+    private string _fxUpdateVersion = string.Empty;
+
+
     private bool _previewNight;
 
 
@@ -157,17 +163,23 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        // Keep the native caption strip black to match the OLED window body.
-        SourceInitialized += (_, _) => DarkTitleBar.Apply(new System.Windows.Interop.WindowInteropHelper(this).Handle);
-
         Icon = IconFactory.LoadWindowIcon();
 
         _settings = _profiles.Load();
+
+        // Settings saved by an older build carry the old defaults, so they are
+        // brought up to date before anything reads the active presets.
+        if (_settings.Schema < AppSettings.CurrentSchema)
+        {
+            _settings.Migrate();
+            _profiles.Save(_settings);
+        }
+
         _audio.ExePath = _settings.FxSoundPath;
         SessionState.Current.Display = _display;
         SessionState.Current.Audio = _audio;
-        _workDisplay = FindDisplay(_settings.ActiveDisplayPresetId) ?? DisplayPreset.Defaults[0].Copy();
-        _workAudio = FindAudio(_settings.ActiveAudioPresetId) ?? AudioPreset.Defaults[0].Copy();
+        _workDisplay = (FindDisplay(_settings.ActiveDisplayPresetId) ?? DisplayPreset.Flat()).Copy();
+        _workAudio = (FindAudio(_settings.ActiveAudioPresetId) ?? AudioPreset.Flat()).Copy();
         _activeDisplayId = _workDisplay.Id;
         _activeAudioId = _workAudio.Id;
 
@@ -191,13 +203,17 @@ public partial class MainWindow : Window
         Closing += OnClosing;
         Loaded += OnWindowLoaded;
 
-        GammaLockBox.IsChecked = _settings.GammaLock;
-        OsdBox.IsChecked = _settings.ShowOsd;
+        // Whatever ends this app, including a crash or a kill, the displays go
+        // back to the brightness they were found at.
+        SessionState.Current.RestoreBacklight = () => Backlight.RestoreAll();
+
+        GammaLockBox.IsChecked = _settings.GammaLock;        OsdBox.IsChecked = _settings.ShowOsd;
         AutoSwitchBox.IsChecked = _settings.AutoSwitch;
         StartHiddenBox.IsChecked = _settings.StartHidden;
         CloseToTrayBox.IsChecked = _settings.CloseToTray;
         StartWithWindowsBox.IsChecked = _startup.IsEnabled;
         AntiClipBox.IsChecked = _settings.AntiClip;
+        HardwareBrightnessBox.IsChecked = _settings.HardwareBrightnessEnabled;
         _audio.AntiClipEnabled = _settings.AntiClip;
         UpdateAntiClipReadout();
 
@@ -209,20 +225,22 @@ public partial class MainWindow : Window
 
         LoadDevices();
         LoadTune(_workDisplay, _workAudio);
-        BuildDisplayCards();
-        BuildAudioCards();
+        RefreshPresetBoxes();
         BuildSlots();
         RegisterHotkeys();
         ApplyWatchState();
 
-        AudioPreviewButton.Content = "▶";
         UpdatePreviewPills();
         UpdateAudioPreviewState();
         UpdateLiveLabels();
         RenderDisplayPreview();
         _audioPreview.StateChanged += UpdateAudioPreviewState;
-        _audioPreview.Failed += text => Flash("[ " + text + " ]", "CHECK THE ASSETS FOLDER");
+        _audioPreview.Failed += text => Flash(text + " failed, check the assets folder", true);
         _audioPreview.Prepare();
+        UpdatePreviewTrackButton();
+
+        _spectrum = new SpectrumView(SpectrumHost, () => _audioPreview.Position, () => _audioPreview.IsPlaying);
+        _spectrum.SetBandGain(SpectrumBandGain);
 
         _ready = true;
 
@@ -235,8 +253,38 @@ public partial class MainWindow : Window
     }
 
 
-    private static bool StartHidden()
+    /// <summary>
+    /// Gain in dB that one spectrum bar should show, taken from the EQ band whose
+    /// centre frequency is nearest. This is what makes the analyser respond as the
+    /// faders move rather than just showing the untouched track.
+    /// </summary>
+    private double SpectrumBandGain(int bar)
     {
+        int count = _bandSliders.Count;
+        if (count == 0)
+        {
+            return 0.0;
+        }
+
+        double hz = SpectrumView.BarCentre(bar);
+
+        int nearest = 0;
+        double best = double.MaxValue;
+        for (int i = 0; i < count; i++)
+        {
+            double distance = Math.Abs(Math.Log(AudioPreset.BandFrequency(count, i) / hz));
+            if (distance < best)
+            {
+                best = distance;
+                nearest = i;
+            }
+        }
+
+        return Math.Clamp(_workAudio.Band(nearest), AudioPreset.GainMin, AudioPreset.GainMax);
+    }
+
+
+    private static bool StartHidden()    {
         string[] args = Environment.GetCommandLineArgs();
         foreach (string arg in args)
         {
@@ -286,8 +334,7 @@ public partial class MainWindow : Window
     }
 
 
-    private static int StartPage()
-    {
+    private static int StartPage()    {
         string[] args = Environment.GetCommandLineArgs();
         for (int i = 0; i < args.Length - 1; i++)
         {
@@ -312,15 +359,33 @@ public partial class MainWindow : Window
         }
 
         Pages.SelectedIndex = index;
-        PageTitleText.Text = index switch
-        {
-            0 => "Display",
-            1 => "Audio",
-            2 => "Hotkeys",
-            _ => "Settings"
-        };
 
-        HeroImage.Source = LoadTabIcon(index);
+        // The backlight is probed when its own tab is opened, not at launch and
+        // not until the option is flipped. That way the I2C bus is never touched
+        // before the user has actually gone looking at the thing that needs it,
+        // and an option that was left on still works on the next run.
+        if (index == 0 && Backlight.IsEnabled && !Backlight.HasProbed)
+        {
+            _ = Task.Run(() =>
+            {
+                Backlight.Probe();
+                Dispatcher.InvokeAsync(RefreshBacklightRows);
+            });
+        }
+        else if (index == 0)
+        {
+            RefreshBacklightRows();
+        }
+
+        // The analyser only burns CPU while it is actually on screen.
+        if (index == 1)
+        {
+            _spectrum?.Start();
+        }
+        else
+        {
+            _spectrum?.Stop();
+        }
 
         if (index == 2)
         {
@@ -331,49 +396,6 @@ public partial class MainWindow : Window
         if (index != 1 && _audioPreview.IsPlaying)
         {
             _audioPreview.Pause();
-        }
-    }
-
-
-    private static readonly string[] TabIconFiles = { "display.png", "audio.png", "hotkeys.png", "settings.png" };
-
-
-    private static readonly Dictionary<int, System.Windows.Media.ImageSource> TabIconCache = new();
-
-
-    private static System.Windows.Media.ImageSource? LoadTabIcon(int index)
-    {
-        if (index < 0 || index >= TabIconFiles.Length)
-        {
-            return null;
-        }
-
-        if (TabIconCache.TryGetValue(index, out System.Windows.Media.ImageSource? cached))
-        {
-            return cached;
-        }
-
-        try
-        {
-            byte[] data = DisplayPreview.ReadAsset(TabIconFiles[index]);
-            if (data.Length == 0)
-            {
-                return null;
-            }
-
-            System.Windows.Media.Imaging.BitmapImage image = new();
-            image.BeginInit();
-            image.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-            image.StreamSource = new MemoryStream(data);
-            image.EndInit();
-            image.Freeze();
-            TabIconCache[index] = image;
-            return image;
-        }
-        catch (Exception ex)
-        {
-            TraceLog.Write("TAB ICON", ex);
-            return null;
         }
     }
 
@@ -410,7 +432,7 @@ public partial class MainWindow : Window
 
         if (_settings.ShowOsd)
         {
-            _osd.ShowToast("[ GAMER TOOL READY ]", "HIT A SLOT KEY TO LOAD");
+            Flash("Ready, hit a slot key to load");
         }
 
         HotkeySlot? startSlot = _settings.Slots.FirstOrDefault(s => s.Enabled && s.ApplyOnStart && s.HasWork);
@@ -418,12 +440,61 @@ public partial class MainWindow : Window
         {
             PlaySlot(startSlot, announce: true);
         }
-        else
+
+        // The spec line under the preview always shows the real values. It used to
+        // be overwritten with "press apply" on a cold start, which is already said
+        // by the live state on the right and by the edited dot on the preset tag.
+        UpdateLiveLabels();
+
+        // Both FxSound jobs run off the UI thread: the prompt only appears when
+        // the engine is genuinely missing, and the update badge is filled in
+        // later so a slow winget call never delays the window opening.
+        bool missing = !_setup.IsInstalled(_audio);
+        if (missing)
         {
-            ScreenActiveSpec.Text = "NOT ON YOUR SCREEN YET - PRESS APPLY OR A SLOT KEY";
+            PromptForFxSound();
         }
 
-        UpdateLiveLabels();
+        _ = CheckFxSoundUpdateAsync();
+    }
+
+
+    /// <summary>
+    /// First run on a machine with no FxSound: ask once, then never nag again.
+    /// A user who says later can still install from the banner on the Audio tab
+    /// or from Settings.
+    /// </summary>
+    private void PromptForFxSound()
+    {
+        if (_settings.FxPromptSeen)
+        {
+            return;
+        }
+
+        _settings.FxPromptSeen = true;
+        Commit();
+
+        ShowConfirmModal(
+            "FXSOUND IS NOT INSTALLED",
+            "FxSound does the actual sound work. Without it this app can still change your screen, "
+            + "but the audio tab will stay silent. It is a free app and installs in about a minute.",
+            "Install FxSound",
+            () => _ = InstallAsync(true),
+            "Later");
+    }
+
+
+    private async System.Threading.Tasks.Task CheckFxSoundUpdateAsync()
+    {
+        FxUpdateResult? result = await System.Threading.Tasks.Task.Run(() => _setup.CheckForUpdate());
+        if (result is null)
+        {
+            return;
+        }
+
+        _fxUpdateAvailable = result.UpdateAvailable;
+        _fxUpdateVersion = result.AvailableVersion;
+        UpdateFxBanner();
     }
 
 
@@ -439,19 +510,41 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (index == Pages.SelectedIndex)
+        SelectPage(index);
+    }
+
+
+    // ============ custom title bar ============
+
+    private void OnTitleBarDragDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left)
         {
-            PageTitleText.Text = index switch
-            {
-                0 => "Display",
-                1 => "Audio",
-                2 => "Hotkeys",
-                _ => "Settings"
-            };
             return;
         }
 
-        SelectPage(index);
+        try
+        {
+            DragMove();
+        }
+        catch (InvalidOperationException)
+        {
+            // A second click while already moving; nothing to do.
+        }
+    }
+
+
+    private void OnCaptionMinClick(object sender, RoutedEventArgs e)
+    {
+        // Minimising to the tray rather than the taskbar keeps the hotkeys live
+        // and matches what the tray menu does.
+        HideToTray();
+    }
+
+
+    private void OnCaptionCloseClick(object sender, RoutedEventArgs e)
+    {
+        OnClosing(this, new System.ComponentModel.CancelEventArgs());
     }
 
 
@@ -493,153 +586,102 @@ public partial class MainWindow : Window
     }
 
 
-    private UIElement PresetCard<T>(T preset, bool isMine, Dictionary<string, Border> cards, RoutedEventHandler click, RoutedEventHandler delete, RoutedEventHandler rename) where T : class
+    /// <summary>
+    /// Rebuilds both preset dropdowns from the built-ins plus anything the user
+    /// has saved, and re-selects whichever preset is loaded.
+    /// </summary>
+    private void RefreshPresetBoxes()
     {
-        string id = GetId(preset);
-        string name = GetName(preset);
-        string tag = GetTag(preset);
-        string spec = GetSpec(preset);
-
-        Border card = new()
+        _updating = true;
+        try
         {
-            Style = (Style)FindResource("Card"),
-            Margin = new Thickness(6),
-            Padding = new Thickness(14, 12, 14, 12)
-        };
-
-        Grid layout = new();
-        StackPanel content = new();
-        content.Children.Add(new TextBlock { Text = name, FontSize = 14, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
-        content.Children.Add(new TextBlock { Text = tag, Style = (Style)FindResource("CardSub"), Margin = new Thickness(0, 3, 0, 0) });
-        content.Children.Add(new TextBlock { Text = spec, FontFamily = (FontFamily)FindResource("Mono"), FontSize = 10, Foreground = (Brush)FindResource("TextLow"), Margin = new Thickness(0, 6, 0, 0) });
-
-        Button hit = new()
-        {
-            Style = (Style)FindResource("PresetCardButton"),
-            Tag = id,
-            Content = content,
-            Padding = new Thickness(0),
-            HorizontalContentAlignment = HorizontalAlignment.Stretch,
-            VerticalContentAlignment = VerticalAlignment.Center
-        };
-        hit.Click += click;
-
-        layout.Children.Add(hit);
-        card.Child = layout;
-
-        if (isMine)
-        {
-            StackPanel tools = new()
+            List<PresetChoice> display = new();
+            HashSet<string> builtInDisplay = DisplayPreset.Defaults.Select(p => p.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (DisplayPreset preset in AllDisplayPresets())
             {
-                Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Right,
-                VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, 8, 8, 0)
-            };
-            tools.Children.Add(ChipButton("Rename", id, rename));
-            tools.Children.Add(ChipButton("Delete", id, delete));
-            layout.Children.Add(tools);
+                display.Add(new PresetChoice
+                {
+                    Kind = "display",
+                    Id = preset.Id,
+                    Name = preset.Name,
+                    BuiltIn = builtInDisplay.Contains(preset.Id)
+                });
+            }
 
-            Border badge = new()
+            List<PresetChoice> audio = new();
+            HashSet<string> builtInAudio = AudioPreset.Defaults.Select(p => p.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (AudioPreset preset in AllAudioPresets())
             {
-                Style = (Style)FindResource("Badge"),
-                Background = (Brush)FindResource("TealDim"),
-                HorizontalAlignment = HorizontalAlignment.Left,
-                VerticalAlignment = VerticalAlignment.Bottom,
-                Margin = new Thickness(10, 0, 0, 8)
-            };
-            badge.Child = new TextBlock { Text = "MINE", FontSize = 9, FontWeight = FontWeights.Bold, Foreground = (Brush)FindResource("Teal") };
-            layout.Children.Add(badge);
+                audio.Add(new PresetChoice
+                {
+                    Kind = "audio",
+                    Id = preset.Id,
+                    Name = preset.Name,
+                    BuiltIn = builtInAudio.Contains(preset.Id)
+                });
+            }
+
+            DisplayPresetBox.ItemsSource = display;
+            AudioPresetBox.ItemsSource = audio;
+            SelectChoice(DisplayPresetBox, _activeDisplayId);
+            SelectChoice(AudioPresetBox, _activeAudioId);
+        }
+        finally
+        {
+            _updating = false;
         }
 
-        cards[id] = card;
-        return card;
+        UpdatePresetChrome();
     }
 
 
-    private static Button ChipButton(string text, string tag, RoutedEventHandler handler)
+    private static void SelectChoice(ComboBox box, string id)
     {
-        Button button = new()
+        if (box.ItemsSource is not IEnumerable<PresetChoice> choices)
         {
-            Content = text,
-            Style = (Style)Application.Current.FindResource("GhostButton"),
-            FontSize = 10,
-            MinWidth = 0,
-            Padding = new Thickness(7, 3, 7, 3),
-            Margin = new Thickness(4, 0, 0, 0),
-            Tag = tag
-        };
-        button.Click += handler;
-        return button;
-    }
-
-
-    private static string GetId<T>(T preset)
-    {
-        return preset switch
-        {
-            DisplayPreset d => d.Id,
-            AudioPreset a => a.Id,
-            _ => string.Empty
-        };
-    }
-
-
-    private static string GetName<T>(T preset)
-    {
-        return preset switch
-        {
-            DisplayPreset d => d.Name,
-            AudioPreset a => a.Name,
-            _ => string.Empty
-        };
-    }
-
-
-    private static string GetTag<T>(T preset)
-    {
-        return preset switch
-        {
-            DisplayPreset d => d.Tag,
-            AudioPreset a => a.Tag,
-            _ => string.Empty
-        };
-    }
-
-
-    private static string GetSpec<T>(T preset)
-    {
-        return preset switch
-        {
-            DisplayPreset d => d.CompactSpec,
-            AudioPreset a => a.CompactSpec,
-            _ => string.Empty
-        };
-    }
-
-
-    private void HighlightCards()
-    {
-        foreach (KeyValuePair<string, Border> pair in _displayCards)
-        {
-            bool active = string.Equals(pair.Key, _activeDisplayId, StringComparison.OrdinalIgnoreCase);
-            pair.Value.BorderBrush = active ? (Brush)FindResource("Teal") : (Brush)FindResource("Line");
-            pair.Value.Background = active ? (Brush)FindResource("TealDim") : (Brush)FindResource("CardBg");
+            return;
         }
 
-        foreach (KeyValuePair<string, Border> pair in _audioCards)
+        foreach (PresetChoice choice in choices)
         {
-            bool active = string.Equals(pair.Key, _activeAudioId, StringComparison.OrdinalIgnoreCase);
-            pair.Value.BorderBrush = active ? (Brush)FindResource("Pink") : (Brush)FindResource("Line");
-            pair.Value.Background = active ? (Brush)FindResource("PinkDim") : (Brush)FindResource("CardBg");
+            if (string.Equals(choice.Id, id, StringComparison.OrdinalIgnoreCase))
+            {
+                box.SelectedItem = choice;
+                return;
+            }
         }
+    }
+
+
+    /// <summary>
+    /// Rename and delete only ever act on the user's own presets, so the two
+    /// buttons are greyed out unless the loaded one is theirs.
+    /// </summary>
+    private void UpdatePresetChrome()
+    {
+        DisplayPreset? display = FindDisplay(_activeDisplayId);
+        bool displayMine = _settings.CustomDisplayPresets.Any(p => p.Id == _activeDisplayId);
+        DisplayRenameButton.IsEnabled = displayMine;
+        DisplayDeleteButton.IsEnabled = displayMine;
+
+        AudioPreset? audio = FindAudio(_activeAudioId);
+        bool audioMine = _settings.CustomAudioPresets.Any(p => p.Id == _activeAudioId);
+        AudioRenameButton.IsEnabled = audioMine;
+        AudioDeleteButton.IsEnabled = audioMine;
+
+        SaveToFxSoundButton.IsEnabled = _audio.IsInstalled;
     }
 
 
     private void LoadTune(DisplayPreset display, AudioPreset audio)
     {
-        _workDisplay = display;
-        _workAudio = audio;
+        // Copied on the way in. The working tune gets renamed to "Tuned" whenever
+        // a slider moves, and FindDisplay and FindAudio hand back the built-in
+        // entries themselves, so without a copy that rename would land on the
+        // shared list and the shipped presets would start calling themselves
+        // "Tuned" for the rest of the session.
+        _workDisplay = display.Copy();
+        _workAudio = audio.Copy();
 
         int count = audio.NumBands <= 0 ? AudioPreset.PresetBandCount : audio.NumBands;
         if (_bandSliders.Count != count)
@@ -671,6 +713,24 @@ public partial class MainWindow : Window
             {
                 _bandSliders[i].Value = audio.Band(i);
             }
+
+            // Put each frequency dial where the loaded tune says it belongs, so a
+            // saved tuning comes back with its bands where they were left.
+            if (_frequencyDials.Count == count && AudioPreset.HasFrequencyDial(count))
+            {
+                EnsureFrequencies(audio, count);
+                for (int i = 0; i < _frequencyDials.Count; i++)
+                {
+                    AudioPreset.BandWindow window = AudioPreset.Window(count, i);
+                    double step = AudioPreset.StepFromFrequency(window, audio.Frequencies[i]);
+                    _frequencyDials[i].SetStep(step);
+                    _frequencyDials[i].DefaultStep = AudioPreset.StepFromFrequency(window, AudioPreset.BandFrequency(count, i));
+                    if (i < _bandLabelBlocks.Count)
+                    {
+                        _bandLabelBlocks[i].Text = AudioPreset.FormatFrequency(audio.Frequencies[i]);
+                    }
+                }
+            }
         }
         finally
         {
@@ -679,6 +739,14 @@ public partial class MainWindow : Window
 
         UpdateScreenLabels(display);
         UpdateSoundLabels(audio);
+        UpdatePresetChrome();
+
+        // The curve reads the faders' own geometry, so it can only be drawn once
+        // they have been laid out. Waiting for the dispatcher means the numbers are
+        // final and ActualHeight is real, instead of guessing a height.
+        Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Loaded,
+            new Action(UpdateEqCurve));
     }
 
 
@@ -697,8 +765,10 @@ public partial class MainWindow : Window
 
     private void UpdateLiveLabels()
     {
-        ScreenLiveText.Text = "ON SCREEN NOW: " + _liveDisplayName;
-        AudioLiveText.Text = _liveAudioName;
+        ScreenLiveText.Text = _liveDisplayName == "NOTHING" ? "Nothing applied" : _liveDisplayName;
+        ScreenLiveDot.Fill = _liveDisplayName == "NOTHING"
+            ? (Brush)FindResource("TextLow")
+            : (Brush)FindResource("AccentDisplay");
     }
 
 
@@ -708,12 +778,72 @@ public partial class MainWindow : Window
     }
 
 
-    private void Flash(string headline, string subline)
+    /// <summary>
+    /// One short line of confirmation. The old pair of bracketed headline and
+    /// shouted subline was two rows of text for something that only ever needed to
+    /// say what just happened, so it is now a single trimmed sentence.
+    /// </summary>
+    private void Flash(string message)
     {
         if (_settings.ShowOsd)
         {
-            _osd.ShowToast(headline, subline);
+            _osd.ShowToast(message);
         }
+    }
+
+
+    /// <summary>As <see cref="Flash"/>, but flagged amber for anything that failed.</summary>
+    private void Flash(string message, bool warn)
+    {
+        if (_settings.ShowOsd)
+        {
+            _osd.ShowToast(message, warn);
+        }
+    }
+
+
+    /// <summary>
+    /// The quiet half of an apply. The status line says which of the three
+    /// outcomes it was, in three words, and the tooltip carries the list of
+    /// values the engine did not take. No toast: an apply is a deliberate act,
+    /// so it does not need to interrupt, but a mismatch still has to be findable
+    /// without turning the sound up and down to hunt for it.
+    /// </summary>
+    private void ReportApply(AudioService.ApplyReport report)
+    {
+        string text;
+        string? detail;
+        bool warn;
+
+        switch (report.Outcome)
+        {
+            case AudioService.ApplyOutcome.Applied:
+                text = "SOUND APPLIED";
+                detail = "The engine is doing everything that was asked of it.";
+                warn = false;
+                break;
+
+            case AudioService.ApplyOutcome.Drifted:
+                text = "SOUND DRIFTED";
+                detail = "The engine did not take all of it:" + Environment.NewLine
+                    + string.Join(Environment.NewLine, report.Mismatches);
+                warn = true;
+                break;
+
+            default:
+                text = "SOUND FAILED";
+                detail = report.Mismatches.Count == 0
+                    ? "The engine did not report its state."
+                    : string.Join(Environment.NewLine, report.Mismatches);
+                warn = true;
+                break;
+        }
+
+        RailStatus.Text = text;
+        RailStatus.Foreground = warn
+            ? (Brush)FindResource("Amber")
+            : (Brush)FindResource("TextMid");
+        RailStatus.ToolTip = detail;
     }
 
 
@@ -737,6 +867,9 @@ public partial class MainWindow : Window
         public string Id { get; set; } = string.Empty;
 
         public string Name { get; set; } = string.Empty;
+
+        /// <summary>True for a preset the app ships, false for one the user saved.</summary>
+        public bool BuiltIn { get; set; }
 
         public override string ToString()
         {

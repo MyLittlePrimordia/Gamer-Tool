@@ -1,24 +1,21 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Threading;
 using GamerTool.Models;
 using GamerTool.Services;
 using GamerTool.UI;
 using Button = System.Windows.Controls.Button;
 using ComboBox = System.Windows.Controls.ComboBox;
 using TextBox = System.Windows.Controls.TextBox;
-using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using Brush = System.Windows.Media.Brush;
+using Brushes = System.Windows.Media.Brushes;
+using Cursors = System.Windows.Input.Cursors;
 using FontFamily = System.Windows.Media.FontFamily;
-using Color = System.Windows.Media.Color;
 
 namespace GamerTool;
 
@@ -34,97 +31,128 @@ public partial class MainWindow : Window
     }
 
 
-    private void BuildSlots()
+    /// <summary>
+    /// One slot per full width row with everything on a single line, so the
+    /// dropdowns can be wide enough to show a real preset name and a real game
+    /// name instead of truncating to nothing. The game target takes the leftover
+    /// width because game names are the longest of the three. This is the only
+    /// page that scrolls, and it scrolls on a slim dark bar.
+    /// </summary>
+    /// <summary>
+    /// Column widths shared by a slot row and the caption strip above it, so the
+    /// two can never drift apart. The app dropdown is the only flexible column.
+    /// The key column is 112px because "CTRL+SHIFT+5" in 10.5pt mono needs more
+    /// than the 84px it used to get and was being cut to "CTRL+SH".
+    /// </summary>
+    private static readonly GridLength[] SlotColumns =
     {
-        SlotList.Children.Clear();
-        _slotRows.Clear();
+        new(112), new(10), new(150), new(16), new(196), new(10),
+        new(196), new(10), new(112), new(10), new(1, GridUnitType.Star),
+        new(16), new(34), new(8), new(30)
+    };
 
-        foreach (HotkeySlot slot in _settings.Slots)
-        {
-            SlotList.Children.Add(SlotRow(slot));
-        }
-
-        if (_settings.Slots.Count == 0)
-        {
-            SlotHint.Text = "No slots yet. Hit Add slot to make one.";
-            return;
-        }
-
-        SlotHint.Text = "None on a side means that half is skipped. The toggle only works while auto load is on in Settings.";
+    private static void ApplySlotColumns(Grid row)
+    {
+        foreach (GridLength width in SlotColumns)
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = width });
     }
 
 
-    private UIElement SlotRow(HotkeySlot slot)
+    /// <summary>
+    /// Captions for the controls in a slot row. The strip is a child of the same
+    /// grid as the rows and carries the card's own 12px padding as a margin, so
+    /// each caption lands exactly over the control it names.
+    /// </summary>
+    private UIElement SlotHeaderRow()
     {
-        Border row = new()
-        {
-            Style = (Style)FindResource("Row"),
-            Margin = new Thickness(0, 0, 0, 10)
-        };
-        _slotRows[slot.Id] = row;
+        Grid head = new();
+        ApplySlotColumns(head);
+        head.Margin = new Thickness(12, 0, 12, 8);
 
-        Grid grid = new();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(16) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(96) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(160) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(36) });
-
-        StackPanel nameBox = new()
+        void Caption(int column, string text, bool right = false)
         {
-            Margin = new Thickness(0, 0, 10, 0),
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        TextBlock nameText = new()
-        {
-            Text = string.IsNullOrWhiteSpace(slot.Name) ? "SLOT" : slot.Name.ToUpperInvariant(),
-            FontSize = 12,
-            FontWeight = FontWeights.SemiBold,
-            TextTrimming = TextTrimming.CharacterEllipsis
-        };
-        TextBlock nameSub = new()
-        {
-            Text = slot.WorkText,
-            Style = (Style)FindResource("CardSub"),
-            FontSize = 10,
-            Margin = new Thickness(0, 2, 0, 0)
-        };
-        nameBox.Children.Add(nameText);
-        nameBox.Children.Add(nameSub);
-        Grid.SetColumn(nameBox, 0);
+            TextBlock caption = new()
+            {
+                Text = text,
+                Style = (Style)FindResource("SectionHeader"),
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = right ? HorizontalAlignment.Right : HorizontalAlignment.Left
+            };
+            Grid.SetColumn(caption, column);
+            head.Children.Add(caption);
+        }
 
-        TextBlock plus = new()
+        Caption(0, "KEY");
+        Caption(2, "SLOT");
+        Caption(4, "DISPLAY");
+        Caption(6, "SOUND");
+        Caption(8, "MONITOR");
+        Caption(10, "GAME");
+        Caption(12, "AUTO", true);
+        Caption(14, "DELETE", true);
+
+        return head;
+    }
+
+
+    private void BuildSlots()
+    {
+        SlotList.Children.Clear();
+        SlotList.ColumnDefinitions.Clear();
+        SlotList.RowDefinitions.Clear();
+        SlotList.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        int count = _settings.Slots.Count;
+        SlotCountText.Text = count == 0
+            ? "No slots"
+            : count.ToString(CultureInfo.InvariantCulture) + (count == 1 ? " slot" : " slots");
+
+        SlotHint.Text = count == 0
+            ? "Hit + to add a slot."
+            : "Click a key box, then hold Ctrl or Alt and press the combo you want. Press it again to switch that slot back off.";
+
+        if (count == 0)
+            return;
+
+        SlotList.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        SlotList.Children.Add(SlotHeaderRow());
+
+        for (int i = 0; i < count; i++)
         {
-            Text = "+",
-            FontSize = 16,
-            Foreground = (Brush)FindResource("TextLow"),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center
+            SlotList.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            UIElement card = SlotCard(_settings.Slots[i]);
+            Grid.SetRow(card, i + 1);
+            SlotList.Children.Add(card);
+        }
+    }
+
+
+    /// <summary>
+    /// A single slot as one full width row: keycap, name, the three things it
+    /// loads, which screen it touches, when it fires, and the two per slot
+    /// actions on the far right.
+    /// </summary>
+    private UIElement SlotCard(HotkeySlot slot)
+    {
+        Border card = new()
+        {
+            Style = (Style)FindResource("Tile"),
+            Padding = new Thickness(12, 8, 12, 8),
+            Margin = new Thickness(0, 0, 0, 8)
         };
-        Grid.SetColumn(plus, 2);
 
-        ComboBox displayBox = PresetCombo("display", slot);
-        Grid.SetColumn(displayBox, 1);
-
-        ComboBox soundBox = PresetCombo("audio", slot);
-        Grid.SetColumn(soundBox, 3);
+        Grid row = new();
+        ApplySlotColumns(row);
 
         TextBox keyBox = new()
         {
-            Style = (Style)FindResource("ModernTextBox"),
+            Style = (Style)FindResource("KeyCap"),
             Text = slot.Hotkey,
             Tag = slot.Id,
-            FontFamily = (FontFamily)FindResource("Mono"),
-            FontSize = 12,
-            TextAlignment = TextAlignment.Center,
-            ToolTip = "Click, then press the new key combo"
+            Height = 28,
+            ToolTip = string.IsNullOrWhiteSpace(slot.Hotkey)
+                ? "Click to set"
+                : slot.Hotkey
         };
         keyBox.GotKeyboardFocus += (s, e) =>
         {
@@ -140,13 +168,42 @@ public partial class MainWindow : Window
                 _captureBox = null;
             }
         };
-        Grid.SetColumn(keyBox, 4);
+        Grid.SetColumn(keyBox, 0);
+
+        TextBlock nameText = new()
+        {
+            Text = string.IsNullOrWhiteSpace(slot.Name) ? "Slot" : slot.Name,
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            ToolTip = slot.HasWork ? slot.WorkText : "Empty slot",
+
+            // A slot the user added can be named, so the toast that reports a
+            // slot loading says something recognisable rather than "SLOT 5".
+            Cursor = slot.BuiltIn ? Cursors.Arrow : Cursors.Hand,
+            Background = Brushes.Transparent
+        };
+
+        if (!slot.BuiltIn)
+        {
+            nameText.ToolTip = "Rename";
+            nameText.MouseLeftButtonUp += (s, e) => RenameSlot(slot);
+        }
+
+        Grid.SetColumn(nameText, 2);
+
+        ComboBox displayBox = PresetCombo("display", slot);
+        Grid.SetColumn(displayBox, 4);
+
+        ComboBox soundBox = PresetCombo("audio", slot);
+        Grid.SetColumn(soundBox, 6);
 
         ComboBox monitorBox = MonitorCombo(slot);
-        Grid.SetColumn(monitorBox, 6);
+        Grid.SetColumn(monitorBox, 8);
 
         ComboBox appBox = AppCombo(slot);
-        Grid.SetColumn(appBox, 8);
+        Grid.SetColumn(appBox, 10);
 
         bool canAuto = slot.HasWork && (slot.IsSelfTarget || slot.HasTarget);
         CheckBox autoBox = new()
@@ -155,22 +212,22 @@ public partial class MainWindow : Window
             IsChecked = slot.AutoActivate,
             IsEnabled = slot.AutoActivate || canAuto,
             Tag = slot.Id,
-            HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
             ToolTip = AutoToolTip(slot)
         };
         autoBox.Checked += (s, e) => SetSlotFlag(slot, "auto", true);
         autoBox.Unchecked += (s, e) => SetSlotFlag(slot, "auto", false);
-        Grid.SetColumn(autoBox, 10);
+        Grid.SetColumn(autoBox, 12);
 
-        Button remove = new()
+        IconButton remove = new()
         {
-            Content = "x",
             Style = (Style)FindResource("IconButton"),
-            Foreground = (Brush)FindResource("TextMid"),
+            Icon = Icons.Trash,
             Tag = slot.Id,
-            ToolTip = "Remove slot",
-            HorizontalAlignment = HorizontalAlignment.Center
+            ToolTip = "Delete Slot",
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
         };
         remove.Click += (s, e) =>
         {
@@ -180,19 +237,19 @@ public partial class MainWindow : Window
             RegisterHotkeys();
             ApplyWatchState();
         };
-        Grid.SetColumn(remove, 11);
+        Grid.SetColumn(remove, 14);
 
-        grid.Children.Add(nameBox);
-        grid.Children.Add(displayBox);
-        grid.Children.Add(plus);
-        grid.Children.Add(soundBox);
-        grid.Children.Add(keyBox);
-        grid.Children.Add(monitorBox);
-        grid.Children.Add(appBox);
-        grid.Children.Add(autoBox);
-        grid.Children.Add(remove);
-        row.Child = grid;
-        return row;
+        row.Children.Add(keyBox);
+        row.Children.Add(nameText);
+        row.Children.Add(displayBox);
+        row.Children.Add(soundBox);
+        row.Children.Add(monitorBox);
+        row.Children.Add(appBox);
+        row.Children.Add(autoBox);
+        row.Children.Add(remove);
+
+        card.Child = row;
+        return card;
     }
 
 
@@ -205,8 +262,7 @@ public partial class MainWindow : Window
             ItemContainerStyle = (Style)FindResource("ModernComboItem"),
             ItemsSource = choices,
             Tag = slot.Id + "|monitor",
-            ToolTip = "Which screen this slot changes",
-            Margin = new Thickness(0, 0, 0, 0)
+            ToolTip = "Screens"
         };
 
         int index = 0;
@@ -246,7 +302,7 @@ public partial class MainWindow : Window
 
     private ComboBox PresetCombo(string kind, HotkeySlot slot)
     {
-        List<PresetChoice> choices = new() { new PresetChoice { Kind = kind, Id = string.Empty, Name = "None" } };
+        List<PresetChoice> choices = new() { new PresetChoice { Kind = kind, Id = string.Empty, Name = "No screen" } };
 
         if (kind == "display")
         {
@@ -261,6 +317,8 @@ public partial class MainWindow : Window
             {
                 choices.Add(new PresetChoice { Kind = kind, Id = preset.Id, Name = preset.Name });
             }
+
+            choices[0].Name = "No sound";
         }
 
         ComboBox box = new()
@@ -269,8 +327,15 @@ public partial class MainWindow : Window
             ItemContainerStyle = (Style)FindResource("ModernComboItem"),
             ItemsSource = choices,
             Tag = slot.Id + "|" + kind,
-            Margin = new Thickness(0, 0, 0, 0)
+            ToolTip = kind == "display" ? "Screen Preset" : "Sound Preset"
         };
+
+        // Preset names are the user's to write, so a long one has to stay
+        // readable in a fixed width column. Only the closed box needs this: the
+        // open list sizes itself to its widest row, so nothing is cut off there.
+        // The sound picker is left out, its names are all short and set by us.
+        if (kind == "display")
+            MarqueeBox.SetAllowMarquee(box, true);
 
         int index = choices.FindIndex(c => string.Equals(c.Id, kind == "display" ? slot.DisplayPresetId : slot.AudioPresetId, StringComparison.OrdinalIgnoreCase));
         box.SelectedIndex = index < 0 ? 0 : index;
@@ -306,7 +371,7 @@ public partial class MainWindow : Window
     {
         List<AppCandidate> choices = new()
         {
-            new AppCandidate { Name = "None", ExePath = string.Empty, ProcessName = string.Empty, Source = "NONE" },
+            new AppCandidate { Name = "No game", ExePath = string.Empty, ProcessName = string.Empty, Source = "NONE" },
             new AppCandidate { Name = "Gamer Tool (on start)", ExePath = SelfMarker, ProcessName = string.Empty, Source = "SELF", Icon = IconFactory.LoadWindowIcon() }
         };
         choices.AddRange(_appList.Where(c => !string.IsNullOrWhiteSpace(c.ExePath)));
@@ -320,9 +385,12 @@ public partial class MainWindow : Window
             HorizontalContentAlignment = HorizontalAlignment.Left,
             ItemsSource = choices,
             Tag = slot.Id + "|app",
-            ToolTip = "Pick when this slot loads: a game, a file, or Gamer Tool on start",
-            Margin = new Thickness(0, 0, 0, 0)
+            ToolTip = "Auto Switch"
         };
+
+        // Installed programs have long names and this column is narrow, so the
+        // closed box scrolls rather than clipping.
+        MarqueeBox.SetAllowMarquee(box, true);
 
         // Icons are pulled the first time the list is actually opened, not on startup.
         box.DropDownOpened += (_, _) => ResolveAppIcons(choices);
@@ -344,13 +412,14 @@ public partial class MainWindow : Window
             {
                 AppCandidate manual = new()
                 {
-                    Name = string.IsNullOrWhiteSpace(slot.AppName) ? "PICKED" : slot.AppName,
+                    Name = string.IsNullOrWhiteSpace(slot.AppName) ? "Picked" : slot.AppName,
                     ExePath = slot.AppExePath,
                     ProcessName = AppProfileTools.ProcessNameOf(slot.AppExePath),
                     Source = "MANUAL"
                 };
                 manual.Icon = IconFactory.ExtractAppIcon(manual.ExePath);
-                choices.Insert(2, manual);                box.ItemsSource = choices;
+                choices.Insert(2, manual);
+                box.ItemsSource = choices;
                 index = 2;
             }
         }
@@ -395,20 +464,20 @@ public partial class MainWindow : Window
     {
         if (!slot.HasWork)
         {
-            return "Pick a screen or a sound first";
+            return "Empty slot";
         }
 
         if (slot.IsSelfTarget)
         {
-            return "Loads when Gamer Tool starts";
+            return "On Startup";
         }
 
         if (!slot.HasTarget)
         {
-            return "Pick a game in LOAD WHEN first";
+            return "Pick a game first";
         }
 
-        return "Load this slot when " + slot.TargetText + " runs";
+        return "Auto: " + slot.TargetText;
     }
 
 
@@ -425,7 +494,7 @@ public partial class MainWindow : Window
         foreach (HotkeySlot other in AutoClaimants(slot))
         {
             other.AutoActivate = false;
-            Flash("[ AUTO MOVED ]", "OFF FOR " + other.Name.ToUpperInvariant());
+            Flash("Auto load off for " + other.Name);
         }
 
         if (AutoClaimants(slot).Count > 0)
@@ -443,7 +512,7 @@ public partial class MainWindow : Window
         foreach (HotkeySlot other in others)
         {
             other.AutoActivate = false;
-            Flash("[ AUTO MOVED ]", "OFF FOR " + other.Name.ToUpperInvariant());
+            Flash("Auto load off for " + other.Name);
         }
     }
 
@@ -461,14 +530,14 @@ public partial class MainWindow : Window
             {
                 if (!slot.HasWork)
                 {
-                    Flash("[ NOTHING TO LOAD ]", "PICK A SCREEN OR A SOUND");
+                    Flash("Nothing to load, pick a screen or sound", true);
                     BuildSlots();
                     return;
                 }
 
                 if (!slot.IsSelfTarget && !slot.HasTarget)
                 {
-                    Flash("[ NO TARGET ]", "PICK A GAME IN LOAD WHEN");
+                    Flash("Pick a game in the last dropdown", true);
                     BuildSlots();
                     return;
                 }
@@ -519,7 +588,7 @@ public partial class MainWindow : Window
         if (!slot.HasWork)
         {
             slot.AutoActivate = false;
-            Flash("[ SLOT EMPTY ]", "AUTO TURNED OFF");
+            Flash("Slot empty, auto load off", true);
         }
 
         Commit();
@@ -559,7 +628,7 @@ public partial class MainWindow : Window
         {
             Microsoft.Win32.OpenFileDialog dialog = new()
             {
-                Title = "PICK THE GAME OR APP FILE",
+                Title = "PICK THE GAME OR APP",
                 Filter = "Programs|*.exe;*.bat;*.lnk;*.cmd|All files|*.*",
                 CheckFileExists = true
             };
@@ -571,7 +640,7 @@ public partial class MainWindow : Window
                 slot.AppName = System.IO.Path.GetFileNameWithoutExtension(picked);
                 slot.AutoActivate = true;
                 ReleaseClaimsOn(slot);
-                Flash("[ TARGET SET ]", slot.AppName.ToUpperInvariant());
+                Flash("Target set to " + slot.AppName);
             }
 
             Commit();
@@ -605,8 +674,6 @@ public partial class MainWindow : Window
 
         try
         {
-            string? folder = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-            string shell = Environment.GetFolderPath(Environment.SpecialFolder.System);
             Type? shellType = Type.GetTypeFromProgID("WScript.Shell");
             if (shellType is null)
             {
@@ -650,9 +717,11 @@ public partial class MainWindow : Window
 
     private async void OnScanAppsClick(object sender, RoutedEventArgs e)
     {
+        RailStatus.Text = "SCANNING FOR GAMES";
         await EnsureAppList();
         BuildSlots();
-        Flash("[ GAMES SCANNED ]", _appList.Count.ToString(CultureInfo.InvariantCulture) + " FOUND");
+        RailStatus.Text = "READY";
+        Flash(_appList.Count.ToString(CultureInfo.InvariantCulture) + " games found");
     }
 
 
@@ -675,7 +744,7 @@ public partial class MainWindow : Window
         RailStatus.Text = slot.Name.ToUpperInvariant();
         if (announce)
         {
-            Flash("[ " + slot.Name.ToUpperInvariant() + " ]", slot.WorkText);
+            Flash(slot.Name + " loaded");
         }
     }
 
@@ -732,33 +801,121 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>
+    /// Registers every armed slot, plus the global off key.
+    ///
+    /// The duplicate rule lives here rather than in the key capture handler on
+    /// purpose. Capture only checks the slots that are armed at that moment, so a
+    /// key can still end up shared: disable a slot, give its key to another one,
+    /// then re-arm the first. A restored backup can do the same thing without
+    /// anyone typing. Enforcing it in one place means the invariant holds however
+    /// the state got that way, first slot wins, and the loser is named so the
+    /// silent "KEY BUSY" in the status bar becomes something you can act on.
+    /// </summary>
     private void RegisterHotkeys()
     {
         _hotkeys.Clear();
+        HashSet<string> taken = new(StringComparer.Ordinal);
+        List<HotkeySlot> skipped = new();
         int id = 1;
+
         foreach (HotkeySlot slot in _settings.Slots)
         {
             if (!string.IsNullOrWhiteSpace(slot.Hotkey) && slot.Enabled)
             {
-                _hotkeys.Register(id, "slot:" + slot.Id, slot.Hotkey);
+                string key = HotkeyService.Normalise(slot.Hotkey);
+                if (taken.Add(key))
+                {
+                    _hotkeys.Register(id, "slot:" + slot.Id, slot.Hotkey);
+                }
+                else
+                {
+                    skipped.Add(slot);
+                }
             }
 
             id++;
         }
+
+        if (skipped.Count > 0)
+        {
+            string names = string.Join(", ", skipped.Select(s => s.Name));
+            string keys = string.Join(", ", skipped.Select(s => s.Hotkey).Distinct(StringComparer.OrdinalIgnoreCase));
+            RailStatus.Text = "DUP KEY SKIPPED ON " + names.ToUpperInvariant();
+            Flash("Key already on another slot, skipped on " + names, true);
+            TraceLog.Write("HOTKEY duplicate " + keys + " skipped on " + names);
+        }
     }
 
 
-    private void OnHotkeyPressed(HotkeyBinding binding)
+    /// <summary>
+    /// A slot key is a toggle: the first press loads the slot, and pressing the
+    /// same key again takes it back off again, which puts the screen and the
+    /// sound back to their neutral presets. There is no separate off key, so
+    /// every slot only ever needs one binding and the gesture that loaded a
+    /// setup is also the gesture that backs it out.
+    ///
+    /// The test is which preset is live rather than a remembered flag, so the
+    /// toggle still behaves if a slot was loaded by auto-switch or by clicking
+    /// the row instead of by pressing the key.
+    ///
+    /// Holding the key down cannot toggle twice and undo the work, because every
+    /// binding is registered with MOD_NOREPEAT, so Windows delivers one press
+    /// per physical press rather than a stream of repeats.
+    /// </summary>
+    private async void OnHotkeyPressed(HotkeyBinding binding)
     {
         if (binding.TargetId.StartsWith("slot:", StringComparison.OrdinalIgnoreCase))
         {
             string id = binding.TargetId["slot:".Length..];
             HotkeySlot? slot = _settings.Slots.FirstOrDefault(s => s.Id == id);
-            if (slot is not null)
+            if (slot is null)
             {
-                PlaySlot(slot, true);
+                return;
             }
+
+            bool screenMatches = string.Equals(slot.DisplayPresetId, _activeDisplayId, StringComparison.OrdinalIgnoreCase);
+            bool soundMatches = string.Equals(slot.AudioPresetId, _activeAudioId, StringComparison.OrdinalIgnoreCase);
+
+            if (screenMatches && soundMatches)
+            {
+                GoScreenNeutral();
+                await GoSoundNeutralAsync();
+                Flash(slot.Name + " off");
+                return;
+            }
+
+            PlaySlot(slot, true);
         }
+    }
+
+
+    /// <summary>
+    /// Names a slot the user added. The built in ones keep their names, because
+    /// those names are how the slot is recognised on screen and in the log.
+    /// </summary>
+    private void RenameSlot(HotkeySlot slot)
+    {
+        if (slot.BuiltIn)
+        {
+            Flash("Built-in slots keep their name", true);
+            return;
+        }
+
+        ShowModal("RENAME SLOT", slot.Name, text =>
+        {
+            string trimmed = text.Trim();
+            if (trimmed.Length == 0)
+            {
+                return;
+            }
+
+            slot.Name = trimmed;
+            Commit();
+            BuildSlots();
+            RegisterHotkeys();
+            Flash("Slot named " + trimmed);
+        });
     }
 
 
@@ -772,7 +929,7 @@ public partial class MainWindow : Window
     {
         ShowConfirmModal(
             "RESET ALL SLOTS?",
-            "This deletes every custom slot, app target and hotkey you have set and puts the built-in defaults back. This cannot be undone.",
+            "Every custom slot, game target and key you set is deleted and the four defaults come back. This cannot be undone.",
             "Reset slots",
             () =>
             {
@@ -781,9 +938,8 @@ public partial class MainWindow : Window
                 BuildSlots();
                 RegisterHotkeys();
                 ApplyWatchState();
-                Flash("[ SLOTS RESET ]", "BACK TO DEFAULTS");
+                Flash("Slots back to defaults");
             });
     }
-
 
 }

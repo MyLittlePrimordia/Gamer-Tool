@@ -9,6 +9,13 @@ public sealed class HotkeySlot
 
     public string Name { get; set; } = string.Empty;
 
+    /// <summary>
+    /// True for the slots the app ships with. Those keep their names, because the
+    /// names are how they are recognised; a slot the user added can be named so
+    /// the toast that says a slot loaded actually identifies it.
+    /// </summary>
+    public bool BuiltIn { get; set; }
+
     public string? DisplayPresetId { get; set; }
 
     public string? AudioPresetId { get; set; }
@@ -102,6 +109,7 @@ public sealed class HotkeySlot
         {
             Id = Id,
             Name = Name,
+            BuiltIn = BuiltIn,
             DisplayPresetId = DisplayPresetId,
             AudioPresetId = AudioPresetId,
             Hotkey = Hotkey,

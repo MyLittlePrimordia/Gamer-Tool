@@ -43,10 +43,15 @@ public partial class RetroOsd : Window
 
     public DispatcherTimer HideTimer { get; }
 
-    public void ShowToast(string headline, string subline)
+    /// <summary>
+    /// One short line, centred at the top of the screen. The message is trimmed to
+    /// a single line so a long one cannot push the plate wider than the screen.
+    /// </summary>
+    public void ShowToast(string message, bool warn = false)
     {
-        HeadText.Text = headline;
-        SubText.Text = subline;
+        HeadText.Text = string.IsNullOrWhiteSpace(message) ? "Gamer Tool" : message.Trim();
+        Dot.Fill = new System.Windows.Media.SolidColorBrush(
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(warn ? "#F5A524" : "#2DD4BF"));
         Prepare();
         Show();
         Pulse();
@@ -54,11 +59,27 @@ public partial class RetroOsd : Window
 
     private void Prepare()
     {
-        double width = ActualWidth > 0 ? ActualWidth : 620;
-        double left = SystemParameters.VirtualScreenLeft + ((SystemParameters.VirtualScreenWidth - width) / 2.0);
-        double top = SystemParameters.VirtualScreenTop + 8;
-        Left = left;
-        Top = top;
+        UpdateLayout();
+
+        // Centred on whichever monitor the pointer area sits on, falling back to
+        // the primary screen, so a second display does not push it off screen.
+        Rect area = SystemParameters.WorkArea;
+        double width = ActualWidth > 0 ? ActualWidth : 320.0;
+        double height = ActualHeight > 0 ? ActualHeight : 44.0;
+
+        Left = area.Left + ((area.Width - width) / 2.0);
+        Top = area.Top + 10.0;
+
+        if (Left < area.Left)
+        {
+            Left = area.Left;
+        }
+
+        if (Top + height > area.Bottom)
+        {
+            Top = area.Bottom - height;
+        }
+
         Opacity = 1.0;
     }
 
@@ -78,7 +99,7 @@ public partial class RetroOsd : Window
     private void Pulse()
     {
         HideTimer.Stop();
-        FadeOut.BeginTime = TimeSpan.FromSeconds(1.5);
+        FadeOut.BeginTime = TimeSpan.FromSeconds(1.4);
         Frame.BeginAnimation(OpacityProperty, FadeOut, HandoffBehavior.SnapshotAndReplace);
         HideTimer.Start();
     }

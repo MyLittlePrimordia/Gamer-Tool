@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using GamerTool.Models;
@@ -7,15 +7,19 @@ namespace GamerTool.Services;
 
 public sealed class SlotService
 {
+    // The five shipped slots pair a screen preset with a sound preset that are
+    // meant to be used together, and a sixth unassigned baseline so there is
+    // always a way back to neutral from the slot list. Ids are kept stable so
+    // saved presets and existing slots keep pointing at the same entry.
     public static IReadOnlyList<HotkeySlot> FactorySlots { get; } = new List<HotkeySlot>
     {
         new HotkeySlot
         {
             Id = "slot_tactical",
-            Name = "TACTICAL SHOOTER",
+            Name = "Tactical FPS",
             DisplayPresetId = "camper",
             AudioPresetId = "footstep",
-            Hotkey = "ALT+1",
+            Hotkey = "SHIFT+1",
             AppExePath = null,
             AppName = null,
             AutoActivate = false,
@@ -24,10 +28,10 @@ public sealed class SlotService
         new HotkeySlot
         {
             Id = "slot_royale",
-            Name = "BATTLE ROYALE",
-            DisplayPresetId = "daylight",
+            Name = "Battle Royale",
+            DisplayPresetId = "racing",
             AudioPresetId = "royale",
-            Hotkey = "ALT+2",
+            Hotkey = "SHIFT+2",
             AppExePath = null,
             AppName = null,
             AutoActivate = false,
@@ -36,10 +40,22 @@ public sealed class SlotService
         new HotkeySlot
         {
             Id = "slot_story",
-            Name = "CINEMATIC",
+            Name = "Story and RPG",
+            DisplayPresetId = "flat",
+            AudioPresetId = "arcade",
+            Hotkey = "SHIFT+3",
+            AppExePath = null,
+            AppName = null,
+            AutoActivate = false,
+            Enabled = true
+        },
+        new HotkeySlot
+        {
+            Id = "slot_cinema",
+            Name = "Cinema",
             DisplayPresetId = "cinematic",
             AudioPresetId = "cinematic",
-            Hotkey = "ALT+3",
+            Hotkey = "ALT+1",
             AppExePath = null,
             AppName = null,
             AutoActivate = false,
@@ -48,10 +64,25 @@ public sealed class SlotService
         new HotkeySlot
         {
             Id = "slot_night",
-            Name = "LATE NIGHT",
-            DisplayPresetId = "night",
-            AudioPresetId = "lofi",
-            Hotkey = "ALT+4",
+            Name = "Late Night",
+            DisplayPresetId = "oled",
+            AudioPresetId = "latenight",
+            Hotkey = "ALT+2",
+            AppExePath = null,
+            AppName = null,
+            AutoActivate = false,
+            Enabled = true
+        },
+        // Deliberately left without a key. It is the way back to neutral without
+        // hunting for a reset button, and it does not fight the other five for a
+        // binding the user has not chosen yet.
+        new HotkeySlot
+        {
+            Id = "slot_desktop",
+            Name = "Desktop",
+            DisplayPresetId = "flat",
+            AudioPresetId = "flat",
+            Hotkey = string.Empty,
             AppExePath = null,
             AppName = null,
             AutoActivate = false,
@@ -80,7 +111,9 @@ public sealed class SlotService
         List<HotkeySlot> slots = new();
         foreach (HotkeySlot slot in FactorySlots)
         {
-            slots.Add(slot.Copy());
+            HotkeySlot copy = slot.Copy();
+            copy.BuiltIn = true;
+            slots.Add(copy);
         }
 
         return slots;

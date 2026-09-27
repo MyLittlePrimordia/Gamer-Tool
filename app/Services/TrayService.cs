@@ -19,16 +19,16 @@ public sealed class TrayService : IDisposable
 
     public TrayService()
     {
-        ToolStripMenuItem show = new("Open Gamer Tool");
+        ToolStripMenuItem show = new("Open");
         show.Click += (s, e) => ShowRequested?.Invoke();
 
-        ToolStripMenuItem resetScreen = new("Reset screen");
+        ToolStripMenuItem resetScreen = new("Reset Display");
         resetScreen.Click += (s, e) => ResetScreenRequested?.Invoke();
 
-        ToolStripMenuItem resetSound = new("Reset sound");
+        ToolStripMenuItem resetSound = new("Reset Sound");
         resetSound.Click += (s, e) => ResetSoundRequested?.Invoke();
 
-        ToolStripMenuItem quit = new("Quit Gamer Tool");
+        ToolStripMenuItem quit = new("Quit");
         quit.Click += (s, e) => QuitRequested?.Invoke();
 
         ContextMenuStrip menu = new();

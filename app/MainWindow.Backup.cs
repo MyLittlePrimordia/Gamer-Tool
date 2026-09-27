@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -51,7 +51,7 @@ public partial class MainWindow : Window
             BackupNoteText.Text = "Saved settings, " + _settings.CustomDisplayPresets.Count.ToString(CultureInfo.InvariantCulture)
                 + " screen and " + _settings.CustomAudioPresets.Count.ToString(CultureInfo.InvariantCulture)
                 + " sound presets, " + _settings.Slots.Count.ToString(CultureInfo.InvariantCulture) + " slots and their keys.";
-            Flash("[ BACKUP SAVED ]", Path.GetFileNameWithoutExtension(dialog.FileName).ToUpperInvariant());
+            Flash("Backup saved");
         }
         catch (Exception ex)
         {
@@ -86,7 +86,7 @@ public partial class MainWindow : Window
         await EnsureAppList();
 
         List<string> monitors = _display.MonitorChoices.Where(c => c.Device.Length > 0).Select(c => c.Device).ToList();
-        List<string> soundDevices = SetupDeviceBox.ItemsSource is IEnumerable<DeviceChoice> listed
+        List<string> soundDevices = DeviceBox.ItemsSource is IEnumerable<DeviceChoice> listed
             ? listed.Select(d => d.Id).Where(id => id.Length > 0).ToList()
             : new List<string>();
 
@@ -127,15 +127,14 @@ public partial class MainWindow : Window
         StartWithWindowsBox.IsChecked = _startup.SetEnabled(_settings.StartWithWindows);
         _settings.StartWithWindows = _startup.IsEnabled;
 
-        _workDisplay = FindDisplay(_settings.ActiveDisplayPresetId) ?? DisplayPreset.Flat();
-        _workAudio = FindAudio(_settings.ActiveAudioPresetId) ?? AudioPreset.Flat();
+        _workDisplay = (FindDisplay(_settings.ActiveDisplayPresetId) ?? DisplayPreset.Flat()).Copy();
+        _workAudio = (FindAudio(_settings.ActiveAudioPresetId) ?? AudioPreset.Flat()).Copy();
         _activeDisplayId = _workDisplay.Id;
         _activeAudioId = _workAudio.Id;
 
         LoadDevices();
         LoadTune(_workDisplay, _workAudio);
-        BuildDisplayCards();
-        BuildAudioCards();
+        RefreshPresetBoxes();
         BuildSlots();
         RegisterHotkeys();
         ApplyWatchState();
@@ -157,7 +156,7 @@ public partial class MainWindow : Window
                 MessageBoxImage.Information);
         }
 
-        Flash("[ BACKUP RESTORED ]", report.Summary);
+        Flash("Backup restored");
     }
 
 

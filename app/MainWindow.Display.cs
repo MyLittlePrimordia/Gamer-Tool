@@ -1,44 +1,20 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Threading;
 using GamerTool.Models;
 using GamerTool.Services;
-using GamerTool.UI;
 using Button = System.Windows.Controls.Button;
-using ComboBox = System.Windows.Controls.ComboBox;
-using TextBox = System.Windows.Controls.TextBox;
-using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using Brush = System.Windows.Media.Brush;
-using FontFamily = System.Windows.Media.FontFamily;
-using Color = System.Windows.Media.Color;
 
 namespace GamerTool;
 
 public partial class MainWindow : Window
 {
-    private void BuildDisplayCards()
-    {
-        DisplayPresetGrid.Children.Clear();
-        _displayCards.Clear();
-
-        foreach (DisplayPreset preset in AllDisplayPresets())
-        {
-            bool isMine = _settings.CustomDisplayPresets.Any(p => p.Id == preset.Id);
-            DisplayPresetGrid.Children.Add(PresetCard(preset, isMine, _displayCards, OnDisplayCardClick, OnDisplayCardDelete, OnDisplayCardRename));
-        }
-
-        HighlightCards();
-    }
-
-
     private void UpdateScreenLabels(DisplayPreset preset)
     {
         _workDisplay = preset;
@@ -46,13 +22,26 @@ public partial class MainWindow : Window
         ShadowValue.Text = Signed(preset.ShadowBoost, "0") + "%";
         BrightValue.Text = Signed(preset.Brightness, "0") + "%";
         ContrastValue.Text = Signed(preset.Contrast, "0") + "%";
-        RedValue.Text = preset.RedGain.ToString("0.00", CultureInfo.InvariantCulture);
-        GreenValue.Text = preset.GreenGain.ToString("0.00", CultureInfo.InvariantCulture);
-        BlueValue.Text = preset.BlueGain.ToString("0.00", CultureInfo.InvariantCulture);
-        ScreenActiveName.Text = preset.Name;
-        ScreenActiveSpec.Text = "SHADOW " + preset.ShadowText + "   BRIGHT " + preset.BrightnessText + "   CONTRAST " + preset.ContrastText;
-        ScreenActiveRgb.Text = "RGB " + DisplayPreset.WithBlueLight(preset, _settings.BlueLightFilter).RgbText;
         QueueDisplayPreview();
+    }
+
+
+    private void OnDisplayPresetSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_ready || _updating || DisplayPresetBox.SelectedItem is not PresetChoice choice)
+        {
+            return;
+        }
+
+        DisplayPreset? preset = FindDisplay(choice.Id);
+        if (preset is null)
+        {
+            return;
+        }
+
+        _activeDisplayId = preset.Id;
+        LoadTune(preset.Copy(), _workAudio.Copy());
+        UpdatePresetChrome();
     }
 
 
@@ -70,102 +59,55 @@ public partial class MainWindow : Window
         _workDisplay.RedGain = Math.Round(RedSlider.Value, 2);
         _workDisplay.GreenGain = Math.Round(GreenSlider.Value, 2);
         _workDisplay.BlueGain = Math.Round(BlueSlider.Value, 2);
-        _workDisplay.Name = "TUNED SCREEN";
+        _workDisplay.Name = "Tuned";
         UpdateScreenLabels(_workDisplay);
-        QueueDisplayPreview();
+        UpdatePresetChrome();
     }
 
 
-    private void OnNeutralColourClick(object sender, RoutedEventArgs e)
+    private void OnDeleteScreenClick(object sender, RoutedEventArgs e)
     {
-        if (!_ready || _updating)
+        DisplayPreset? mine = _settings.CustomDisplayPresets
+            .FirstOrDefault(p => string.Equals(p.Id, _activeDisplayId, StringComparison.OrdinalIgnoreCase));
+
+        if (mine is null)
         {
+            Flash("Built in presets stay put");
             return;
         }
 
-        RedSlider.Value = 1.0;
-        GreenSlider.Value = 1.0;
-        BlueSlider.Value = 1.0;
-    }
-
-
-    private void OnDisplayCardClick(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button button || button.Tag is not string id)
-        {
-            return;
-        }
-
-        DisplayPreset? preset = FindDisplay(id);
-        if (preset is null)
-        {
-            return;
-        }
-
-        LoadTune(preset.Copy(), _workAudio.Copy());
-        _activeDisplayId = preset.Id;
-        HighlightCards();
-        UpdateScreenLabels(preset);
-        QueueDisplayPreview();
-    }
-
-
-    private void OnDisplayCardDelete(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button button || button.Tag is not string id)
-        {
-            return;
-        }
-
-        _settings.CustomDisplayPresets.RemoveAll(p => p.Id == id);
-        Commit();
-        BuildDisplayCards();
-        BuildSlots();
-        Flash("[ PRESET DELETED ]", id.ToUpperInvariant());
-    }
-
-
-    private void OnDisplayCardRename(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button button || button.Tag is not string id)
-        {
-            return;
-        }
-
-        DisplayPreset? preset = _settings.CustomDisplayPresets.FirstOrDefault(p => p.Id == id);
-        if (preset is null)
-        {
-            return;
-        }
-
-        ShowModal("RENAME SCREEN PRESET", preset.Name, name =>
-        {
-            preset.Name = name;
-            Commit();
-            BuildDisplayCards();
-            BuildSlots();
-        });
+        string removed = mine.Name;
+        ShowConfirmModal(
+            "DEoETE \u201C" + removed.ToUpperInvariant() + "\u201D?",
+            "This takes the preset out of Gamer Tool and out of any slot that points at it.",
+            "Delete",
+            () =>
+            {
+                _settings.CustomDisplayPresets.RemoveAll(p => p.Id == mine.Id);
+                _activeDisplayId = string.Empty;
+                Commit();
+                RefreshPresetBoxes();
+                LoadTune(DisplayPreset.Flat(), _workAudio);
+                BuildSlots();
+                Flash(removed + " deleted");
+            });
     }
 
 
     private void OnSaveAsScreenClick(object sender, RoutedEventArgs e)
     {
-        ShowModal("NAME YOUR SCREEN PRESET", "MY SCREEN", name =>
+        ShowModal("NAME THIS SCREEN PRESET", "My screen", name =>
         {
             DisplayPreset preset = _workDisplay.Copy();
             preset.Id = AppProfileTools.NewId("screen");
             preset.Name = name;
-            preset.Tag = "MINE";
+            preset.Tag = "Mine";
             _settings.CustomDisplayPresets.Add(preset);
-            Commit();
-            BuildDisplayCards();
-            BuildSlots();
-
-            // Make the copy the loaded preset so Rename works on it straight away.
             _activeDisplayId = preset.Id;
-            LoadTune(preset, _workAudio);
-            HighlightCards();
-            Flash("[ SCREEN PRESET SAVED ]", name);
+            Commit();
+            RefreshPresetBoxes();
+            BuildSlots();
+            Flash(name + " saved");
         });
     }
 
@@ -233,32 +175,54 @@ public partial class MainWindow : Window
         }
 
         _settings.BlueLightFilter = level;
-        ScreenActiveRgb.Text = "RGB " + EffectiveDisplay().RgbText;
         QueueDisplayPreview();
         Commit();
     }
 
 
+    /// <summary>
+    /// Shows which scene the preview is on, and offers the other one. The button
+    /// carries the scene you would switch to, so the control reads as a switch
+    /// with a position rather than as two separate buttons.
+    /// </summary>
     private void UpdatePreviewPills()
     {
-        DayPillButton.Style = (Style)FindResource(_previewNight ? "PillTab" : "PillTabActive");
-        NightPillButton.Style = (Style)FindResource(_previewNight ? "PillTabActive" : "PillTab");
+        PreviewSceneGlyph.Glyph = _previewNight ? "sun" : "moon";
+        PreviewSceneButton.ToolTip = _previewNight ? "Day" : "Night";
+        PreviewSceneButton.Background = _previewNight
+            ? (Brush)FindResource("AccentHotkeysGlow")
+            : (Brush)FindResource("AccentDisplayGlow");
     }
 
 
-    private void OnDayPreviewClick(object sender, RoutedEventArgs e)
+    private void OnPreviewSceneClick(object sender, RoutedEventArgs e)
     {
-        _previewNight = false;
+        _previewNight = !_previewNight;
         UpdatePreviewPills();
         RenderDisplayPreview();
     }
 
 
-    private void OnNightPreviewClick(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Rounds the corners of the scene itself, not just the frame around it.
+    ///
+    /// The clip is taken from the frame rather than from the image, because the
+    /// image's own width can land a fraction of a pixel wider than the frame's
+    /// inner edge once the two are snapped to device pixels. The overhang then
+    /// covered the frame's rounding on the right, which is why only the right hand
+    /// corners looked square. Clipping to the frame's measured size keeps the
+    /// rounding on all four corners lined up.
+    /// </summary>
+    private void OnPreviewFrameSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        _previewNight = true;
-        UpdatePreviewPills();
-        RenderDisplayPreview();
+        if (sender is not Border frame || e.NewSize.Width <= 0.0 || e.NewSize.Height <= 0.0)
+        {
+            return;
+        }
+
+        const double radius = 10.0;
+        var rect = new Rect(0, 0, frame.ActualWidth, frame.ActualHeight);
+        PreviewImage.Clip = new RectangleGeometry(rect, radius, radius);
     }
 
 
@@ -273,17 +237,16 @@ public partial class MainWindow : Window
         DisplayPreset effective = DisplayPreset.WithBlueLight(preset, _settings.BlueLightFilter);
         _display.Apply(effective, monitorDevice);
         _liveDisplayName = preset.Name.ToUpperInvariant();
-        UpdateLiveLabels();
-        SessionState.Current.DisplayTouched = true;
         _settings.ActiveDisplayPresetId = preset.Id;
         _activeDisplayId = preset.Id;
         UpdateScreenLabels(preset);
-        HighlightCards();
+        UpdateLiveLabels();
+        UpdatePresetChrome();
         Commit();
         if (announce)
         {
             string scope = monitorDevice.Length == 0 ? string.Empty : "  " + monitorDevice.ToUpperInvariant();
-            Flash("[ " + preset.Name + scope + " ]", "SCREEN READY");
+            Flash(preset.Name + scope + " applied");
         }
     }
 
@@ -296,41 +259,60 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Renames the loaded preset in place when it is one of your own, and refuses
-    /// for a built in so the shipped presets can never be edited. Use Save as to
-    /// copy a built in one first.
+    /// for a built in so the shipped presets can never be edited. Use the plus
+    /// button to copy a built in one first.
     /// </summary>
     private void OnRenameScreenClick(object sender, RoutedEventArgs e)
     {
         DisplayPreset? mine = _settings.CustomDisplayPresets
-            .FirstOrDefault(p => string.Equals(p.Id, _workDisplay.Id, StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(p => string.Equals(p.Id, _activeDisplayId, StringComparison.OrdinalIgnoreCase));
 
         if (mine is null)
         {
-            Flash("[ BUILT IN PRESET ]", "USE SAVE AS TO MAKE YOUR OWN COPY");
+            Flash("Built in presets cannot be renamed", true);
             return;
         }
 
         ShowModal("RENAME SCREEN PRESET", mine.Name, name =>
         {
             mine.Name = name;
+            _workDisplay.Name = name;
+            _activeDisplayId = mine.Id;
             Commit();
-            BuildDisplayCards();
+            RefreshPresetBoxes();
+            UpdateScreenLabels(_workDisplay);
+            UpdatePresetChrome();
             BuildSlots();
         });
     }
 
 
-    private void OnResetScreenClick(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// The one definition of "back to normal" for the screen. The reset button,
+    /// the tray menu and the global off hotkey all call this, so they cannot
+    /// drift apart.
+    ///
+    /// The hardware goes back to the ramp it had before Gamer Tool touched it,
+    /// and the panel loads Standard, so the two can never disagree. Standard is a
+    /// real built-in, so the dropdown lands on it instead of going blank and
+    /// reading as "Unsaved tune".
+    /// </summary>
+    public void GoScreenNeutral()
     {
         _display.Reset();
-        _workDisplay = DisplayPreset.Flat();
-        LoadTune(_workDisplay, _workAudio);
-        _activeDisplayId = string.Empty;
-        _liveDisplayName = "NOTHING";
+        _liveDisplayName = "STANDARD";
+        _activeDisplayId = "flat";
+        LoadTune(DisplayPreset.Flat(), _workAudio);
+        RefreshPresetBoxes();
         UpdateLiveLabels();
-        HighlightCards();
-        Flash("[ SCREEN RESET ]", "BACK TO NORMAL");
+        UpdateScreenLabels(_workDisplay);
     }
 
+
+    private void OnResetScreenClick(object sender, RoutedEventArgs e)
+    {
+        GoScreenNeutral();
+        Flash("Screen back to normal");
+    }
 
 }

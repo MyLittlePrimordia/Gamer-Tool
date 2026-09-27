@@ -83,13 +83,24 @@ public sealed class DisplayPreset
         return result;
     }
 
+    /// <summary>
+    /// The no-op tune: nothing lifted, nothing cut, colour untouched. This is a
+    /// real built-in rather than a hidden value, so it sits at the top of the
+    /// dropdown where every other app puts its neutral setting, and the reset
+    /// button simply selects it. The id is stable, so saved slots pointing at
+    /// "flat" keep resolving.
+    ///
+    /// Named Standard rather than Flat because that is the word for an unmodified
+    /// picture, in the same way Windows calls untouched colour "standard" sRGB.
+    /// Flat stays the name on the audio side, where it is the established EQ term.
+    /// </summary>
     public static DisplayPreset Flat()
     {
         return new DisplayPreset
         {
             Id = "flat",
-            Name = "STANDARD",
-            Tag = "NO CHANGE",
+            Name = "Standard",
+            Tag = "No change",
             Gamma = 1.00,
             ShadowBoost = 0.0,
             Brightness = 0.0,
@@ -100,114 +111,207 @@ public sealed class DisplayPreset
         };
     }
 
-    // Values follow common competitive OSD practice: gamma is a ramp multiplier
-    // (1.00 = untouched), so the "look" comes from shadow boost (pro black
-    // equalizer) plus a slightly negative contrast rather than a heavy gamma lift.
+    // Gamma here is a ramp multiplier where 1.00 is untouched, which is how
+    // competitive OSDs treat it. The "look" therefore comes from shadow boost
+    // (a black equalizer lifting the dark end) plus a small contrast move,
+    // rather than a heavy gamma lift that washes out the blacks.
+    //
+    // Values follow what esports shooters, racing sims and colour critical
+    // workflows actually converge on: low brightness and raised shadows so
+    // nothing hides in the blacks, a slightly negative contrast to stop the
+    // raised shadows greying the image, and colour left on sRGB unless the
+    // preset is specifically about colour. Ids are kept stable so existing
+    // saved presets and slots keep pointing at the same entry.
     public static IReadOnlyList<DisplayPreset> Defaults { get; } = new List<DisplayPreset>
     {
+        // First on purpose: Flat is the "nothing applied" state every other preset
+        // is measured against, and it is what the reset button lands on. It shows
+        // in the list as Standard, the name people actually look for.
+        Flat(),
+
+        // Esports baseline. Most of the work is the shadow lift, so a player
+        // separates from a dark background, with gamma just enough to keep the
+        // midtones from going muddy. The slight green lift is worth the fraction
+        // of a stop because it reads as brighter without touching contrast.
         new DisplayPreset
         {
             Id = "camper",
-            Name = "COMPETITIVE FPS",
-            Tag = "PRO LOOK",
+            Name = "Competitive",
+            Tag = "Esports",
             Gamma = 1.10,
-            ShadowBoost = 55.0,
-            Brightness = 5.0,
-            Contrast = -5.0,
-            RedGain = 1.00,
-            GreenGain = 1.00,
-            BlueGain = 1.00
-        },
-        new DisplayPreset
-        {
-            Id = "daylight",
-            Name = "DAYLIGHT",
-            Tag = "BRIGHT ROOM",
-            Gamma = 1.00,
-            ShadowBoost = 0.0,
-            Brightness = 15.0,
-            Contrast = -5.0,
-            RedGain = 1.00,
-            GreenGain = 1.00,
-            BlueGain = 1.00
-        },
-        new DisplayPreset
-        {
-            Id = "vibrant",
-            Name = "VIBRANT",
-            Tag = "RICH COLOR",
-            Gamma = 1.05,
-            ShadowBoost = 15.0,
+            ShadowBoost = 60.0,
             Brightness = 5.0,
             Contrast = 10.0,
-            RedGain = 1.04,
-            GreenGain = 1.00,
-            BlueGain = 1.05
-        },
-        new DisplayPreset
-        {
-            Id = "sniper",
-            Name = "ESPORTS",
-            Tag = "MAX DETAIL",
-            Gamma = 1.12,
-            ShadowBoost = 75.0,
-            Brightness = 8.0,
-            Contrast = -8.0,
             RedGain = 1.00,
-            GreenGain = 1.00,
-            BlueGain = 1.00
+            GreenGain = 1.02,
+            BlueGain = 0.98
         },
+
+        // In-game night vision. This is the heaviest shadow lift in the list on
+        // purpose: the whole job is finding someone in an unlit room, which is a
+        // different problem from being comfortable in a dark room.
         new DisplayPreset
         {
             Id = "night",
-            Name = "DARK ROOM",
-            Tag = "LATE NIGHT",
-            Gamma = 1.15,
-            ShadowBoost = 35.0,
-            Brightness = -20.0,
-            Contrast = 0.0,
-            RedGain = 1.00,
-            GreenGain = 0.98,
-            BlueGain = 0.94
-        },
-        new DisplayPreset
-        {
-            Id = "cinematic",
-            Name = "CINEMA",
-            Tag = "SOFT WARM",
-            Gamma = 1.08,
-            ShadowBoost = 20.0,
-            Brightness = -5.0,
-            Contrast = 5.0,
-            RedGain = 1.02,
-            GreenGain = 1.00,
-            BlueGain = 0.97
-        },
-        new DisplayPreset
-        {
-            Id = "oled",
-            Name = "READING / TEXT",
-            Tag = "CRISP UI",
-            Gamma = 1.05,
-            ShadowBoost = 45.0,
-            Brightness = 5.0,
-            Contrast = 5.0,
+            Name = "Night Mode",
+            Tag = "Dark vision",
+            Gamma = 1.20,
+            ShadowBoost = 80.0,
+            Brightness = 8.0,
+            Contrast = 12.0,
             RedGain = 1.00,
             GreenGain = 1.00,
             BlueGain = 1.00
         },
+
+        // Colour pop. The channel gains do the work rather than contrast, so a
+        // player model reads as more colourful against the terrain without the
+        // whole picture turning harsh.
         new DisplayPreset
         {
-            Id = "retro",
-            Name = "RETRO ARCADE",
-            Tag = "OLD TV",
-            Gamma = 1.00,
-            ShadowBoost = 30.0,
-            Brightness = 5.0,
+            Id = "racing",
+            Name = "Vibrant",
+            Tag = "High colour",
+            Gamma = 1.05,
+            ShadowBoost = 15.0,
+            Brightness = 0.0,
             Contrast = 15.0,
-            RedGain = 0.95,
-            GreenGain = 1.05,
-            BlueGain = 0.95
+            RedGain = 1.15,
+            GreenGain = 1.12,
+            BlueGain = 1.10
+        },
+
+        // Anti-haze. Contrast is the point, with a cool bias so smoke and fog stop
+        // flattening everything behind them, and gamma pulled under neutral so the
+        // extra contrast does not crush the midtones.
+        new DisplayPreset
+        {
+            Id = "rpg",
+            Name = "Clarity",
+            Tag = "Anti haze",
+            Gamma = 0.95,
+            ShadowBoost = 20.0,
+            Brightness = 0.0,
+            Contrast = 30.0,
+            RedGain = 0.98,
+            GreenGain = 1.00,
+            BlueGain = 1.04
+        },
+
+        // Long range spotting. The most contrast in the list, to pick a distant
+        // edge off the background, with the shadows kept almost flat so a glint
+        // has something dark to sit against.
+        new DisplayPreset
+        {
+            Id = "sniper",
+            Name = "Snipers",
+            Tag = "Long range",
+            Gamma = 1.00,
+            ShadowBoost = 10.0,
+            Brightness = -5.0,
+            Contrast = 40.0,
+            RedGain = 1.04,
+            GreenGain = 1.00,
+            BlueGain = 0.96
+        },
+
+        // Film. The opposite trade to the competitive presets on purpose: dim,
+        // warm, and a firm curve so blacks stay black.
+        new DisplayPreset
+        {
+            Id = "cinematic",
+            Name = "Movie Night",
+            Tag = "Film",
+            Gamma = 0.92,
+            ShadowBoost = 5.0,
+            Brightness = -15.0,
+            Contrast = 20.0,
+            RedGain = 1.05,
+            GreenGain = 1.00,
+            BlueGain = 0.90
+        },
+
+        // Animation. Saturated, but the blacks stay off the floor so flat cel
+        // shading does not turn into a silhouette.
+        new DisplayPreset
+        {
+            Id = "anime",
+            Name = "Anime",
+            Tag = "Animation",
+            Gamma = 1.02,
+            ShadowBoost = 12.0,
+            Brightness = 5.0,
+            Contrast = 18.0,
+            RedGain = 1.12,
+            GreenGain = 1.08,
+            BlueGain = 1.15
+        },
+
+        // Real world daylight. Brightness is the whole point here, to beat glare
+        // from a window, so the tone curve is left alone and the output is simply
+        // turned up.
+        new DisplayPreset
+        {
+            Id = "daylight",
+            Name = "Bright Room",
+            Tag = "Daylight",
+            Gamma = 1.00,
+            ShadowBoost = 10.0,
+            Brightness = 30.0,
+            Contrast = 15.0,
+            RedGain = 1.00,
+            GreenGain = 1.00,
+            BlueGain = 1.00
+        },
+
+        // Real world dark room. Pulled right down and warm. The blue light filter
+        // that finishes the job is a separate control on the tab, because it is a
+        // comfort setting for the room rather than part of a picture preset.
+        new DisplayPreset
+        {
+            Id = "oled",
+            Name = "Dark Room",
+            Tag = "Low glare",
+            Gamma = 0.95,
+            ShadowBoost = 0.0,
+            Brightness = -35.0,
+            Contrast = -10.0,
+            RedGain = 1.00,
+            GreenGain = 0.95,
+            BlueGain = 0.85
+        },
+
+        // Paper like. Softened contrast and a warm cast to take the edge off a
+        // white background, with enough shadow lift that body text does not turn
+        // into a grey smear.
+        new DisplayPreset
+        {
+            Id = "reading",
+            Name = "Reading",
+            Tag = "Documents",
+            Gamma = 1.10,
+            ShadowBoost = 20.0,
+            Brightness = -20.0,
+            Contrast = -12.0,
+            RedGain = 1.02,
+            GreenGain = 1.02,
+            BlueGain = 0.90
+        },
+
+        // All day. Nothing dramatic: a slightly soft curve and a touch of warmth,
+        // so a long session does not end with tired eyes.
+        new DisplayPreset
+        {
+            Id = "comfort",
+            Name = "Comfort",
+            Tag = "Easy on eyes",
+            Gamma = 0.98,
+            ShadowBoost = 5.0,
+            Brightness = -12.0,
+            Contrast = -15.0,
+            RedGain = 0.99,
+            GreenGain = 0.99,
+            BlueGain = 0.99
         }
     };
 }
