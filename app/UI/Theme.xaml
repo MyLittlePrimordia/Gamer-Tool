@@ -178,9 +178,47 @@
 
     <!-- ==================== TITLE BAR ==================== -->
 
-    <!-- No hover fill. The caption glyphs are the only thing that lights up:
-         the button carries a plain Foreground, the dash and the cross in the
-         title bar bind their stroke to it, and hovering pushes it to white. -->
+    <!-- Caption buttons. The mark is the only thing that changes: the strokes in
+         the window bind to the button's own Foreground, so a whole state is one
+         property, and the plate stays transparent so nothing is drawn behind it
+         and the black chrome is left unbroken.
+
+         The dash takes the app's display cyan and the cross takes red, so the two
+         can be told apart at a glance without reading them. Each brightens while
+         it is held, and the pressed trigger is listed second on purpose: a held
+         button is also a hovered one, triggers fire in order, and the later one
+         is the one that sticks.
+
+         Close repeats the template instead of sharing one with the dash. Same
+         reason the nav pills do it: a ControlTemplate trigger cannot read a custom
+         property back off its own templated parent, so two accents means two
+         copies of the template. It is BasedOn the dash so the metrics stay in one
+         place. -->
+    <!-- A row in the settings list that is not a switch: an emoji, a label, and
+         whatever control belongs on the right. Same height, same plate and the
+         same hover as an option row, so the list reads as one thing rather than
+         as switches with some other controls mixed in.
+
+         No hand cursor here, unlike an option row where the whole row is the
+         target. On the rows where only the control on the right does anything,
+         a hand over the empty half of the row would promise a click that does
+         not happen. The controls carry their own.
+
+         Only the plate is shared. The three rows that use it carry different
+         contents and differ in whether the whole row or just the control is the
+         click target, so each still writes its own five column grid inside. -->
+    <Style x:Key="ActionRow" TargetType="Border">
+        <Setter Property="Height" Value="40" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="8,0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="#0AFFFFFF" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
     <Style x:Key="CaptionButton" TargetType="Button">
         <Setter Property="Width" Value="46" />
         <Setter Property="Height" Value="44" />
@@ -201,7 +239,10 @@
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="Foreground" Value="#FFFFFF" />
+                            <Setter Property="Foreground" Value="#22D3EE" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter Property="Foreground" Value="#7DEFFA" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -209,7 +250,25 @@
         </Setter>
     </Style>
 
-    <Style x:Key="CaptionClose" TargetType="Button" BasedOn="{StaticResource CaptionButton}" />
+    <Style x:Key="CaptionClose" TargetType="Button" BasedOn="{StaticResource CaptionButton}">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="Transparent">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Foreground" Value="#F87171" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter Property="Foreground" Value="#FFB4B4" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
 
     <!-- ==================== NAV PILL ====================
          Emoji above a 9pt label. The emoji are baked colour bitmaps, because

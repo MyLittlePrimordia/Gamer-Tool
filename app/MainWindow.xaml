@@ -162,13 +162,12 @@
                                                 <TextBlock Grid.Column="0" Style="{StaticResource SectionHeader}" Text="PREVIEW" Margin="0" VerticalAlignment="Center" />
                                                 <!-- One control, not two. Two buttons with a
                                                      highlight each read as a pair of unrelated
-                                                     buttons; a single button that shows the
-                                                     mode you would switch to reads as one
-                                                     switch. -->
+                                                     buttons; a single button that names the
+                                                     scene on screen reads as one switch. -->
                                                 <Button x:Name="PreviewSceneButton" Grid.Column="1"
                                                         Style="{StaticResource PillTab}"
-                                                        Click="OnPreviewSceneClick" ToolTip="Night">
-                                                    <ui:EmojiImage x:Name="PreviewSceneGlyph" Glyph="moon" Width="18" Height="18" />
+                                                        Click="OnPreviewSceneClick" ToolTip="Day scene">
+                                                    <ui:EmojiImage x:Name="PreviewSceneGlyph" Glyph="sun" Width="18" Height="18" />
                                                 </Button>
                                             </Grid>
                                             <!-- 410 x 230 is exactly 16:9, so the scene is
@@ -932,123 +931,225 @@
 
                             <Border Grid.Row="0" Style="{StaticResource Hairline}" VerticalAlignment="Bottom" Margin="18,0" />
 
-                            <!-- one centred column, everything in reading order -->
-                            <StackPanel Grid.Row="1" Width="620" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="18,0">
+                            <!-- One centred column, everything in reading order.
 
-                                <TextBlock Style="{StaticResource SectionHeader}" Text="OPTIONS" />
+                                 It scrolls rather than simply being centred in the
+                                 row. The option list is taller than the panel it
+                                 sits in, and a centred stack that overruns its
+                                 row is clipped at both ends: the first option was
+                                 off the top of the view and the backup buttons off
+                                 the bottom, with no way to scroll to either. The
+                                 column still centres itself when it fits. -->
+                            <ScrollViewer Grid.Row="1" x:Name="SettingsScroll" Padding="0,14,0,14"
+                                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                <ScrollViewer.Resources>
+                                    <Style TargetType="ScrollBar" BasedOn="{StaticResource SlimScroll}" />
+                                </ScrollViewer.Resources>
+                                <!-- One centred list, and everything on it is a row
+                                     of the same shape: an emoji, a label, and
+                                     whatever belongs on the right. The sound out
+                                     picker and the backup pair are rows like the
+                                     switches are, not sections of their own, which
+                                     is what keeps the page to one column and
+                                     inside the panel without a scrollbar. -->
+                                <StackPanel Width="620" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="18,0">
+
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="SETTINGS" />
+                                <!-- The switches are one block, with no rule between
+                                     them: nine hairlines down a list of switches is
+                                     more lines than the switches have content, and
+                                     each row is already told apart by its own hover
+                                     plate. A rule only earns its place where one
+                                     kind of row gives way to another, which is why
+                                     there is one above diagnostics and one between
+                                     each pair of the rows that are not switches.
+
+                                     The top two keep a 6 pixel margin, which is the
+                                     gap under the heading. The rest sit flush. -->
                                 <ui:OptionToggle x:Name="HardwareBrightnessBox" Style="{StaticResource OptionRow}" Margin="0,6,0,0"
                                                  Glyph="sun" Label="Hardware brightness (DDC/CI)"
                                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
                                                  ToolTip="Controls the monitor's own backlight over DDC/CI instead of only bending gamma. Off by default: it talks to the monitor over I2C, which on a small number of displays with broken firmware has been known to crash Windows itself. The software controls are unaffected either way." />
-                                <Border Style="{StaticResource Hairline}" />
                                 <ui:OptionToggle x:Name="GammaLockBox" Style="{StaticResource OptionRow}" Margin="0,6,0,0"
                                                  Glyph="lock" Label="Keep screen locked"
                                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
                                                  ToolTip="Gamma Lock" />
-                                <Border Style="{StaticResource Hairline}" />
                                 <ui:OptionToggle x:Name="OsdBox" Style="{StaticResource OptionRow}"
                                                  Glyph="chat" Label="In-game popup"
                                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
                                                  ToolTip="Show Popup" />
-                                <Border Style="{StaticResource Hairline}" />
                                 <ui:OptionToggle x:Name="AutoSwitchBox" Style="{StaticResource OptionRow}"
                                                  Glyph="gamepad" Label="Auto load slots by game"
                                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
                                                  ToolTip="Auto Switch" />
-                                <Border Style="{StaticResource Hairline}" />
                                 <ui:OptionToggle x:Name="AutoRevertBox" Style="{StaticResource OptionRow}"
                                                  Glyph="refresh" Label="Auto-revert on game exit"
                                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
                                                  ToolTip="Auto Revert" />
-                                <Border Style="{StaticResource Hairline}" />
                                 <ui:OptionToggle x:Name="CloseToTrayBox" Style="{StaticResource OptionRow}"
                                                  Glyph="folder" Label="Close to tray"
                                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
                                                  ToolTip="Close to Tray" />
-                                <Border Style="{StaticResource Hairline}" />
                                 <ui:OptionToggle x:Name="StartHiddenBox" Style="{StaticResource OptionRow}"
                                                  Glyph="hide" Label="Start hidden in tray"
                                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
                                                  ToolTip="Start Hidden" />
-                                <Border Style="{StaticResource Hairline}" />
                                 <ui:OptionToggle x:Name="StartWithWindowsBox" Style="{StaticResource OptionRow}"
                                                  Glyph="rocket" Label="Start with Windows"
                                                  Checked="OnStartupOptionChanged" Unchecked="OnStartupOptionChanged"
                                                  ToolTip="Start with Windows" />
+                                <ui:OptionToggle x:Name="FxPromptBox" Style="{StaticResource OptionRow}"
+                                                 Glyph="warning" Label="Don't ask about FxSound"
+                                                 Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                                 ToolTip="Stop Prompting" />
 
-                                <Border Style="{StaticResource Hairline}" Margin="0,22" />
+                                <Border Style="{StaticResource Hairline}" />
+                                <!-- Diagnostics sits in the options list as one of
+                                     them rather than in a block of its own under a
+                                     divider. It is the only row here that is not a
+                                     setting, and giving it its own section is
+                                     exactly what cost this tab two extra dividers
+                                     and a second line of text on every row above
+                                     it. It keeps the list's own metrics instead:
+                                     same height, same 19 pixel mark, same label.
 
-                                <!-- Copy diagnostics. The only control on this tab that
-                                     is not a setting: it reads the rolling log and puts
-                                     a sanitised summary on the clipboard, because the
-                                     first question about any bug is "what does the log
-                                     say" and the answer should not need the file
-                                     system. -->
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
+                                     What sits where a switch would be is a
+                                     clipboard mark, because that is the whole
+                                     action. The row is still one line, so there is
+                                     nowhere else for a confirmation to go except
+                                     in the space the mark was in. -->
+                                <Border x:Name="DiagRow" Style="{StaticResource ActionRow}" Cursor="Hand"
+                                        MouseLeftButtonUp="OnCopyDiagnosticsClick"
+                                        ToolTip="Copy the log to the clipboard">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="10" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="12" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
 
-                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                        <TextBlock Style="{StaticResource Label}" Text="Diagnostics" />
-                                        <TextBlock x:Name="DiagHintText" Style="{StaticResource CardSub}"
-                                                   Text="Keeps a rolling log of what the app did, ready to paste." />
-                                    </StackPanel>
+                                        <ui:EmojiImage Grid.Column="0" Glyph="bug" Width="19" Height="19" VerticalAlignment="Center" />
 
-                                    <Button x:Name="CopyDiagButton" Grid.Column="1" Style="{StaticResource GhostButton}"
-                                            Width="34" Height="30" MinWidth="0" Padding="0"
-                                            HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                                            Click="OnCopyDiagnosticsClick" ToolTip="Copy Log">
-                                        <ui:EmojiImage Glyph="bug" Width="19" Height="19" />
-                                    </Button>
-                                </Grid>
+                                        <TextBlock Grid.Column="2" Text="Diagnostics" VerticalAlignment="Center"
+                                                   FontFamily="{StaticResource Sans}" FontSize="12"
+                                                   Foreground="{StaticResource TextHi}" TextTrimming="CharacterEllipsis" />
 
-                                <Border Style="{StaticResource Hairline}" Margin="0,22" />
+                                        <!-- The mark and the confirmation swap rather
+                                             than sit on top of each other, and both
+                                             are pinned to the right edge, so nothing
+                                             shifts sideways when the row reports
+                                             back. -->
+                                        <Grid Grid.Column="4" MinWidth="34">
+                                            <Button x:Name="CopyDiagButton" Style="{StaticResource GhostButton}"
+                                                    Width="34" Height="30" MinWidth="0" Padding="0"
+                                                    HorizontalAlignment="Right"
+                                                    HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                                    Click="OnCopyDiagnosticsClick">
+                                                <ui:EmojiImage Glyph="clipboard" Width="19" Height="19" />
+                                            </Button>
+                                            <TextBlock x:Name="DiagCopiedText" Visibility="Collapsed"
+                                                       VerticalAlignment="Center" HorizontalAlignment="Right"
+                                                       FontFamily="{StaticResource Sans}" FontSize="11" FontWeight="SemiBold" />
+                                        </Grid>
+                                    </Grid>
+                                </Border>
 
-                                <TextBlock Style="{StaticResource SectionHeader}" Text="SOUND OUT" />
-                                <Grid Margin="0,10,0,0">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="10" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <ComboBox x:Name="DeviceBox" Grid.Column="0" Style="{StaticResource ModernCombo}"
-                                              ItemContainerStyle="{StaticResource ModernComboItem}" SelectionChanged="OnDeviceSelected"
-                                              ToolTip="Output Device" />
-                                    <ui:IconButton Grid.Column="2" Icon="{x:Static ui:Icons.Refresh}" Style="{StaticResource IconButton}"
-                                                   Click="OnRescanDevicesClick" ToolTip="Rescan" />
-                                </Grid>
+                                <Border Style="{StaticResource Hairline}" />
+                                <Border Style="{StaticResource ActionRow}" ToolTip="Where sound is sent. Rescan looks for devices that were plugged in after the app started.">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="10" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="12" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
 
-                                <Border Style="{StaticResource Hairline}" Margin="0,22" />
+                                        <ui:EmojiImage Grid.Column="0" Glyph="speaker" Width="19" Height="19" VerticalAlignment="Center" />
 
-                                <TextBlock Style="{StaticResource SectionHeader}" Text="BACKUP" />
-                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0" HorizontalAlignment="Center">
-                                    <Button Style="{StaticResource PrimaryButton}" MinWidth="140" Click="OnBackupClick"
-                                            ToolTip="Backup">
-                                        <StackPanel Orientation="Horizontal">
-                                            <Viewbox Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center">
-                                                <Path Data="{x:Static ui:Icons.Save}" Stroke="#EAFBF7" StrokeThickness="1.7"
-                                                      StrokeLineJoin="Round" Fill="Transparent" />
-                                            </Viewbox>
-                                            <TextBlock Text="Backup" Margin="8,0,0,0" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Style="{StaticResource GhostButton}" MinWidth="140" Margin="10,0,0,0"
-                                            Click="OnRestoreClick" ToolTip="Restore">
-                                        <StackPanel Orientation="Horizontal">
-                                            <Viewbox Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center">
-                                                <Path Data="{x:Static ui:Icons.Restore}" Stroke="{StaticResource TextMid}" StrokeThickness="1.7"
-                                                      StrokeLineJoin="Round" Fill="Transparent" />
-                                            </Viewbox>
-                                            <TextBlock Text="Restore" Margin="8,0,0,0" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                    </Button>
+                                        <TextBlock Grid.Column="2" Text="Sound out" VerticalAlignment="Center"
+                                                   FontFamily="{StaticResource Sans}" FontSize="12"
+                                                   Foreground="{StaticResource TextHi}" />
+
+                                        <Grid Grid.Column="4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="200" />
+                                                <ColumnDefinition Width="8" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <ComboBox x:Name="DeviceBox" Grid.Column="0" Style="{StaticResource ModernCombo}"
+                                                      ItemContainerStyle="{StaticResource ModernComboItem}" SelectionChanged="OnDeviceSelected"
+                                                      ToolTip="Output Device" VerticalAlignment="Center" />
+                                            <ui:IconButton Grid.Column="2" Icon="{x:Static ui:Icons.Refresh}" Style="{StaticResource IconButton}"
+                                                           VerticalAlignment="Center"
+                                                           Click="OnRescanDevicesClick" ToolTip="Rescan" />
+                                        </Grid>
+                                    </Grid>
+                                </Border>
+
+                                <Border Style="{StaticResource Hairline}" />
+                                <Border Style="{StaticResource ActionRow}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="10" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="12" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <ui:EmojiImage Grid.Column="0" Glyph="download" Width="19" Height="19" VerticalAlignment="Center" />
+
+                                        <TextBlock Grid.Column="2" Text="Backup and restore" VerticalAlignment="Center"
+                                                   FontFamily="{StaticResource Sans}" FontSize="12"
+                                                   Foreground="{StaticResource TextHi}" />
+
+                                        <Grid Grid.Column="4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="8" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <Button Grid.Column="0" Style="{StaticResource PrimaryButton}" MinWidth="118" Click="OnBackupClick"
+                                                    ToolTip="Write a backup file">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Viewbox Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center">
+                                                        <Path Data="{x:Static ui:Icons.Save}" Stroke="#EAFBF7" StrokeThickness="1.7"
+                                                              StrokeLineJoin="Round" Fill="Transparent" />
+                                                    </Viewbox>
+                                                    <TextBlock Text="Backup" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Grid.Column="2" Style="{StaticResource GhostButton}" MinWidth="118" Click="OnRestoreClick"
+                                                    ToolTip="Read a backup file back">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Viewbox Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center">
+                                                        <Path Data="{x:Static ui:Icons.Restore}" Stroke="{StaticResource TextMid}" StrokeThickness="1.7"
+                                                              StrokeLineJoin="Round" Fill="Transparent" />
+                                                    </Viewbox>
+                                                    <TextBlock Text="Restore" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                        </Grid>
+                                    </Grid>
+                                </Border>
+
+                                <!-- What the last backup or restore actually did. Indented
+                                     to the label rather than to the row, and collapsed
+                                     until there is something to say: an empty caption
+                                     left permanently open is a 44 pixel hole in the
+                                     middle of the list, which is most of what was
+                                     pushing the page past the panel. -->
+                                <StackPanel x:Name="BackupDetailRow" Margin="37,7,8,0" Visibility="Collapsed">
+                                    <TextBlock x:Name="BackupHintText" Style="{StaticResource CardSub}"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock x:Name="BackupNoteText" Style="{StaticResource CardSub}" Margin="0,3,0,0"
+                                               TextWrapping="Wrap" MaxHeight="60" />
                                 </StackPanel>
-                                <TextBlock x:Name="BackupHintText" Style="{StaticResource CardSub}" Margin="0,12,0,0" TextTrimming="CharacterEllipsis" />
-                                <TextBlock x:Name="BackupNoteText" Style="{StaticResource CardSub}" Margin="0,4,0,0"
-                                           TextWrapping="Wrap" MaxHeight="70" />
-                            </StackPanel>
+                                </StackPanel>
+                            </ScrollViewer>
                         </Grid>
                     </Border>
                 </TabItem>

@@ -47,10 +47,11 @@ public partial class MainWindow : Window
         {
             _backups.Export(_settings, dialog.FileName);
             string when = File.GetLastWriteTime(dialog.FileName).ToString("d MMM HH:mm", CultureInfo.InvariantCulture);
-            BackupHintText.Text = "Last backup " + when + " - " + Path.GetFileName(dialog.FileName);
-            BackupNoteText.Text = "Saved settings, " + _settings.CustomDisplayPresets.Count.ToString(CultureInfo.InvariantCulture)
-                + " screen and " + _settings.CustomAudioPresets.Count.ToString(CultureInfo.InvariantCulture)
-                + " sound presets, " + _settings.Slots.Count.ToString(CultureInfo.InvariantCulture) + " slots and their keys.";
+            ShowBackupDetail(
+                "Last backup " + when + " - " + Path.GetFileName(dialog.FileName),
+                "Saved settings, " + _settings.CustomDisplayPresets.Count.ToString(CultureInfo.InvariantCulture)
+                    + " screen and " + _settings.CustomAudioPresets.Count.ToString(CultureInfo.InvariantCulture)
+                    + " sound presets, " + _settings.Slots.Count.ToString(CultureInfo.InvariantCulture) + " slots and their keys.");
             Flash("Backup saved");
         }
         catch (Exception ex)
@@ -142,9 +143,14 @@ public partial class MainWindow : Window
         _ = RefreshFxStateAsync(true);
         Commit();
 
-        BackupNoteText.Text = report.AnythingToReport
-            ? "Restored with fixes: " + report.Summary.ToLowerInvariant() + "."
-            : "Restored clean. Everything in the file matched this PC.";
+        // The hint is dropped rather than left standing: it names a file and a
+        // time from the last time a backup was written, which after a restore is
+        // history rather than news.
+        ShowBackupDetail(
+            string.Empty,
+            report.AnythingToReport
+                ? "Restored with fixes: " + report.Summary.ToLowerInvariant() + "."
+                : "Restored clean. Everything in the file matched this PC.");
 
         if (report.Notes.Count > 0)
         {
@@ -160,4 +166,25 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>
+    /// Fills in the two lines under the backup row and takes the space back when
+    /// there is nothing to say.
+    /// <para>
+    /// They start collapsed rather than empty on purpose. An empty caption is
+    /// still a laid out caption, and two of them sitting open under the last row
+    /// is most of the height that used to push this page past the bottom of its
+    /// panel and hide the backup buttons.
+    /// </para>
+    /// </summary>
+    private void ShowBackupDetail(string hint, string note)
+    {
+        BackupHintText.Text = hint;
+        BackupNoteText.Text = note;
+        BackupHintText.Visibility = string.IsNullOrWhiteSpace(hint) ? Visibility.Collapsed : Visibility.Visible;
+        BackupNoteText.Visibility = string.IsNullOrWhiteSpace(note) ? Visibility.Collapsed : Visibility.Visible;
+        BackupDetailRow.Visibility = BackupHintText.Visibility == Visibility.Visible
+            || BackupNoteText.Visibility == Visibility.Visible
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
 }

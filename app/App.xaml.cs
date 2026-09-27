@@ -48,8 +48,32 @@ public partial class App : Application
             }
         }
 
-        _mutex = new Mutex(true, "GamerToolSingleInstance", out bool created);
-        if (!created)
+        // Ownership is taken with WaitOne rather than with the constructor's
+        // initiallyOwned argument, because "created" only reports whether this
+        // process made the named object. A replacement started by the in-app
+        // restart opens the object the outgoing process already has a handle to,
+        // so created comes back false and the app refuses to start, even though
+        // the outgoing process has already given up ownership. created says
+        // nothing about who holds it; WaitOne does.
+        _mutex = new Mutex(false, "GamerToolSingleInstance");
+        bool claimed;
+        try
+        {
+            // Not zero. A restart launches the replacement while this process is
+            // still tearing down, so the claim can still be in the outgoing
+            // process's hands for a moment. A genuine double launch only waits
+            // out this window and then gets the message.
+            claimed = _mutex.WaitOne(TimeSpan.FromSeconds(5));
+        }
+        catch (AbandonedMutexException)
+        {
+            // The previous owner was killed without releasing. The wait has
+            // already handed ownership over, so this instance is the one that
+            // should carry on.
+            claimed = true;
+        }
+
+        if (!claimed)
         {
             MessageBox.Show("GAMER TOOL IS ALREADY RUNNING", "GAMER TOOL", MessageBoxButton.OK, MessageBoxImage.Information);
             Shutdown();
@@ -231,8 +255,44 @@ public partial class App : Application
     /// <summary>Command line arguments, with the user profile taken out of them.</summary>
     private static string SanitiseArgs(string args) => AppLog.Sanitise(args);
 
+    /// <summary>
+    /// Gives up the single-instance claim without exiting, so a replacement
+    /// process can start straight away instead of losing the race, finding the
+    /// mutex held, telling the user Gamer Tool is already running and quitting.
+    /// <para>
+    /// Only the thread that created the mutex with ownership can release it, and
+    /// that is the thread OnStartup ran on, which is the UI thread. So this has
+    /// to be called from the UI thread. It is idempotent in practice: releasing
+    /// twice throws, and that is caught here rather than taken as a failure.
+    /// </para>
+    /// </summary>
+    internal void ReleaseSingleInstanceClaim()
+    {
+        try
+        {
+            _mutex?.ReleaseMutex();
+        }
+        catch (ApplicationException)
+        {
+            // Not held on this thread, so there was nothing to give up.
+        }
+    }
+
     protected override void OnExit(ExitEventArgs e)
     {
+        // Hand the claim back on the way out rather than only closing the handle.
+        // A process that was killed, or one that exits through a path that skips
+        // here, otherwise leaves the next launch waiting out the abandoned
+        // timeout before it can start.
+        try
+        {
+            _mutex?.ReleaseMutex();
+        }
+        catch (ApplicationException)
+        {
+            // Not held on this thread.
+        }
+
         _mutex?.Dispose();
         base.OnExit(e);
     }

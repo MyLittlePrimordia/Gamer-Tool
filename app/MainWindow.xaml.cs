@@ -141,7 +141,27 @@ public partial class MainWindow : Window
     private string _fxUpdateVersion = string.Empty;
 
 
-    private bool _previewNight;
+    private PreviewScene _previewScene = PreviewScene.Day;
+
+
+    /// <summary>Which frame of the looping scene is on screen.</summary>
+    private int _previewFrame;
+
+
+    /// <summary>
+    /// Drives the loop, and only while the looping scene is the one being shown
+    /// with its tab open. Nothing else in the app has a reason to keep a picture
+    /// moving in the background.
+    /// </summary>
+    private DispatcherTimer? _previewFrameTimer;
+
+
+    /// <summary>
+    /// Puts the clipboard mark back after it has swapped itself for a confirmation,
+    /// so the diagnostics row never gets left showing a result from a press that
+    /// has scrolled off screen.
+    /// </summary>
+    private DispatcherTimer? _diagFeedbackTimer;
 
 
     private string _autoSlotId = string.Empty;
@@ -191,9 +211,9 @@ public partial class MainWindow : Window
             Math.Clamp(_settings.BlueLightFilter, 0, DisplayPreset.BlueLightNames.Length - 1)];
         BuildModal();
 
-        _display.StatusChanged += text => RailStatus.Text = text;
-        _audio.StatusChanged += text => RailStatus.Text = text;
-        _setup.StatusChanged += text => RailStatus.Text = text;
+        _display.StatusChanged += SetRailStatus;
+        _audio.StatusChanged += SetRailStatus;
+        _setup.StatusChanged += SetRailStatus;
         _hotkeys.Pressed += OnHotkeyPressed;
         _hotkeys.Failed += OnHotkeyFailed;
         _watcher.ForegroundChanged += OnForegroundChanged;
@@ -212,6 +232,7 @@ public partial class MainWindow : Window
         OsdBox.IsChecked = _settings.ShowOsd;
         AutoSwitchBox.IsChecked = _settings.AutoSwitch;
         AutoRevertBox.IsChecked = _settings.AutoRevertOnExit;
+        FxPromptBox.IsChecked = _settings.FxPromptDisabled;
         StartHiddenBox.IsChecked = _settings.StartHidden;
         CloseToTrayBox.IsChecked = _settings.CloseToTray;
         StartWithWindowsBox.IsChecked = _startup.IsEnabled;
@@ -392,6 +413,10 @@ public partial class MainWindow : Window
             _spectrum?.Stop();
         }
 
+        // Same reasoning for the looping preview: no reason to keep a picture
+        // moving on a tab nobody is looking at.
+        UpdatePreviewPlayback();
+
         if (index == 2)
         {
             BuildSlots();
@@ -402,6 +427,38 @@ public partial class MainWindow : Window
         {
             _audioPreview.Pause();
         }
+    }
+
+
+    /// <summary>
+    /// Puts one line in the corner status strip.
+    /// <para>
+    /// Every one of these services raises its status from wherever it happens to
+    /// be, and several of them are mid-way through a ConfigureAwait(false), which
+    /// puts the rest of their work on a thread pool thread with no dispatcher.
+    /// Writing straight to the label from there throws, and because the raise
+    /// happens on the line that reports success, that exception was being read as
+    /// the install failing when it had just succeeded. Anything that touches a
+    /// control comes through here instead.
+    /// </para>
+    /// </summary>
+    private void SetRailStatus(string text)
+    {
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+        {
+            return;
+        }
+
+        if (Dispatcher.CheckAccess())
+        {
+            RailStatus.Text = text;
+            return;
+        }
+
+        // Not called inline: a raise that happens during teardown would otherwise
+        // fault, and an unhandled fault on the dispatcher is a dialog nobody asked
+        // for. Losing the last status line is not worth that.
+        _ = Dispatcher.BeginInvoke(new Action(() => RailStatus.Text = text));
     }
 
 
@@ -465,27 +522,40 @@ public partial class MainWindow : Window
 
 
     /// <summary>
-    /// First run on a machine with no FxSound: ask once, then never nag again.
-    /// A user who says later can still install from the banner on the Audio tab
-    /// or from Settings.
+    /// Asked on every launch while FxSound is missing, rather than once and never
+    /// again.
+    /// <para>
+    /// The old one-shot flag was set before the dialog was even shown, so a single
+    /// "Later" silenced the prompt permanently: uninstall FxSound a month later
+    /// and the app never mentioned it again, leaving the audio tab dead with no
+    /// explanation. Now "Not now" means not now, and the way to stop being asked is
+    /// an explicit setting.
+    /// </para>
+    /// <para>
+    /// Skipped when the app is starting into the tray, because a modal that yanks
+    /// a hidden window onto the screen is worse than the problem it is offering to
+    /// solve.
+    /// </para>
     /// </summary>
     private void PromptForFxSound()
     {
-        if (_settings.FxPromptSeen)
+        if (_settings.FxPromptDisabled)
         {
             return;
         }
 
-        _settings.FxPromptSeen = true;
-        Commit();
+        if (_settings.StartHidden || StartHidden())
+        {
+            return;
+        }
 
         ShowConfirmModal(
             "FXSOUND IS NOT INSTALLED",
-            "FxSound does the actual sound work. Without it this app can still change your screen, "
-            + "but the audio tab will stay silent. It is a free app and installs in about a minute.",
+            "Needed for the audio engine. Without it, sound stays flat.",
             "Install FxSound",
             () => _ = InstallAsync(true),
-            "Later");
+            "Not now",
+            keepOpen: true);
     }
 
 

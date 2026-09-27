@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using GamerTool.Models;
 using GamerTool.Services;
 using Button = System.Windows.Controls.Button;
@@ -143,7 +144,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        BitmapSource? frame = _displayPreview.Render(EffectiveDisplay(), _previewNight);
+        BitmapSource? frame = _displayPreview.Render(EffectiveDisplay(), _previewScene, _previewFrame);
         if (frame is not null)
         {
             PreviewImage.Source = frame;
@@ -181,24 +182,125 @@ public partial class MainWindow : Window
 
 
     /// <summary>
-    /// Shows which scene the preview is on, and offers the other one. The button
-    /// carries the scene you would switch to, so the control reads as a switch
-    /// with a position rather than as two separate buttons.
+    /// Labels the scene the preview is on. The icon and the tint both say where you
+    /// are, not where a click would take you, so a scene is named by what is on the
+    /// screen rather than by the button that changes it.
     /// </summary>
     private void UpdatePreviewPills()
     {
-        PreviewSceneGlyph.Glyph = _previewNight ? "sun" : "moon";
-        PreviewSceneButton.ToolTip = _previewNight ? "Day" : "Night";
-        PreviewSceneButton.Background = _previewNight
-            ? (Brush)FindResource("AccentHotkeysGlow")
-            : (Brush)FindResource("AccentDisplayGlow");
+        (string Glyph, string Tooltip) = _previewScene switch
+        {
+            PreviewScene.Night => ("moon", "Night scene"),
+            PreviewScene.Transition => ("moonscape", "Day to night loop"),
+            _ => ("sun", "Day scene")
+        };
+
+        PreviewSceneGlyph.Glyph = Glyph;
+        PreviewSceneButton.ToolTip = Tooltip;
+
+        // Tinted with the accent of the scene actually on screen, so the pill says
+        // where you are rather than where you would go.
+        PreviewSceneButton.Background = _previewScene switch
+        {
+            PreviewScene.Night => (Brush)FindResource("AccentHotkeysGlow"),
+            PreviewScene.Transition => (Brush)FindResource("AccentAudioGlow"),
+            _ => (Brush)FindResource("AccentDisplayGlow")
+        };
     }
 
 
     private void OnPreviewSceneClick(object sender, RoutedEventArgs e)
     {
-        _previewNight = !_previewNight;
+        _previewScene = _previewScene switch
+        {
+            PreviewScene.Day => PreviewScene.Night,
+            PreviewScene.Night => PreviewScene.Transition,
+            _ => PreviewScene.Day
+        };
+
+        // Each scene starts at the top of itself, so a loop that has run part way
+        // through does not pick up in the middle when it comes back round.
+        _previewFrame = 0;
+
         UpdatePreviewPills();
+
+        // Drawn straight away, so a scene that is already decoded appears on the
+        // click rather than a frame later.
+        RenderDisplayPreview();
+        _ = FinishPreviewSceneSwitch();
+    }
+
+
+    /// <summary>
+    /// Waits for a scene that is not decoded yet, then draws it and starts or stops
+    /// the loop to match. The first click on the looping scene therefore shows a
+    /// still for a moment and then the clip, rather than waiting on the decode
+    /// before showing anything.
+    /// </summary>
+    private async System.Threading.Tasks.Task FinishPreviewSceneSwitch()
+    {
+        try
+        {
+            await _displayPreview.EnsureSceneReadyAsync(_previewScene);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("PREVIEW SCENE", ex);
+        }
+
+        RenderDisplayPreview();
+        UpdatePreviewPlayback();
+    }
+
+
+    /// <summary>
+    /// Starts or stops the loop so it runs only when there is something moving to
+    /// look at on screen.
+    /// </summary>
+    private void UpdatePreviewPlayback()
+    {
+        bool wanted = _previewScene == PreviewScene.Transition
+            && _displayPreview.IsAnimated(PreviewScene.Transition)
+            && Pages.SelectedIndex == 0;
+
+        if (!wanted)
+        {
+            _previewFrameTimer?.Stop();
+            return;
+        }
+
+        if (_previewFrameTimer is null)
+        {
+            _previewFrameTimer = new DispatcherTimer(DispatcherPriority.Render)
+            {
+                Interval = TimeSpan.FromMilliseconds(100)
+            };
+            _previewFrameTimer.Tick += OnPreviewFrameTick;
+        }
+
+        // Set every time, not just at the start. A clip is free to hold a frame
+        // for longer than the last one did, and a timer left on the first frame's
+        // timing would quietly flatten that out.
+        _previewFrameTimer.Stop();
+        _previewFrameTimer.Interval = TimeSpan.FromMilliseconds(
+            _displayPreview.FrameDelayMs(PreviewScene.Transition, _previewFrame));
+        _previewFrameTimer.Start();
+    }
+
+
+    private void OnPreviewFrameTick(object? sender, EventArgs e)
+    {
+        int count = _displayPreview.FrameCount(PreviewScene.Transition);
+        if (count <= 1 || _previewFrameTimer is null)
+        {
+            _previewFrameTimer?.Stop();
+            return;
+        }
+
+        _previewFrame = (_previewFrame + 1) % count;
+        _previewFrameTimer.Interval = TimeSpan.FromMilliseconds(
+            _displayPreview.FrameDelayMs(PreviewScene.Transition, _previewFrame));
+
         RenderDisplayPreview();
     }
 

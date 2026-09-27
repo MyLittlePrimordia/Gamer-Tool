@@ -43,10 +43,6 @@
     <None Remove="Assets\footsteps.mp3" />
     <None Remove="Assets\icon.png" />
     <None Remove="Assets\GamerTool.ico" />
-    <None Remove="Assets\display.png" />
-    <None Remove="Assets\audio.png" />
-    <None Remove="Assets\hotkeys.png" />
-    <None Remove="Assets\settings.png" />
     <None Remove="Assets\spectrum.bin" />
     <None Remove="Assets\fac-template.fac" />
     <EmbeddedResource Include="Assets\day.jpg" LogicalName="GamerTool.assets.day.jpg" />
@@ -56,11 +52,8 @@
     <EmbeddedResource Include="Assets\footsteps.mp3" LogicalName="GamerTool.assets.footsteps.mp3" />
     <EmbeddedResource Include="Assets\icon.png" LogicalName="GamerTool.assets.icon.png" />
     <EmbeddedResource Include="Assets\GamerTool.ico" LogicalName="GamerTool.assets.GamerTool.ico" />
-    <EmbeddedResource Include="Assets\display.png" LogicalName="GamerTool.assets.display.png" />
-    <EmbeddedResource Include="Assets\audio.png" LogicalName="GamerTool.assets.audio.png" />
-    <EmbeddedResource Include="Assets\hotkeys.png" LogicalName="GamerTool.assets.hotkeys.png" />
-    <EmbeddedResource Include="Assets\settings.png" LogicalName="GamerTool.assets.settings.png" />
     <EmbeddedResource Include="Assets\spectrum.bin" LogicalName="GamerTool.assets.spectrum.bin" />
+    <EmbeddedResource Include="Assets\animated.gif" LogicalName="GamerTool.assets.animated.gif" />
     <EmbeddedResource Include="Assets\fac-template.fac" LogicalName="GamerTool.assets.fac-template.fac" />
     <!-- Colour emoji. WPF cannot draw COLR/CPAL glyphs, so these are baked
          bitmaps rendered by the browser's own colour text stack. -->

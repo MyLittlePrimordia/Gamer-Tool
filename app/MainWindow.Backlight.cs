@@ -291,7 +291,7 @@ public partial class MainWindow
             });
 
             Clipboard.SetText(text);
-            DiagHintText.Text = "Copied. Paste it anywhere.";
+            ShowDiagFeedback("Copied to clipboard", ok: true);
             Flash("Diagnostics copied");
         }
         catch (Exception ex)
@@ -299,8 +299,48 @@ public partial class MainWindow
             // The clipboard is shared with everything else on the machine and can
             // be locked by another app, so failing here is ordinary, not fatal.
             AppLog.Error("COPY DIAGNOSTICS", ex);
-            DiagHintText.Text = "Could not reach the clipboard, try again.";
+            ShowDiagFeedback("Could not copy", ok: false);
             Flash("Could not copy the log", true);
         }
+    }
+
+
+    /// <summary>
+    /// Swaps the clipboard mark for a short confirmation, then puts the mark back.
+    /// <para>
+    /// The row is one line of list, so the mark's own space is the only place a
+    /// confirmation fits without putting the row back to a heading and a line of
+    /// explanation and needing a divider of its own again. Anything longer than a
+    /// few words still goes to the status line through <see cref="Flash"/>, which
+    /// is where the full text of a failure belongs.
+    /// </para>
+    /// </summary>
+    private void ShowDiagFeedback(string message, bool ok)
+    {
+        DiagCopiedText.Text = message;
+        DiagCopiedText.Foreground = (System.Windows.Media.Brush)FindResource(
+            ok ? "AccentSettings" : "Red");
+        DiagCopiedText.Visibility = Visibility.Visible;
+        CopyDiagButton.Visibility = Visibility.Collapsed;
+
+        if (_diagFeedbackTimer is null)
+        {
+            _diagFeedbackTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromSeconds(2.4)
+            };
+            _diagFeedbackTimer.Tick += OnDiagFeedbackTick;
+        }
+
+        _diagFeedbackTimer.Stop();
+        _diagFeedbackTimer.Start();
+    }
+
+
+    private void OnDiagFeedbackTick(object? sender, EventArgs e)
+    {
+        _diagFeedbackTimer?.Stop();
+        DiagCopiedText.Visibility = Visibility.Collapsed;
+        CopyDiagButton.Visibility = Visibility.Visible;
     }
 }

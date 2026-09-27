@@ -90,7 +90,7 @@ public sealed class AppSettings
     /// Set once the user has been offered the FxSound install on launch. Stops a
     /// machine with no FxSound from being nagged on every single start.
     /// </summary>
-    public bool FxPromptSeen { get; set; }
+    public bool FxPromptDisabled { get; set; }
 
     public List<AppProfile> AppProfiles { get; set; } = new();
 

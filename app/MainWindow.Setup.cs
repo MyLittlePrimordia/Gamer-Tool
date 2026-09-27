@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -24,6 +25,14 @@ namespace GamerTool;
 
 public partial class MainWindow : Window
 {
+    /// <summary>
+    /// True while an install or an update is running. Holds the page disabled,
+    /// the modal on its progress state with no way to dismiss it, and the window
+    /// itself from closing, so the run cannot be interrupted half way.
+    /// </summary>
+    private bool _installBusy;
+
+
     private void OnOptionChanged(object sender, RoutedEventArgs e)
     {
         if (!_ready)
@@ -35,6 +44,7 @@ public partial class MainWindow : Window
         _settings.ShowOsd = OsdBox.IsChecked == true;
         _settings.AutoSwitch = AutoSwitchBox.IsChecked == true;
         _settings.AutoRevertOnExit = AutoRevertBox.IsChecked == true;
+        _settings.FxPromptDisabled = FxPromptBox.IsChecked == true;
         _settings.StartHidden = StartHiddenBox.IsChecked == true;
         _settings.CloseToTray = CloseToTrayBox.IsChecked == true;
         _settings.HardwareBrightnessEnabled = HardwareBrightnessBox.IsChecked == true;
@@ -173,67 +183,230 @@ public partial class MainWindow : Window
 
     private async System.Threading.Tasks.Task InstallAsync(bool useWinget)
     {
+        if (_installBusy)
+        {
+            return;
+        }
+
         _install?.Cancel();
         _install = new CancellationTokenSourceHolder();
 
+        // Set before the await and cleared in the finally, not just around the
+        // happy path. Anything thrown between here and the end used to leave the
+        // page greyed out for the rest of the session with no way back.
+        _installBusy = true;
         Pages.IsEnabled = false;
         RailStatus.Text = useWinget ? "INSTALLING FXSOUND" : "DOWNLOADING FXSOUND";
+        ShowProgressModal("INSTALLING FXSOUND", showCaution: true);
 
-        System.Progress<SetupStage> progress = new(stage => RailStatus.Text = "FXSOUND " + stage.Text);
+        System.Progress<SetupStage> progress = new(stage =>
+        {
+            RailStatus.Text = "FXSOUND " + stage.Text;
+            SetModalProgress(stage);
+        });
 
-        bool ok = useWinget
-            ? await _setup.InstallBestAsync(_audio, progress, _install.Token)
-            : await _setup.DownloadAndInstallAsync(_audio, progress, _install.Token);
+        bool ok = false;
+        try
+        {
+            ok = useWinget
+                ? await _setup.InstallBestAsync(_audio, progress, _install.Token)
+                : await _setup.DownloadAndInstallAsync(_audio, progress, _install.Token);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("INSTALL", ex);
+        }
+        finally
+        {
+            Pages.IsEnabled = true;
+            _installBusy = false;
+        }
 
-        Pages.IsEnabled = true;
         UpdateFxBanner();
-        if (ok)
+        if (!ok)
         {
-            _fxUpdateAvailable = false;
-            _fxUpdateVersion = string.Empty;
-            LoadDevices();
-            _ = RefreshFxStateAsync(true);
-            UpdateFxBanner();
-            ApplyAudio(_workAudio.Copy(), false);
-            Flash("FxSound ready, sound is live");
-        }
-        else
-        {
+            if (useWinget)
+            {
+                // winget was tried and did not manage it, and it is not quietly
+                // retried by another route. The reason is almost always winget's
+                // own plumbing rather than anything to do with FxSound, so that is
+                // what the message says, and taking the other route is a choice
+                // rather than something that happens on its own.
+                ShowResultModal(
+                    "INSTALL FAILED",
+                    "winget could not install FxSound. That is usually the network, the package "
+                    + "source, or winget itself. You can try again without winget, or install "
+                    + "FxSound yourself and Gamer Tool will find it.",
+                    failed: true,
+                    "Try without winget",
+                    () => _ = InstallAsync(false),
+                    "Close",
+                    () => { });
+            }
+            else
+            {
+                ShowResultModal(
+                    "INSTALL FAILED",
+                    "FxSound did not install. The log has the details, and the settings tab can try again.",
+                    failed: true,
+                    "Try again",
+                    () => _ = InstallAsync(false),
+                    "Close",
+                    () => { });
+            }
+
             Flash("Install failed, try again", true);
+            return;
         }
+
+        _fxUpdateAvailable = false;
+        _fxUpdateVersion = string.Empty;
+
+        // The rest of a fresh launch, without the fresh launch. AdoptInstalledPath
+        // has already re-resolved the exe, and this is everything else the app
+        // does at startup that touches the engine: drop the cached read, re-enumerate
+        // the endpoints, repair the output if the install moved it, then put the
+        // current tune back and read it back out of the engine to prove it took.
+        _audio.InvalidateCache();
+        LoadDevices();
+        EnsureUsableAudioOutput();
+        _ = RefreshFxStateAsync(true);
+        UpdateFxBanner();
+        ApplyAudio(_workAudio.Copy(), false);
+        Flash("FxSound ready, sound is live");
+
+        // Restarting is offered, not imposed, and not claimed to be required: the
+        // apply above is verified against the engine, so if the engine is not
+        // taking the preset the app says so rather than the user having to notice.
+        ShowResultModal(
+            "FXSOUND INSTALLED",
+            "FxSound is installed and Gamer Tool is already talking to it. Restarting is the "
+            + "safest way to be sure the new audio engine is picked up cleanly.",
+            failed: false,
+            "Restart Gamer Tool",
+            RestartSelf,
+            "Not now",
+            () => { });
+    }
+
+
+    /// <summary>
+    /// Hands the running app over to a fresh one.
+    /// <para>
+    /// The single-instance claim is given up first, and that is the whole trick.
+    /// The mutex is held by this process until it exits, so a replacement started
+    /// first would find it taken, tell the user Gamer Tool is already running and
+    /// quit, leaving nothing on screen at all. The claim is owned by the thread
+    /// that created it, which is the UI thread this runs on, so it can simply be
+    /// released. Nothing is lost by letting go of it: this process is on its way
+    /// out either way.
+    /// </para>
+    /// </summary>
+    private void RestartSelf()
+    {
+        string? exe = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(exe))
+        {
+            ShowResultModal(
+                "COULD NOT RESTART",
+                "Gamer Tool could not find its own executable to restart. Close it and open it again.",
+                failed: true,
+                "Close",
+                () => { _quitting = true; Application.Current.Shutdown(); },
+                "Stay",
+                () => { });
+            return;
+        }
+
+        try
+        {
+            ((App)Application.Current).ReleaseSingleInstanceClaim();
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = exe,
+                UseShellExecute = false
+            });
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("RESTART", ex);
+            ShowResultModal(
+                "COULD NOT RESTART",
+                "Gamer Tool could not start a replacement process. Close it and open it again.",
+                failed: true,
+                "Close",
+                () => { _quitting = true; Application.Current.Shutdown(); },
+                "Stay",
+                () => { });
+            return;
+        }
+
+        _quitting = true;
+        Application.Current.Shutdown();
     }
 
 
     private async System.Threading.Tasks.Task UpgradeFxSoundAsync()
     {
+        if (_installBusy)
+        {
+            return;
+        }
+
         _install?.Cancel();
         _install = new CancellationTokenSourceHolder();
 
+        _installBusy = true;
         Pages.IsEnabled = false;
         RailStatus.Text = "UPDATING FXSOUND";
         FxUpgradeButton.IsEnabled = false;
+        ShowProgressModal("UPDATING FXSOUND", showCaution: true);
 
-        System.Progress<SetupStage> progress = new(stage => RailStatus.Text = "FXSOUND " + stage.Text);
-        bool ok = await _setup.UpgradeAsync(_audio, progress, _install.Token);
+        System.Progress<SetupStage> progress = new(stage =>
+        {
+            RailStatus.Text = "FXSOUND " + stage.Text;
+            SetModalProgress(stage);
+        });
 
-        Pages.IsEnabled = true;
-        FxUpgradeButton.IsEnabled = true;
-        if (ok)
+        bool ok = false;
+        try
         {
-            _fxUpdateAvailable = false;
-            _fxUpdateVersion = string.Empty;
-            _audio.InvalidateCache();
-            LoadDevices();
-            _ = RefreshFxStateAsync(true);
-            UpdateFxBanner();
-            ApplyAudio(_workAudio.Copy(), false);
-            Flash("FxSound updated to the latest");
+            ok = await _setup.UpgradeAsync(_audio, progress, _install.Token);
         }
-        else
+        catch (Exception ex)
         {
-            UpdateFxBanner();
-            Flash("Update failed, try again", true);
+            AppLog.Error("UPGRADE", ex);
         }
+        finally
+        {
+            Pages.IsEnabled = true;
+            FxUpgradeButton.IsEnabled = true;
+            _installBusy = false;
+        }
+
+        UpdateFxBanner();
+        if (!ok)
+        {
+            ShowResultModal(
+                "UPDATE FAILED",
+                "FxSound did not update. The log has the details, and the settings tab can try again.",
+                failed: true,
+                "Try again",
+                () => _ = UpgradeFxSoundAsync(),
+                "Close",
+                () => { });
+            return;
+        }
+
+        _fxUpdateAvailable = false;
+        _fxUpdateVersion = string.Empty;
+        _audio.InvalidateCache();
+        LoadDevices();
+        EnsureUsableAudioOutput();
+        _ = RefreshFxStateAsync(true);
+        UpdateFxBanner();
+        ApplyAudio(_workAudio.Copy(), false);
+        Flash("FxSound updated");
     }
 
 
@@ -254,6 +427,17 @@ public partial class MainWindow : Window
 
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        // An install or an update owns the modal and cannot be dismissed, so the
+        // window is not allowed to go either: quitting mid-run would delete the
+        // installer out from under the process still executing it. The tray Quit
+        // item is the way out if it truly wedges, and winget and the download both
+        // carry their own timeouts.
+        if (_installBusy && !_quitting)
+        {
+            e.Cancel = true;
+            return;
+        }
+
         if (!_quitting && _settings.CloseToTray)
         {
             e.Cancel = true;
@@ -262,6 +446,8 @@ public partial class MainWindow : Window
         }
 
         _audioPreview.Pause();
+        _previewFrameTimer?.Stop();
+        _diagFeedbackTimer?.Stop();
         Commit();
         _tray?.Dispose();
         _tray = null;
