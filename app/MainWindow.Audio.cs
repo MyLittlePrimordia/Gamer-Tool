@@ -639,7 +639,7 @@ public partial class MainWindow : Window
 
         string removed = mine.Name;
         ShowConfirmModal(
-            "DEoETE \u201C" + removed.ToUpperInvariant() + "\u201D?",
+            "DELETE \u201C" + removed.ToUpperInvariant() + "\u201D?",
             "This takes the preset out of Gamer Tool and out of any slot that points at it.",
             "Delete",
             () =>
@@ -849,7 +849,7 @@ public partial class MainWindow : Window
     {
         _audio.InvalidateCache();
         LoadDevices();
-        RefreshFxState(true);
+        _ = RefreshFxStateAsync(true);
     }
 
 
@@ -882,20 +882,60 @@ public partial class MainWindow : Window
     /// goes across as a command and is read straight back out of the engine. When
     /// the engine does not agree, the panel says so instead of the toast claiming
     /// a change that never happened.
+    ///
+    /// The read itself is slow enough to matter: it starts the engine, waits for
+    /// it, then polls its status file, all synchronously, and this runs on a four
+    /// second timer for the life of the process. It is therefore handed to the
+    /// thread pool and only the result comes back, rather than the dispatcher
+    /// standing in front of the engine.
     /// </summary>
-    private void RefreshFxState(bool force)
+    private async Task RefreshFxStateAsync(bool force)
     {
         if (!_audio.IsInstalled)
         {
             return;
         }
 
-        FxSoundState? state = _audio.ReadState(force);
-        if (state is null)
+        // One read at a time. The poll interval is shorter than the worst case
+        // read, so without this the timer can start a second read while the first
+        // is still inside the engine and the two race over the cached state.
+        if (Interlocked.Exchange(ref _fxStateBusy, 1) == 1)
         {
             return;
         }
 
+        try
+        {
+            FxSoundState? state = await Task.Run(() => _audio.ReadState(force));
+            if (state is null)
+            {
+                return;
+            }
+
+            // Everything past this point touches live controls, so it is put back
+            // on the dispatcher explicitly. The await above already resumes there,
+            // but naming the crossing point keeps that true even if this is ever
+            // called from a thread with no synchronisation context of its own.
+            await Dispatcher.InvokeAsync(() => ApplyEngineState(state));
+        }
+        catch (Exception ex)
+        {
+            // Includes the window shutting down underneath a read in flight.
+            TraceLog.Write("FX STATE", ex);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _fxStateBusy, 0);
+        }
+    }
+
+
+    /// <summary>
+    /// The window half of a poll, and the only part allowed to touch controls.
+    /// Runs on the dispatcher, so nothing in here may block.
+    /// </summary>
+    private void ApplyEngineState(FxSoundState state)
+    {
         // The frequency labels are only borrowed from the engine when the page
         // cannot edit them. Where a dial exists the app's own tuning owns the
         // label, because the engine still reports the previous frequency until
@@ -965,6 +1005,9 @@ public partial class MainWindow : Window
 
     /// <summary>Set once the first poll has happened, so launch is not reported as a failure.</summary>
     private bool _curveChecked;
+
+    /// <summary>1 while an engine read is in flight, so two of them never overlap.</summary>
+    private int _fxStateBusy;
 
 
     private void OnAntiClipChanged(object sender, RoutedEventArgs e)

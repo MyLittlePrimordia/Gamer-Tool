@@ -5,21 +5,28 @@ using System.Windows.Data;
 namespace GamerTool.UI;
 
 /// <summary>
-/// Works out how tall the coloured part of a vertical fader should be, measured
-/// out from the 0 line. A band pushed up lights the space above centre, a band
-/// pushed down lights the space below, and a band at rest shows nothing.
+/// Works out how long the coloured part of a bipolar fader should be, measured out
+/// from the 0 line along whichever axis it runs. A value pushed up or right lights
+/// the space past centre, a value pushed down or left lights the space before it,
+/// and a control at rest shows nothing.
+/// <para>
 /// This runs in the template so it is correct from the first layout pass rather
 /// than needing a code-behind nudge once the control has been measured.
-///
-/// The height handed in is the whole track, not the half this converter is
-/// drawing, so the result is halved here. Reading the templated parent's height
-/// is deliberate: binding to an ancestor Grid by type reaches whichever Grid
-/// happens to be nearest, which in this template is the half sized wrapper rather
+/// </para>
+/// <para>
+/// The size handed in is the whole track, not the half this converter is drawing,
+/// so the result is halved here. Reading the templated parent's size is
+/// deliberate: binding to an ancestor Grid by type reaches whichever Grid happens
+/// to be nearest, which in the vertical template is the half sized wrapper rather
 /// than the track, and the fill then lands at the wrong length.
+/// </para>
 /// </summary>
 public sealed class BandFillConverter : IMultiValueConverter
 {
-    /// <summary>True for the half above the 0 line, false for the half below.</summary>
+    /// <summary>
+    /// True for the half above or right of the 0 line, false for the half below
+    /// or left of it.
+    /// </summary>
     public bool Above { get; set; }
 
     public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)

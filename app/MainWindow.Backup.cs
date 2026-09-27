@@ -139,7 +139,7 @@ public partial class MainWindow : Window
         RegisterHotkeys();
         ApplyWatchState();
         UpdateFxBanner();
-        RefreshFxState(true);
+        _ = RefreshFxStateAsync(true);
         Commit();
 
         BackupNoteText.Text = report.AnythingToReport

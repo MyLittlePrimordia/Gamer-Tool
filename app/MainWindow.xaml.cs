@@ -207,7 +207,8 @@ public partial class MainWindow : Window
         // back to the brightness they were found at.
         SessionState.Current.RestoreBacklight = () => Backlight.RestoreAll();
 
-        GammaLockBox.IsChecked = _settings.GammaLock;        OsdBox.IsChecked = _settings.ShowOsd;
+        GammaLockBox.IsChecked = _settings.GammaLock;
+        OsdBox.IsChecked = _settings.ShowOsd;
         AutoSwitchBox.IsChecked = _settings.AutoSwitch;
         StartHiddenBox.IsChecked = _settings.StartHidden;
         CloseToTrayBox.IsChecked = _settings.CloseToTray;
@@ -284,7 +285,8 @@ public partial class MainWindow : Window
     }
 
 
-    private static bool StartHidden()    {
+    private static bool StartHidden()
+    {
         string[] args = Environment.GetCommandLineArgs();
         foreach (string arg in args)
         {
@@ -334,7 +336,8 @@ public partial class MainWindow : Window
     }
 
 
-    private static int StartPage()    {
+    private static int StartPage()
+    {
         string[] args = Environment.GetCommandLineArgs();
         for (int i = 0; i < args.Length - 1; i++)
         {
@@ -419,10 +422,10 @@ public partial class MainWindow : Window
         UpdateFxBanner();
         LoadDevices();
         EnsureUsableAudioOutput();
-        RefreshFxState(true);
+        _ = RefreshFxStateAsync(true);
 
         _stateTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
-        _stateTimer.Tick += (s, e) => RefreshFxState(false);
+        _stateTimer.Tick += (s, e) => _ = RefreshFxStateAsync(false);
         _stateTimer.Start();
 
         if (_settings.StartHidden)
@@ -544,7 +547,11 @@ public partial class MainWindow : Window
 
     private void OnCaptionCloseClick(object sender, RoutedEventArgs e)
     {
-        OnClosing(this, new System.ComponentModel.CancelEventArgs());
+        // Close normally and let OnClosing decide what closing means, which is
+        // hide-to-tray or shut down depending on the setting. Calling OnClosing
+        // straight from here ran the teardown and then let Shutdown raise Closing
+        // and run it a second time, on the way out through the non tray path.
+        Close();
     }
 
 

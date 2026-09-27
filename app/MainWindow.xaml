@@ -251,7 +251,7 @@
                                                 <TextBlock Style="{StaticResource Label}" Text="Brightness" />
                                                 <TextBlock x:Name="BrightValue" Grid.Column="1" Style="{StaticResource Value}" Text="+0%" />
                                             </Grid>
-                                            <Slider x:Name="BrightSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="1.2" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentDisplay}"
+                                            <Slider x:Name="BrightSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="1.2" Style="{StaticResource ModernSliderBipolar}" Foreground="{StaticResource AccentDisplay}"
                                                     Minimum="-50" Maximum="50" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged"
                                                     ToolTip="Brightness" />
                                         </StackPanel>
@@ -265,7 +265,7 @@
                                                 <TextBlock Style="{StaticResource Label}" Text="Contrast" />
                                                 <TextBlock x:Name="ContrastValue" Grid.Column="1" Style="{StaticResource Value}" Text="+0%" />
                                             </Grid>
-                                            <Slider x:Name="ContrastSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="1.2" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentDisplay}"
+                                            <Slider x:Name="ContrastSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="1.2" Style="{StaticResource ModernSliderBipolar}" Foreground="{StaticResource AccentDisplay}"
                                                     Minimum="-50" Maximum="50" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged"
                                                     ToolTip="Contrast" />
                                         </StackPanel>
@@ -302,9 +302,25 @@
                                                 <RowDefinition Height="Auto" />
                                                 <RowDefinition Height="Auto" />
                                             </Grid.RowDefinitions>
-                                            <TextBlock Grid.Row="0" Style="{StaticResource SectionHeader}" Text="COLOUR TRIM" />
-                                            <TextBlock Grid.Row="0" Style="{StaticResource CardSub}" HorizontalAlignment="Right"
-                                                       VerticalAlignment="Center" Text="NEUTRAL IS 1.00" />
+                                            <!-- Centred across all three channels rather
+                                                 than right aligned, which put it directly
+                                                 above the blue fader and made it read as
+                                                 that fader's own label. It takes the same
+                                                 three column shape as the fader grid below
+                                                 so the block reads as one unit, and
+                                                 "COLOUR TRIM" stays left on the header
+                                                 line where a section name belongs. -->
+                                            <Grid Grid.Row="0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Style="{StaticResource SectionHeader}" Text="COLOUR TRIM" />
+                                                <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Style="{StaticResource CardSub}"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                           Text="NEUTRAL IS 1.00" />
+                                            </Grid>
                                             <Grid Grid.Row="1" Height="112" Margin="0,10,0,0">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -635,7 +651,7 @@
 
                                                 <TextBlock Style="{StaticResource Label}" Text="Master gain" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
 
-                                                <Slider x:Name="MasterGainSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="0.3" Grid.Column="1" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentAudio}"
+                                                <Slider x:Name="MasterGainSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="0.3" Grid.Column="1" Style="{StaticResource ModernSliderBipolar}" Foreground="{StaticResource AccentAudio}"
 
                                                         Minimum="-20" Maximum="20" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged"
 
@@ -713,7 +729,7 @@
 
                                                 <TextBlock Style="{StaticResource Label}" Text="Balance" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
 
-                                                <Slider x:Name="BalanceSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="0.3" Grid.Column="1" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentAudio}"
+                                                <Slider x:Name="BalanceSlider" ui:SliderSnap.Neutral="0" ui:SliderSnap.Threshold="0.3" Grid.Column="1" Style="{StaticResource ModernSliderBipolar}" Foreground="{StaticResource AccentAudio}"
 
                                                         Minimum="-20" Maximum="20" TickFrequency="0.5" IsSnapToTickEnabled="True" ValueChanged="OnSoundSliderChanged"
 

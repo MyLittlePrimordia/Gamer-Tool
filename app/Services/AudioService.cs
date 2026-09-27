@@ -480,7 +480,8 @@ public sealed class AudioService
     private static string Fmt(double value) => value.ToString("0.0", CultureInfo.InvariantCulture);
 
 
-    public FxSoundState? ReadState(bool force = false)    {
+    public FxSoundState? ReadState(bool force = false)
+    {
         if (!IsInstalled)
         {
             return null;

@@ -312,6 +312,12 @@ public sealed class DisplayService
         if (ok)
         {
             IsEnabled = true;
+
+            // The emergency reset on the way out can only put a ramp back if
+            // something remembers that a ramp was taken. Nothing else records
+            // this, and a failed push leaves the screen alone, so the flag is set
+            // here and only here, where the push actually landed.
+            SessionState.Current.DisplayTouched = true;
             Applied?.Invoke(preset);
         }
 
@@ -460,6 +466,14 @@ public sealed class DisplayService
             {
                 DeleteDC(hdc);
             }
+        }
+
+        // Only stand the flag down when the restore actually landed. If it did
+        // not, the ramp may still be sitting out there tinted, and leaving the
+        // flag set is what gives the exit path another turn at it.
+        if (any)
+        {
+            SessionState.Current.DisplayTouched = false;
         }
 
         IsEnabled = false;

@@ -31,7 +31,24 @@ public sealed class SetupService
 
     public const string WingetId = "FxSound.FxSound";
 
-    public static string InstallerPath => Path.Combine(Path.GetTempPath(), "fxsound_setup.exe");
+    /// <summary>
+    /// Where the downloaded installer is put while it is fetched and run.
+    /// <para>
+    /// One name per run of the app rather than a fixed one. A fixed name in a
+    /// shared folder is a name any other process can predict and get to first, and
+    /// a file left locked by a previous run that was killed part way through an
+    /// install would stop this run opening it at all.
+    /// </para>
+    /// <para>
+    /// It has to be worked out once and held, not recomputed per access: the
+    /// download writes to this path and the installer is later started from it,
+    /// and those two have to be the same file. A property returning a fresh name
+    /// each time would hand the installer a path that does not exist.
+    /// </para>
+    /// </summary>
+    public static readonly string InstallerPath = Path.Combine(
+        Path.GetTempPath(),
+        "GamerTool-fxsound-" + Guid.NewGuid().ToString("N")[..8] + ".exe");
 
     public event Action<string>? StatusChanged;
 
@@ -400,6 +417,31 @@ public sealed class SetupService
             StatusChanged?.Invoke("INSTALL FAILED");
             Debug.WriteLine(ex.Message);
             return false;
+        }
+        finally
+        {
+            // Runs after the download stream has been closed, and on the early
+            // returns too, where there is no file and Delete does nothing.
+            TryDeleteInstaller();
+        }
+    }
+
+
+    /// <summary>
+    /// Best effort removal of the downloaded installer. It will still be locked if
+    /// the wait for it was cancelled and the process is running, in which case
+    /// this leaves it alone, which is the right answer: the installer copies what
+    /// it needs before it exits and Windows clears the temp folder anyway.
+    /// </summary>
+    private static void TryDeleteInstaller()
+    {
+        try
+        {
+            File.Delete(InstallerPath);
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("INSTALLER CLEANUP", ex);
         }
     }
 

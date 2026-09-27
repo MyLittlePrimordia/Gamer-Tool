@@ -730,6 +730,17 @@ public partial class MainWindow : Window
         DisplayPreset? display = FindDisplay(slot.DisplayPresetId);
         AudioPreset? audio = FindAudio(slot.AudioPresetId);
 
+        if (display is null && audio is null)
+        {
+            // There is nothing to load, so nothing is about to be loaded. Saying
+            // otherwise left the status bar and the toast claiming a preset that
+            // was never applied, and left the key looking bound to something when
+            // it was bound to nothing at all.
+            RailStatus.Text = "NOTHING SET";
+            Flash("Nothing set on " + slot.Name, true);
+            return;
+        }
+
         if (display is not null)
         {
             LoadTune(display.Copy(), (audio ?? _workAudio).Copy());
@@ -929,7 +940,7 @@ public partial class MainWindow : Window
     {
         ShowConfirmModal(
             "RESET ALL SLOTS?",
-            "Every custom slot, game target and key you set is deleted and the four defaults come back. This cannot be undone.",
+            "Every custom slot, game target and key you set is deleted and the six defaults come back. This cannot be undone.",
             "Reset slots",
             () =>
             {

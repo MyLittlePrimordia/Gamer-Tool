@@ -191,7 +191,7 @@ public partial class MainWindow : Window
             _fxUpdateAvailable = false;
             _fxUpdateVersion = string.Empty;
             LoadDevices();
-            RefreshFxState(true);
+            _ = RefreshFxStateAsync(true);
             UpdateFxBanner();
             ApplyAudio(_workAudio.Copy(), false);
             Flash("FxSound ready, sound is live");
@@ -223,7 +223,7 @@ public partial class MainWindow : Window
             _fxUpdateVersion = string.Empty;
             _audio.InvalidateCache();
             LoadDevices();
-            RefreshFxState(true);
+            _ = RefreshFxStateAsync(true);
             UpdateFxBanner();
             ApplyAudio(_workAudio.Copy(), false);
             Flash("FxSound updated to the latest");
@@ -242,7 +242,7 @@ public partial class MainWindow : Window
         {
             _audio.StartEngine();
             ApplyAudio(_workAudio.Copy(), false);
-            RefreshFxState(true);
+            _ = RefreshFxStateAsync(true);
         }
         else
         {

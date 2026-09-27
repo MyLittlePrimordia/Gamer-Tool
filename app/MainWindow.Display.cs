@@ -78,7 +78,7 @@ public partial class MainWindow : Window
 
         string removed = mine.Name;
         ShowConfirmModal(
-            "DEoETE \u201C" + removed.ToUpperInvariant() + "\u201D?",
+            "DELETE \u201C" + removed.ToUpperInvariant() + "\u201D?",
             "This takes the preset out of Gamer Tool and out of any slot that points at it.",
             "Delete",
             () =>

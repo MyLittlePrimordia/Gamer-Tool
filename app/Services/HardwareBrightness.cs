@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -390,7 +391,18 @@ public static class HardwareBrightness
     }
 
 
-    private static readonly Dictionary<string, long> LastWriteUtc = new();
+    /// <summary>
+    /// When each device was last sent a brightness value, keyed by device name.
+    /// <para>
+    /// Unlike <see cref="LastCallUtc"/>, this table is touched before the worker
+    /// task takes <see cref="Gate"/> rather than inside it, so it cannot rely on
+    /// that lock. Two monitors dragged at the same time put two threads here at
+    /// once, and a plain Dictionary can be left structurally broken by that, which
+    /// shows up as a spin inside the runtime rather than as an exception anybody
+    /// can catch.
+    /// </para>
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, long> LastWriteUtc = new();
 
 
     /// <summary>

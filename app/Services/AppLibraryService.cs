@@ -19,6 +19,26 @@ public sealed class AppLibraryService
 
     private static readonly string[] SkipExtensions = { ".exe" };
 
+    /// <summary>
+    /// Words that mark a registry DisplayName as a maintenance tool rather than a
+    /// program the user installed to play.
+    /// <para>
+    /// This is deliberately not <see cref="SkipWords"/>. That list is matched
+    /// against exe file names, where "unity", "mono" and "helper" name the
+    /// engine's own plumbing and are exactly what should be skipped. Matched
+    /// against a DisplayName they would drop whole games instead, because the
+    /// game's own name is the one carrying the word. Both lists are guesswork and
+    /// neither is complete; what this one has to do is catch the utilities that
+    /// arrive with no helpful exe name to filter on, such as an installer whose
+    /// binary is called AMDRSServ.
+    /// </para>
+    /// </summary>
+    private static readonly string[] UtilityNames =
+    {
+        "7-zip", "install manager", "driver update", "graphics driver", "updater", "setup",
+        "uninstall tool", "windows installer"
+    };
+
     public IReadOnlyList<AppCandidate> Scan(bool includePrograms = true, bool includeSteam = true)
     {
         List<AppCandidate> all = new();
@@ -53,20 +73,23 @@ public sealed class AppLibraryService
     {
         List<AppCandidate> found = new();
         HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
-        string[] roots =
+        // The hive is stated next to the path rather than guessed from it. The old
+        // code chose between LocalMachine and CurrentUser by testing whether the
+        // path began with "SOFTWARE\", which every key here does, so CurrentUser
+        // was never read and the third root was a byte-for-byte copy of the
+        // first. Per-user installs are now actually looked at.
+        (RegistryHive Hive, string Path)[] roots =
         {
-            @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-            @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
-            @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+            (RegistryHive.LocalMachine, @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+            (RegistryHive.LocalMachine, @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+            (RegistryHive.CurrentUser, @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")
         };
 
-        foreach (string root in roots)
+        foreach ((RegistryHive hive, string root) in roots)
         {
             try
             {
-                using RegistryKey baseKey = root.StartsWith(@"SOFTWARE\", StringComparison.Ordinal)
-                    ? Registry.LocalMachine
-                    : Registry.CurrentUser;
+                using RegistryKey baseKey = RegistryKey.OpenBaseKey(hive, RegistryView.Registry64);
                 using RegistryKey? key = baseKey.OpenSubKey(root);
                 if (key is null)
                 {
@@ -84,7 +107,7 @@ public sealed class AppLibraryService
                         }
 
                         string? display = entry.GetValue("DisplayName") as string;
-                        if (string.IsNullOrWhiteSpace(display))
+                        if (string.IsNullOrWhiteSpace(display) || IsUtilityName(display))
                         {
                             continue;
                         }
@@ -121,18 +144,42 @@ public sealed class AppLibraryService
         return found;
     }
 
+    /// <summary>
+    /// True for a registry DisplayName that names a maintenance tool rather than
+    /// something the user installed to play.
+    /// </summary>
+    private static bool IsUtilityName(string displayName)
+    {
+        string lower = displayName.ToLowerInvariant();
+        foreach (string word in UtilityNames)
+        {
+            if (lower.Contains(word, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool IsSystemBinary(string exe)
     {
-        string windows = Normalize(Environment.GetFolderPath(Environment.SpecialFolder.Windows));
         string clean = Normalize(exe);
-        if (clean.StartsWith(windows, StringComparison.OrdinalIgnoreCase))
+
+        string windows = Normalize(Environment.GetFolderPath(Environment.SpecialFolder.Windows));
+        if (windows.Length > 0 && clean.StartsWith(windows, StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
-        string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-        return programFiles.Length > 0 && clean.StartsWith(Normalize(programFiles), StringComparison.OrdinalIgnoreCase) is false
-            && clean.Contains(@"\Package Cache\", StringComparison.OrdinalIgnoreCase);
+        // The Package Cache is where Windows Installer unpacks an MSI so it can
+        // repair or patch it later. What lives there is installer payload, not a
+        // program anybody launches.
+        //
+        // The old condition also required the path to be *outside* Program Files,
+        // which is never both true at once because the cache is always inside it.
+        // So a filter written to keep installers out never once kept one out.
+        return clean.Contains(@"\Package Cache\", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? ResolveExe(string? location, string? icon)

@@ -550,6 +550,132 @@
         </Setter>
     </Style>
 
+    <!-- Bipolar horizontal slider, for a control whose range runs both ways round
+         a neutral point: brightness, contrast, master gain, balance.
+
+         ModernSlider fills Minimum to Value, which is the right reading for a
+         control whose minimum is its empty state, and badly wrong for one whose
+         minimum is the far end of a negative range. At 0 those four looked half
+         boosted, which is the one thing a fader must never do: the fill is the
+         part of the control that is supposed to answer "what is actually
+         changed from stock" without being read.
+
+         So the fill is drawn as its own two-halves grid growing out of the middle
+         and Track.DecreaseRepeatButton is made transparent. It has to be done that
+         way round: that button spans Minimum to Value and there is no way to tell
+         it to start somewhere in the middle instead. The Track itself is left
+         exactly as it is, underneath and still on top for the thumb, so dragging,
+         ticks and hit testing are untouched.
+
+         The halves are inset 8px a side because the thumb is 16 wide and sits
+         centred on the value. The usable travel is the width less the thumb, and
+         without the inset each half would be 8px too long and stop short of the
+         thumb at full deflection. The converter is handed this host's own width
+         and halves it, which lands the ends exactly on the thumb. -->
+    <Style x:Key="ModernSliderBipolar" TargetType="Slider">
+        <Setter Property="Height" Value="20" />
+        <Setter Property="IsMoveToPointEnabled" Value="True" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Slider">
+                    <Grid Background="Transparent" VerticalAlignment="Center">
+                        <Border Height="4" CornerRadius="2" Background="{StaticResource Groove}" VerticalAlignment="Center" />
+
+                        <Grid x:Name="BipolarHost" Margin="8,0,8,0" IsHitTestVisible="False">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <Border Grid.Column="0" Height="4" CornerRadius="2" HorizontalAlignment="Right"
+                                    Background="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}">
+                                <Border.Width>
+                                    <MultiBinding>
+                                        <MultiBinding.Converter>
+                                            <ui:BandFillConverter Above="False" />
+                                        </MultiBinding.Converter>
+                                        <Binding Path="Value" RelativeSource="{RelativeSource TemplatedParent}" />
+                                        <Binding Path="Minimum" RelativeSource="{RelativeSource TemplatedParent}" />
+                                        <Binding Path="Maximum" RelativeSource="{RelativeSource TemplatedParent}" />
+                                        <Binding Path="ActualWidth" ElementName="BipolarHost" />
+                                    </MultiBinding>
+                                </Border.Width>
+                            </Border>
+
+                            <Border Grid.Column="2" Height="4" CornerRadius="2" HorizontalAlignment="Left"
+                                    Background="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}">
+                                <Border.Width>
+                                    <MultiBinding>
+                                        <MultiBinding.Converter>
+                                            <ui:BandFillConverter Above="True" />
+                                        </MultiBinding.Converter>
+                                        <Binding Path="Value" RelativeSource="{RelativeSource TemplatedParent}" />
+                                        <Binding Path="Minimum" RelativeSource="{RelativeSource TemplatedParent}" />
+                                        <Binding Path="Maximum" RelativeSource="{RelativeSource TemplatedParent}" />
+                                        <Binding Path="ActualWidth" ElementName="BipolarHost" />
+                                    </MultiBinding>
+                                </Border.Width>
+                            </Border>
+                        </Grid>
+
+                        <Track x:Name="PART_Track" Height="16" VerticalAlignment="Center">
+                            <Track.DecreaseRepeatButton>
+                                <RepeatButton Command="Slider.DecreaseLarge" Focusable="False" IsTabStop="False">
+                                    <RepeatButton.Template>
+                                        <ControlTemplate TargetType="RepeatButton">
+                                            <Border Height="4" CornerRadius="2" VerticalAlignment="Center" Background="Transparent" />
+                                        </ControlTemplate>
+                                    </RepeatButton.Template>
+                                </RepeatButton>
+                            </Track.DecreaseRepeatButton>
+                            <Track.Thumb>
+                                <Thumb>
+                                    <Thumb.Template>
+                                        <ControlTemplate TargetType="Thumb">
+                                            <Grid Background="Transparent" Width="16" Height="16">
+                                                <!-- The ring colour comes from the slider's Foreground. A
+                                                     trigger cannot read that back off the templated
+                                                     parent, so it is faded in with Opacity instead. -->
+                                                <Ellipse x:Name="Ring" Width="16" Height="16" StrokeThickness="1.5" Opacity="0"
+                                                         Stroke="{TemplateBinding Foreground}" />
+                                                <Ellipse x:Name="Knob" Width="11" Height="11" Fill="#F0F0F0"
+                                                         VerticalAlignment="Center" HorizontalAlignment="Center" />
+                                            </Grid>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Ring" Property="Opacity" Value="1" />
+                                                    <Setter TargetName="Knob" Property="Width" Value="13" />
+                                                    <Setter TargetName="Knob" Property="Height" Value="13" />
+                                                </Trigger>
+                                                <Trigger Property="IsDragging" Value="True">
+                                                    <Setter TargetName="Ring" Property="Opacity" Value="1" />
+                                                    <Setter TargetName="Knob" Property="Width" Value="13" />
+                                                    <Setter TargetName="Knob" Property="Height" Value="13" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Thumb.Template>
+                                </Thumb>
+                            </Track.Thumb>
+                            <Track.IncreaseRepeatButton>
+                                <RepeatButton Command="Slider.IncreaseLarge" Focusable="False" IsTabStop="False">
+                                    <RepeatButton.Template>
+                                        <ControlTemplate TargetType="RepeatButton">
+                                            <Border Height="4" CornerRadius="2" VerticalAlignment="Center" Background="Transparent" />
+                                        </ControlTemplate>
+                                    </RepeatButton.Template>
+                                </RepeatButton>
+                            </Track.IncreaseRepeatButton>
+                        </Track>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- EQ and colour-trim fader. Bipolar: the coloured fill grows out of the
          zero line in the middle of the travel towards whichever side the band is
          pushed, so a fader sitting at rest is an empty groove.

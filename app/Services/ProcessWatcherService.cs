@@ -26,7 +26,23 @@ public sealed class ProcessWatcherService
 
     private string _lastKey = string.Empty;
 
+    /// <summary>
+    /// The process names this app is watching for. Filled from the armed slots by
+    /// <see cref="PrimeProcesses"/> and read by nothing else.
+    /// </summary>
     private readonly HashSet<string> _knownProcesses = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The names already announced through <see cref="TargetLaunched"/>.
+    /// <para>
+    /// This has to be a different set from the watch list. When one set did both
+    /// jobs, "have I already announced this?" was really "is this name in the list
+    /// of names I am watching for?", which is true for every target by
+    /// construction. The answer was therefore always yes and the launch event
+    /// below could never fire, for any game, in any session.
+    /// </para>
+    /// </summary>
+    private readonly HashSet<string> _firedProcesses = new(StringComparer.OrdinalIgnoreCase);
 
     private int _processTick;
 
@@ -37,6 +53,12 @@ public sealed class ProcessWatcherService
     public void PrimeProcesses(IEnumerable<string> names)
     {
         _knownProcesses.Clear();
+
+        // A new watch list is also a new set of things not yet announced.
+        // Otherwise a game that was already running when the list changed could
+        // never be announced under the slot that now owns it.
+        _firedProcesses.Clear();
+
         foreach (string name in names)
         {
             _knownProcesses.Add(name);
@@ -97,9 +119,13 @@ public sealed class ProcessWatcherService
             return;
         }
 
+        // GetProcesses hands back a live OS handle per entry, and only the array
+        // itself is collectable, so the elements are disposed here rather than
+        // left to the finaliser queue. This runs every few seconds for as long as
+        // the app is open.
+        Process[] running = Process.GetProcesses();
         try
         {
-            Process[] running = Process.GetProcesses();
             foreach (Process process in running)
             {
                 string name = process.ProcessName;
@@ -108,7 +134,7 @@ public sealed class ProcessWatcherService
                     continue;
                 }
 
-                if (!_knownProcesses.Add(name))
+                if (_firedProcesses.Contains(name))
                 {
                     continue;
                 }
@@ -120,6 +146,10 @@ public sealed class ProcessWatcherService
                     continue;
                 }
 
+                // Recorded only once the launch is genuinely being announced, so a
+                // process whose image path could not be read gets another chance
+                // on the next scan instead of being silently written off.
+                _firedProcesses.Add(name);
                 TargetLaunched?.Invoke(new WatchedWindow
                 {
                     Title = process.ProcessName,
@@ -132,12 +162,20 @@ public sealed class ProcessWatcherService
         {
             TraceLog.Write("SCAN", ex);
         }
+        finally
+        {
+            foreach (Process process in running)
+            {
+                process.Dispose();
+            }
+        }
     }
 
     public void Reset()
     {
         _lastKey = string.Empty;
         _knownProcesses.Clear();
+        _firedProcesses.Clear();
     }
 
     public static WatchedWindow? Read()

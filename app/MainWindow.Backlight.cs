@@ -33,6 +33,15 @@ public partial class MainWindow
 
     private readonly Dictionary<string, DispatcherTimer> _backlightDebounce = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// The brightness each monitor's debounce is currently waiting to write, keyed
+    /// by device name. The value lives here rather than in the tick handler's
+    /// closure because the handler is built once per monitor and then reused for
+    /// every later drag: captured, it wrote the value from the first pixel of the
+    /// drag and left the monitor disagreeing with its own slider.
+    /// </summary>
+    private readonly Dictionary<string, uint> _pendingBacklightValues = new(StringComparer.OrdinalIgnoreCase);
+
 
     private BacklightService Backlight =>
         _backlight ??= new BacklightService(_settings);
@@ -222,12 +231,19 @@ public partial class MainWindow
             timer.Tick += (s, e) =>
             {
                 timer.Stop();
-                SendBacklightWrite(monitor, value);
+                if (_pendingBacklightValues.TryGetValue(monitor.DeviceName, out uint wanted))
+                {
+                    _pendingBacklightValues.Remove(monitor.DeviceName);
+                    SendBacklightWrite(monitor, wanted);
+                }
             };
 
             _backlightDebounce[monitor.DeviceName] = timer;
         }
 
+        // Recorded on every call, so the tick always writes where the drag
+        // actually ended rather than where it started.
+        _pendingBacklightValues[monitor.DeviceName] = value;
         timer.Stop();
         timer.Start();
     }
