@@ -1,39 +1,15 @@
-# Gamer Tool
+# 🎮 Gamer Tool
 
-A small Windows app for gamers. Set your screen and sound up once, then switch between them with a single key.
+**Switch your screen and sound presets instantly with a single key.**
 
-## What it does
+Boost shadow brightness to spot enemies in dark games, switch to a warm night mode, or enhance footsteps in your headset—all with one hotkey or automatically when a game launches.
 
-**Display** - ready-made screen presets (Competitive, Cinema, Night, Daylight and more) plus manual gamma, brightness, contrast and colour controls. There is also optional control of the monitor's real backlight over DDC/CI, for displays that support it.
+[📥 **Download Latest Release (GamerTool.exe)**](https://github.com/MyLittlePrimordia/Gamer-Tool/releases/latest)  
+*Zero install. Just download and run.*
 
-**Audio** - sound presets and a 5 to 31 band equaliser, applied through FxSound. An automatic preamp keeps boosting the EQ from ever distorting your audio.
+---
 
-**Hotkeys** - up to six slots. Each slot is a screen preset plus a sound preset plus a key. Press the key and it loads. You can also have a slot load by itself when a game starts.
-
-Nothing is applied until you press **Apply** or a slot key, so you can look first and change second.
-
-## Keyboard and screen readers
-
-Every control can be reached with <kbd>Tab</kbd> and shows a focus ring, the band
-frequency dials answer the arrow keys, <kbd>Page Up</kbd>/<kbd>Page Down</kbd> and
-<kbd>Home</kbd>/<kbd>End</kbd>, and <kbd>Esc</kbd> backs out of any dialog. The
-shortcuts below work whether or not the window has focus.
-
-| Keys | Does |
-|---|---|
-| <kbd>Shift</kbd>+1,2,3 | Slot shortcuts |
-| <kbd>Alt</kbd>+1,2 | Slot shortcuts |
-| Any key you assign on the **Hotkeys** tab | Loads that slot, and again to switch it back off |
-
-## Getting started
-
-1. Download `GamerTool.exe` from the [releases page](https://github.com/MyLittlePrimordia/Gamer-Tool/releases/latest) and run it. There is nothing to install.
-2. For sound, install [FxSound](https://www.fxsound.com/) (free). There is a button for it on the Settings tab. The Display tab works without it.
-3. Open the **Hotkeys** tab and press **+** to add a slot.
-4. Pick a screen preset and a sound preset for the slot, then click the key box and press the combination you want, for example `Ctrl+Shift+1`.
-5. Press that key in a game. That is the whole app.
-
-## Screenshots
+## 📸 Screenshots
 
 <table>
   <tr>
@@ -46,27 +22,51 @@ shortcuts below work whether or not the window has focus.
   </tr>
 </table>
 
-## Requirements
+---
 
-- Windows 10 or 11
-- FxSound, free, and only if you want the Audio tab
+## ⚡ What it does
 
-## Building from source
+- 🖥️ **Display Presets:** Instant profiles like *Competitive*, *Cinema*, *Daylight*, and *Night*, plus custom brightness, contrast, and color dials.
+- 🎧 **Audio Presets & EQ:** Sound profiles and a multi-band equalizer (via free [FxSound](https://www.fxsound.com/)) with automatic distortion protection.
+- ⌨️ **One-Key Switching:** Link a screen preset + a sound preset to a single hotkey (e.g. `Ctrl+Shift+1`) or have it turn on automatically when a game starts.
+- 🪶 **Lightweight & Clean:** No accounts, no background telemetry, no installer. Lives quietly in your system tray.
 
-You will need the [.NET 10 SDK](https://dotnet.microsoft.com/download). It is a Long Term Support release, so it is the one that will still be patched in two years' time.
+---
+
+## 🚀 Quick Start (3 Steps)
+
+1. **Download & Run:** Grab [`GamerTool.exe`](https://github.com/MyLittlePrimordia/Gamer-Tool/releases/latest) and double-click it.
+2. *(Optional)* **Enable Audio:** If you want audio presets, install [FxSound](https://www.fxsound.com/) (free—there's a direct button on the Settings tab).
+3. **Set your Hotkey:** 
+   - Open the **Hotkeys** tab and click **+**.
+   - Pick your screen preset, sound preset, and hotkey.
+   - Press that key in-game to toggle your settings!
+
+---
+
+## 📋 Requirements
+
+- **Windows 10 or 11**
+- [FxSound](https://www.fxsound.com/) *(free, only needed if you want the Audio tab)*
+
+---
+
+<details>
+<summary><b>🛠️ Advanced Notes & Hardware Brightness</b></summary>
+
+- **Hardware Brightness (DDC/CI):** Off by default. Some monitors support changing real backlight levels directly over the display cable. If a monitor fails to respond twice, Gamer Tool disables it safely to prevent freezing.
+- **Settings Location:** Everything is stored locally in `%APPDATA%\GamerTool`. Copy this folder if you want to move your setup to a new PC.
+- **Accessibility:** Full keyboard navigation is supported. Every dial and control can be navigated using <kbd>Tab</kbd>, arrow keys, <kbd>Page Up</kbd>/<kbd>Down</kbd>, and <kbd>Esc</kbd>.
+</details>
+
+<details>
+<summary><b>💻 Building from Source</b></summary>
+
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 
 ```powershell
 dotnet publish app/GamerTool.csproj -c Release -o publish
 ```
 
-That produces `publish\GamerTool.exe`, a single file that runs on its own.
-
-Pushing to `main` builds a release automatically, so the download link above always points at the newest build.
-
-## Notes
-
-- The app lives in the system tray, so hotkeys keep working with the window closed.
-- No account, no telemetry, works offline.
-- Hardware brightness is off by default. It talks to the monitor over DDC/CI, which a small number of displays with broken firmware have been known to crash Windows on, so it is opt-in and the rest of the app works without it.
-- If every display you have fails to answer twice in a row, Gamer Tool turns the setting back off by itself and says so underneath it, rather than leaving a switch that does nothing on your screen every time you open the app. Turn it back on whenever you like and it will try again. On a multi-monitor setup a single display that works is enough to keep it on, and each display keeps its own row and its own verdict.
-- Your settings live in `%APPDATA%\GamerTool`. That is the folder to copy to move everything to another PC.
+This outputs a standalone `GamerTool.exe` in the `publish` folder.
+</details>
