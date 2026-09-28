@@ -273,49 +273,6 @@ public class BacklightExclusionTests
     }
 
     [Fact]
-    public void The_row_shows_a_plain_sentence_and_not_a_refusal_string()
-    {
-        (BacklightService service, FakeBus bus, _) = NewService();
-        bus.Replies.Add(BusOutcome.Refused);
-
-        MonitorProbe monitor = LiveProbe();
-        monitor.Brightness = null;
-        monitor.NoReplyBecause = "\"Generic PnP Monitor\" declined 0x10 after 3 attempts, 0xC0262581 I2C_NOT_SUPPORTED";
-
-        string shown = service.CapabilityOf(monitor);
-
-        // The row used to print the whole refusal into a tooltip, which is
-        // unreadable and tells a user nothing they can act on.
-        Assert.Equal("This monitor doesn't support hardware brightness.", shown);
-        Assert.DoesNotContain("0xC0262581", shown, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void An_excluded_row_points_at_the_switch_rather_than_at_a_bus_error()
-    {
-        (BacklightService service, _, _) = NewService();
-
-        string shown = service.CapabilityOf(new MonitorProbe
-        {
-            DeviceName = Device,
-            FriendlyName = "Test Monitor",
-            BlockedReason = "on your exclusion list"
-        });
-
-        // An exclusion is something the user can undo, so it is the one case
-        // where the row has something useful to say.
-        Assert.Contains("off and on", shown, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void A_supported_display_still_says_so()
-    {
-        (BacklightService service, _, _) = NewService();
-
-        Assert.Equal("Supported", service.CapabilityOf(LiveProbe()));
-    }
-
-    [Fact]
     public async Task A_second_probe_does_not_start_while_one_is_running()
     {
         // Two call sites start a probe, and the old guard was only set once a

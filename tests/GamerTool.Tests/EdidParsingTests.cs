@@ -297,4 +297,30 @@ public class EdidParsingTests
         Assert.Equal((ushort)0xA610, reading.ProductCode);
         Assert.Equal(1175, reading.Serial);
     }
+
+    [Fact]
+    public void An_edid_the_driver_withheld_is_flagged_as_withheld()
+    {
+        // The flag the diagnosis leans on. A missing DDC/CI handle on its own is
+        // ambiguous; a driver that also declines to name the monitor is not, and
+        // this is the property that carries that.
+        Assert.True(new MonitorProbe { EdidSource = "registry" }.EdidWithheld);
+        Assert.True(new MonitorProbe { EdidSource = "none" }.EdidWithheld);
+    }
+
+    [Fact]
+    public void An_edid_the_driver_supplied_is_not_flagged_as_withheld()
+    {
+        Assert.False(new MonitorProbe { EdidSource = "driver" }.EdidWithheld);
+    }
+
+    [Fact]
+    public void An_unprobed_display_is_assumed_to_have_had_its_edid_withheld()
+    {
+        // The default, and it is the safe direction: the flag only ever adds
+        // corroboration to a verdict that has already been reached by other means,
+        // so an unknown is treated as the case worth investigating rather than the
+        // one worth dismissing.
+        Assert.True(new MonitorProbe().EdidWithheld);
+    }
 }

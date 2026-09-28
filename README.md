@@ -53,7 +53,7 @@ shortcuts below work whether or not the window has focus.
 
 ## Building from source
 
-You will need the [.NET 9 SDK](https://dotnet.microsoft.com/download).
+You will need the [.NET 10 SDK](https://dotnet.microsoft.com/download). It is a Long Term Support release, so it is the one that will still be patched in two years' time.
 
 ```powershell
 dotnet publish app/GamerTool.csproj -c Release -o publish
@@ -68,4 +68,5 @@ Pushing to `main` builds a release automatically, so the download link above alw
 - The app lives in the system tray, so hotkeys keep working with the window closed.
 - No account, no telemetry, works offline.
 - Hardware brightness is off by default. It talks to the monitor over DDC/CI, which a small number of displays with broken firmware have been known to crash Windows on, so it is opt-in and the rest of the app works without it.
+- If every display you have fails to answer twice in a row, Gamer Tool turns the setting back off by itself and says so underneath it, rather than leaving a switch that does nothing on your screen every time you open the app. Turn it back on whenever you like and it will try again. On a multi-monitor setup a single display that works is enough to keep it on, and each display keeps its own row and its own verdict.
 - Your settings live in `%APPDATA%\GamerTool`. That is the folder to copy to move everything to another PC.

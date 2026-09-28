@@ -124,6 +124,31 @@ public sealed class AppSettings
     public List<string> ExcludedDdcMonitors { get; set; } = new();
 
     /// <summary>
+    /// Consecutive probe rounds in which no display could be reached.
+    /// <para>
+    /// Persisted, and that is the whole point. The probe runs at most once per
+    /// launch, so a counter living in memory can only ever reach one, and a rule
+    /// that says "give up after two" is a rule that never fires. Carried across
+    /// launches, the second round is next time the user opens the Display tab,
+    /// which is also a more honest measure: a feature that failed on two separate
+    /// occasions with the machine freshly started both times is not working.
+    /// </para>
+    /// </summary>
+    public int HardwareBrightnessFailedRounds { get; set; }
+
+    /// <summary>
+    /// True when the app turned the feature off by itself, as opposed to the user
+    /// having turned it off.
+    /// <para>
+    /// Persisted for the same reason as the counter, and because the settings tab
+    /// has to be able to explain a switch that is already off before anything has
+    /// been probed this session. A switch that changes itself silently is
+    /// indistinguishable from a bug.
+    /// </para>
+    /// </summary>
+    public bool HardwareBrightnessRetired { get; set; }
+
+    /// <summary>
     /// The brightness each display was at before this app first touched it, so it
     /// can be put back if the app is killed. A monitor left at 5% because
     /// something crashed is a bad afternoon, and this is the cheapest guard

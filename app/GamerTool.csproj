@@ -2,7 +2,14 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net9.0-windows</TargetFramework>
+    <!--
+      .NET 10, not 9. Odd-numbered releases are Standard Term Support and 9 goes
+      unsupported on the same day as 8 does, in November 2026; even-numbered ones
+      are Long Term Support and this one runs to November 2028. The app is
+      published self contained, so the runtime it ships is the one it is built
+      against, and an unsupported runtime is one nobody patches.
+    -->
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

@@ -324,12 +324,19 @@
          property back off its own templated parent, so each accent gets its own
          copy of the ten line template. -->
     <!--
-      The small info button beside a NOT SUPPORTED display. It borrows the nav
-      tabs' treatment exactly: a faint white wash on hover and a focus ring for
-      the keyboard, so it reads as part of the same control language rather than
-      as a stray control. It deliberately has no idle background and no border,
-      because a button that is visible before you touch it competes with the
-      verdict it is explaining.
+      The small info button that sits beside a switch. It borrows the nav tabs'
+      treatment exactly: a faint white wash on hover and a focus ring for the
+      keyboard, so it reads as part of the same control language rather than as a
+      stray control. It deliberately has no idle background and no border, because
+      a button that is visible before you touch it competes with the verdict it is
+      explaining.
+
+      This style was removed along with the display row's "why is this not
+      working" button and then referenced again when a similar button went into the
+      settings list. The result was an app that compiled clean, passed every test,
+      and would not start: a missing StaticResource is a runtime failure and no
+      compiler will report it. Kept as one shared style precisely so there is one
+      place for that to go wrong and it is greppable.
     -->
     <Style x:Key="InfoHintButton" TargetType="Button">
         <Setter Property="Cursor" Value="Hand" />
@@ -1127,6 +1134,7 @@
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="10" />
                                 <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="12" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
@@ -1137,16 +1145,38 @@
                                        FontFamily="{StaticResource Sans}" FontSize="12"
                                        Foreground="{TemplateBinding Foreground}" TextTrimming="CharacterEllipsis" />
 
+                            <!-- The badge, in its own Auto column so that a row
+                                 without one closes the gap completely and looks
+                                 untouched. It sits between the label and the
+                                 switch so a row that can explain itself does so
+                                 on the same line as the thing being explained. -->
+                            <Button x:Name="PART_Badge" Grid.Column="3"
+                                    Style="{StaticResource InfoHintButton}"
+                                    VerticalAlignment="Center" Visibility="Visible"
+                                    ToolTip="{TemplateBinding BadgeToolTip}"
+                                    AutomationProperties.Name="{TemplateBinding BadgeToolTip}">
+                                <ui:EmojiImage Glyph="info" Width="15" Height="15" />
+                            </Button>
+
                             <!-- The shared switch, not a second copy of it. The row's
                                  accent comes from Accent rather than being hardcoded,
                                  so this list can be a different colour from the
                                  standalone toggles if it ever needs to be. -->
-                            <ui:SwitchToggle Grid.Column="4" Style="{StaticResource SwitchTrack}"
+                            <ui:SwitchToggle Grid.Column="5" Style="{StaticResource SwitchTrack}"
                                               Accent="{StaticResource AccentSettings}"
                                               IsChecked="{Binding IsChecked, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}" />
                         </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
+                        <!-- Driven off the glyph rather than a separate visibility
+                             property, so there is no way for the two to disagree
+                             about whether the row has a badge. A Trigger on the
+                             property itself rather than a DataTrigger, because
+                             TemplateBinding is not a Binding and cannot be used
+                             for one. -->
+                        <Trigger Property="BadgeGlyph" Value="">
+                            <Setter TargetName="PART_Badge" Property="Visibility" Value="Collapsed" />
+                        </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Bg" Property="Background" Value="{StaticResource HoverOverlay}" />
                         </Trigger>

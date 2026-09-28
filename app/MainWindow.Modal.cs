@@ -147,11 +147,18 @@ public partial class MainWindow : Window
         // The body of a dialog that explains rather than asks. Hidden by every
         // other dialog, and left aligned because a numbered list read centred is
         // noticeably harder to follow.
+        // <para>
+        // Wrapping is what stops it clipping. Without it a paragraph of body text
+        // is a single line as wide as it likes, and the card, which is a fixed
+        // 420 wide, simply cuts the end off every sentence. Sentences that stop
+        // mid-word at the right edge of a dialog are worse than no dialog.
+        // </para>
         _modalBody = new TextBlock
         {
             Style = (Style)FindResource("CardSub"),
             FontSize = 11.5,
             TextAlignment = TextAlignment.Left,
+            TextWrapping = TextWrapping.Wrap,
             LineHeight = 19,
             Margin = new Thickness(0, 12, 0, 0),
             Visibility = Visibility.Collapsed
@@ -429,17 +436,13 @@ public partial class MainWindow : Window
 
 
     /// <summary>
-    /// Destructive confirm. Centred amber warning triangle instead of a Windows
-    /// message box so it matches the rest of the app. The second button is
-    /// "Cancel" for anything the user can simply back out of, and "Later" for the
-    /// FxSound prompt, where declining is a normal choice rather than a cancel.
-    /// </summary>
-    /// <summary>
     /// A dialog that only explains. One button, because there is nothing here to
     /// decide, and no input, because there is nothing to type.
     /// <para>
-    /// The warning is shown whether or not it is wanted, because the advice has a
-    /// cost and a dialog that quietly omits it reads as free.
+    /// The warning block is there when the explanation carries a caution, and gone
+    /// when it does not. An empty triangle above an empty line still reserves its
+    /// height, so a dialog that had nothing to warn about used to open with a gap
+    /// in the middle of it. Passing an empty string collapses the whole block.
     /// </para>
     /// </summary>
     private void ShowInfoModal(string title, string body, string warning)
@@ -450,9 +453,11 @@ public partial class MainWindow : Window
         _modalBody.Visibility = Visibility.Visible;
         _modalInput.Visibility = Visibility.Collapsed;
         _modalCounter.Visibility = Visibility.Collapsed;
-        _modalWarning.Visibility = Visibility.Visible;
-        _modalWarningIcon.Visibility = Visibility.Visible;
-        _modalWarningText.Text = warning;
+
+        bool hasWarning = !string.IsNullOrWhiteSpace(warning);
+        _modalWarning.Visibility = hasWarning ? Visibility.Visible : Visibility.Collapsed;
+        _modalWarningIcon.Visibility = hasWarning ? Visibility.Visible : Visibility.Collapsed;
+        _modalWarningText.Text = hasWarning ? warning : string.Empty;
         _modalStatus.Visibility = Visibility.Collapsed;
         _modalBarHost.Visibility = Visibility.Collapsed;
         StopModalBar();
@@ -472,6 +477,12 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>
+    /// Destructive confirm. Centred amber warning triangle instead of a Windows
+    /// message box so it matches the rest of the app. The second button is
+    /// "Cancel" for anything the user can simply back out of, and "Later" for the
+    /// FxSound prompt, where declining is a normal choice rather than a cancel.
+    /// </summary>
     private void ShowConfirmModal(string title, string warning, string confirmText, Action action, string? declineText = null,                                                  bool keepOpen = false)
     {
         StopModalElapsed();

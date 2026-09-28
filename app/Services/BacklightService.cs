@@ -123,10 +123,25 @@ public sealed class BacklightService
 
     private bool _probed;
 
+    /// <summary>
+    /// Set by <see cref="ForgetExclusions"/> so the probe it makes possible does
+    /// not count as a round.
+    /// <para>
+    /// That probe is the app answering its own switch rather than a fresh look at
+    /// the hardware: it runs within a second of the user turning the feature back
+    /// on, and it is the round that would otherwise consume the first half of the
+    /// grace period before the user had closed the window. One-shot, so the launch
+    /// after that one counts normally and the streak can still reach the
+    /// threshold.
+    /// </para>
+    /// </summary>
+    private bool _nextRoundIsFree;
+
     public BacklightService(AppSettings settings, IBacklightBus? bus = null)
     {
         _settings = settings;
         _bus = bus ?? new SystemBacklightBus();
+        Availability.RestoreFrom(settings.HardwareBrightnessFailedRounds, settings.HardwareBrightnessRetired);
     }
 
     /// <summary>
@@ -144,6 +159,12 @@ public sealed class BacklightService
         if (settings is not null)
         {
             _settings = settings;
+
+            // Carried across with the profile rather than left behind with the
+            // old one. A restore replaces the whole settings object, so a counter
+            // that stayed in memory would be counting rounds against a profile
+            // that no longer exists.
+            Availability.RestoreFrom(settings.HardwareBrightnessFailedRounds, settings.HardwareBrightnessRetired);
         }
     }
 
@@ -213,6 +234,9 @@ public sealed class BacklightService
                 AppLog.Info("backlight " + monitor.DeviceName + " " + monitor.FriendlyName
                     + " edid=" + monitor.Edid.Summary
                     + " edidFrom=" + monitor.EdidSource
+                    + (monitor.EdidWithheld ? "(withheld)" : string.Empty)
+                    + " hdcpOverride=" + monitor.Protection.State
+                    + " target=" + monitor.Target.Health
                     + " link=" + monitor.Link
                     + " capable=" + monitor.CanControlBacklight
                     + " reading=" + (monitor.Brightness?.ToString() ?? "none")
@@ -226,6 +250,34 @@ public sealed class BacklightService
                     + " refusals=" + RefusalCountOf(monitor.DeviceName).ToString(System.Globalization.CultureInfo.InvariantCulture)
                     + " reason=" + (monitor.BlockedReason ?? monitor.NoReplyBecause ?? "none"));
             }
+
+            // Counted after every display has been logged, so a round that turns
+            // the feature off still leaves a complete record of why.
+            if (_nextRoundIsFree)
+            {
+                _nextRoundIsFree = false;
+                Availability.RecordWithoutCounting(_byDevice.Values.ToList());
+                AppLog.Info(
+                    "backlight round not counted, it answers the switch the user just moved; streak="
+                    + Availability.ConsecutiveRounds.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + " of " + BacklightAvailability.RoundsBeforeRetiring.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+            else
+            {
+                Availability.Record(_byDevice.Values.ToList());
+            }
+
+            // Written straight back, because a round spans a launch. Without this
+            // the count can only ever reach one, and a rule that retires after two
+            // is a rule that never fires.
+            (int rounds, bool retired) = Availability.Persistable();
+            if (rounds != _settings.HardwareBrightnessFailedRounds
+                || retired != _settings.HardwareBrightnessRetired)
+            {
+                _settings.HardwareBrightnessFailedRounds = rounds;
+                _settings.HardwareBrightnessRetired = retired;
+                _settingsChanged = true;
+            }
         }
         finally
         {
@@ -236,6 +288,30 @@ public sealed class BacklightService
         }
 
         Probed?.Invoke();
+    }
+
+    /// <summary>
+    /// True when the last probe decided the feature should turn itself off.
+    /// <para>
+    /// Polled once per probe rather than acted on inside
+    /// <see cref="Probe"/>, because turning the switch off writes settings and
+    /// repaints the settings tab, and a probe runs on a background thread where
+    /// neither belongs.
+    /// </para>
+    /// </summary>
+    public bool ConsumeRetirement()
+    {
+        if (!Availability.JustRetired)
+        {
+            return false;
+        }
+
+        AppLog.Warn("backlight turning itself off: no display could be reached over DDC/CI in "
+            + BacklightAvailability.RoundsBeforeRetiring.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + " rounds in a row across "
+            + Availability.LastRoundDisplays.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + " display(s). The settings tab now says so, and turning the switch back on retries");
+        return true;
     }
 
 
@@ -263,7 +339,9 @@ public sealed class BacklightService
         return monitor.Outcome switch
         {
             BusOutcome.Ok => "vcp-read-ok",
-            BusOutcome.NoDdcPathway => "no-ddc-handle",
+            BusOutcome.NoDdcPathway => monitor.Target.Health == TargetHealth.Stub
+                ? "no-ddc-handle/target-stub"
+                : "no-ddc-handle",
             BusOutcome.Refused => "vcp-declined",
             BusOutcome.TimedOut => "timeout",
             BusOutcome.Busy => "bus-busy",
@@ -277,31 +355,6 @@ public sealed class BacklightService
 
     public MonitorProbe? Find(string deviceName) =>
         _byDevice.TryGetValue(deviceName, out MonitorProbe? probe) ? probe : null;
-
-    /// <summary>
-    /// What the row shows the user. Deliberately short and free of anything a
-    /// person cannot act on: the row used to print the whole refusal string,
-    /// which meant a tooltip reading "declined 0x10 after 3 attempts, error
-    /// 0xC0262581" on a row whose badge reads Not Supported. The technical half
-    /// is in the log and in Copy diagnostics, where it can be pasted into a bug
-    /// report, which is the only place it was ever any use.
-    /// </summary>
-    public string CapabilityOf(MonitorProbe monitor)
-    {
-        if (monitor.CanControlBacklight)
-        {
-            return "Supported";
-        }
-
-        if (monitor.BlockedReason is not null
-            && monitor.BlockedReason.StartsWith("on your exclusion", StringComparison.Ordinal))
-        {
-            return "Not supported - switch Hardware brightness off and on to try again";
-        }
-
-        return "This monitor doesn't support hardware brightness.";
-    }
-
 
     /// <summary>
     /// How many refusals in a row before a display is put on the exclusion list.
@@ -323,6 +376,13 @@ public sealed class BacklightService
 
     /// <summary>Consecutive refusals per display, for the badge and the log.</summary>
     public IReadOnlyDictionary<string, int> Refusals => _refusals;
+
+    /// <summary>
+    /// Whether the feature has turned itself off, and the note the settings tab
+    /// shows about it. Never silently: a switch that changes itself and says
+    /// nothing is indistinguishable from a bug.
+    /// </summary>
+    public BacklightAvailability Availability { get; } = new();
 
     /// <summary>
     /// Writes a new brightness. The first time a display is touched its current
@@ -435,14 +495,26 @@ public sealed class BacklightService
     /// <para>
     /// Wired to the Hardware brightness switch going from off to on. The
     /// exclusion list is persisted, so before this a monitor that had been
-    /// written off once stayed written off for good with no way back short of
+    /// written off once stayed written off for good with no way back except
     /// editing settings.json by hand, and switching the feature off and on again
     /// did nothing at all because the probe guard was still set.
+    /// </para>
+    /// <para>
+    /// Also clears the failure streak behind the automatic turn-off and marks the
+    /// probe it makes possible as uncounted. It does not un-retire the feature:
+    /// that is the one piece of evidence that the situation has changed, and it
+    /// comes from the switch being moved, not from this being called.
     /// </para>
     /// </summary>
     public void ForgetExclusions()
     {
         bool hadAny = _settings.ExcludedDdcMonitors.Count > 0 || _refusals.Count > 0;
+        Availability.ResetCount();
+
+        // This call is what lets a probe run again, and that probe is the one the
+        // user just asked for by moving the switch. Spent here, once, so the
+        // launch that follows is the first round that counts towards retiring.
+        _nextRoundIsFree = true;
 
         foreach (string device in _settings.ExcludedDdcMonitors.ToList())
         {

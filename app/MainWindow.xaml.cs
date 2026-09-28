@@ -370,6 +370,12 @@ public partial class MainWindow : Window
         BypassBox.IsChecked = BypassToggle.IsEngaged(_settings.EffectsEnabled);
         HardwareBrightnessBox.IsChecked = _settings.HardwareBrightnessEnabled;
 
+        // A machine the app retired the feature on comes back with the switch off
+        // and nothing to say about it, because the reason lives in the counter
+        // rather than in settings. The note is empty in that case and stays
+        // collapsed; the user turns the switch on and gets the two rounds again.
+        RefreshBacklightNote();
+
         StartWithWindowsBox.IsChecked = _startup.IsEnabled;
         _settings.StartWithWindows = _startup.IsEnabled;
 
@@ -418,12 +424,13 @@ public partial class MainWindow : Window
             _ = Task.Run(() =>
             {
                 Backlight.Probe();
-                Dispatcher.InvokeAsync(RefreshBacklightRows);
+                Dispatcher.InvokeAsync(AfterBacklightProbe);
             });
         }
         else if (index == 0)
         {
             RefreshBacklightRows();
+            RefreshBacklightNote();
         }
 
         // The analyser only burns CPU while it is actually on screen.

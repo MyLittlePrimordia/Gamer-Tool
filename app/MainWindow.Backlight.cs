@@ -77,39 +77,22 @@ public partial class MainWindow
 
         if (!Backlight.IsEnabled)
         {
-            // A heading and a button, not a sentence. It used to be thirteen words
-            // of grey instruction sitting between two rules in the middle of the
-            // page, naming a control that lives on another tab and is already
-            // labelled in plain English there. Turning the feature on is one click
-            // from here now instead of find the tab, find the row, find the switch.
-            StackPanel off = new()
-            {
-                Orientation = Orientation.Horizontal,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-
-            off.Children.Add(new TextBlock
-            {
-                Style = (Style)FindResource("SectionHeader"),
-                Text = "HARDWARE BRIGHTNESS OFF",
-                VerticalAlignment = VerticalAlignment.Center
-            });
-
-            Button turnOn = new()
-            {
-                Content = "Turn on",
-                Style = (Style)FindResource("GhostButton"),
-                Margin = new Thickness(12, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center,
-                MinWidth = 92,
-                ToolTip = "Control the monitor's own backlight over DDC/CI"
-            };
-            turnOn.Click += OnTurnOnHardwareBrightness;
-            off.Children.Add(turnOn);
-
-            BacklightPanel.Children.Add(off);
+            // Nothing at all, and the two rules that bracket the section go with it.
+            //
+            // There used to be a "HARDWARE BRIGHTNESS OFF" heading here with a Turn
+            // on button beside it, on the reasoning that naming the feature was
+            // helpful. It is the same reasoning that produced the diagnostic advice
+            // this app no longer gives: the switch is on the Settings tab, is
+            // labelled in plain English, and a user who wants this feature turns it
+            // on there. A heading and a button for a feature that is switched off
+            // is an advertisement for it on the one screen the user is not using,
+            // and a sign that the store is opening soon is worse than no sign at
+            // all.
+            SetBacklightRulesVisible(false);
             return;
         }
+
+        SetBacklightRulesVisible(true);
 
         if (!Backlight.HasProbed)
         {
@@ -147,20 +130,48 @@ public partial class MainWindow
     }
 
 
+    /// <summary>
+    /// Shows or hides the two rules that bracket the hardware brightness section.
+    /// <para>
+    /// Collapsed rather than merely cleared, because a border with no height is
+    /// still occupying the gap it was given margins for, which leaves a pair of
+    /// blank bands in the middle of the page. The margins are 18/16 and 14/16, so
+    /// that is most of half an inch of nothing, on the one screen where the user
+    /// is trying to decide what to do next.
+    /// </para>
+    /// </summary>
+    private void SetBacklightRulesVisible(bool visible)
+    {
+        Visibility state = visible ? Visibility.Visible : Visibility.Collapsed;
+
+        if (BacklightTopRule is not null)
+        {
+            BacklightTopRule.Visibility = state;
+        }
+
+        if (BacklightBottomRule is not null)
+        {
+            BacklightBottomRule.Visibility = state;
+        }
+    }
+
+
     private UIElement BacklightRow(MonitorProbe monitor)
     {
         bool live = monitor.CanControlBacklight;
 
+
+        // Two columns: the name and its status, then the verdict badge. This used to
+        // have a third for a small info button that opened a set of steps for
+        // getting DDC/CI working. It is gone, and the reason is worth recording so
+        // it does not come back: on real hardware the steps were confidently wrong,
+        // sending people to change a graphics setting that was already correct
+        // through several restarts, and there was no way to prove they were right
+        // in the first place. A hint that is wrong is worse than no hint, because
+        // the only way to tell it apart from a bug is to have followed it.
         Grid row = new();
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-        // A third column, for the hint button. It was being added at index 2 into
-        // a grid that only had two, and WPF quietly puts an out of range child in
-        // the last cell that does exist, so the button landed on top of the badge
-        // and covered the verdict it was there to explain.
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
 
         StackPanel left = new();
         left.Children.Add(new TextBlock
@@ -197,17 +208,14 @@ public partial class MainWindow
         {
             Style = (Style)FindResource("CardSub"),
             TextTrimming = TextTrimming.CharacterEllipsis,
-            Text = live
-                ? "Monitor's own backlight, over DDC/CI. Your brightness slider above bends the picture instead."
-                : Backlight.CapabilityOf(monitor)
+            Text = BacklightStatus.For(monitor)
         });
         Grid.SetColumn(left, 0);
         row.Children.Add(left);
 
-        // A working display keeps the quiet cyan pill. An unsupported one drops it
-        // and shouts in amber instead: a grey pill either side of a small grey
-        // word was easy to walk past, and this is the one row on the page that
-        // is telling the user something they can act on.
+        // A working display keeps the quiet cyan pill. An unsupported one shouts in
+        // amber instead: a grey pill either side of a small grey word was easy to
+        // walk past.
         Border badge = new()
         {
             CornerRadius = new CornerRadius(4),
@@ -232,60 +240,18 @@ public partial class MainWindow
         Grid.SetColumn(badge, 1);
         row.Children.Add(badge);
 
-        // One small way out of a dead end, and only for the one dead end a
-        // setting on the GPU can undo. It sits beside the badge rather than
-        // inside it, because inside the pill it read as part of the label rather
-        // than as something to press. A button rather than a picture, so it
-        // answers the keyboard and can be named to a screen reader, which is the
-        // whole difference between a hint and a decoration.
-        if (DdcDriverHint.ShouldOffer(monitor))
-        {
-            // Styled like a nav tab: nothing until hovered, then a faint wash, so
-            // the button is discoverable without competing with the verdict. All
-            // of the chrome lives in the style, because setting a Background here
-            // is what let it paint over the badge before the columns were fixed.
-            Button why = new()
-            {
-                Style = (Style)FindResource("InfoHintButton"),
-                Margin = new Thickness(6, 0, 0, 0),
-                ToolTip = "Why is this not working?",
-                Content = new UI.EmojiImage { Glyph = "info", Width = 15, Height = 15 }
-            };
-
-            AutomationProperties.SetName(why, "Why hardware brightness is unavailable on this display");
-
-            why.Click += (s, e) =>
-            {
-                HintContent hint = DdcDriverHint.For(DdcDriverHint.Vendor);
-
-                // The steps are numbered rather than bulleted so the order reads
-                // as an order, which is what they are: the Overrides page is not
-                // visible until the EULA has been accepted.
-                string body = string.Join(
-                    Environment.NewLine,
-                    hint.Steps.Select((step, index) => (index + 1) + ".  " + step));
-
-                ShowInfoModal(hint.Title, body, hint.Warning);
-            };
-
-            Grid.SetColumn(why, 2);
-            row.Children.Add(why);
-        }
-
         if (!live)
-
         {
-            // Nothing to drag. A live looking slider over a display that cannot
-            // be driven is the exact sort of lie this app has been fixing all
-            // session, so there is no slider at all here.
+            // No slider here, and not a greyed out one. A disabled control is still
+            // a control: it is announced by a screen reader as something to
+            // operate, and there is no brightness reading behind it, so any
+            // position drawn for it would be invented. The monitor's name and the
+            // reason are the whole of what is worth showing.
             //
-            // The dimming applies to the text only, not to the whole row. It used
-            // to wrap the row in a Border at 0.75, which dragged the badge and
-            // the hint button down with it and left the info glyph a flat grey
-            // outline. Opacity is composited, so a child cannot opt out of it
-            // from inside: it has to not be applied in the first place. The
-            // emoji are baked in colour precisely so they can be read, and the
-            // only thing here meant to be muted is the sentence beside them.
+            // The dimming applies to the text only, not to the whole row. Wrapping
+            // the row instead used to drag the badge down with it, and opacity is
+            // composited, so a child cannot opt out of it from inside: it has to
+            // not be applied in the first place.
             left.Opacity = 0.75;
 
             return new Border
@@ -338,6 +304,15 @@ public partial class MainWindow
     /// Flips the hardware brightness option from here rather than making the
     /// reader go and find it on another tab. The option's own handler starts the
     /// probe, so this only has to set the switch.
+    /// </summary>
+    /// <summary>
+    /// Kept only so the XAML and the diagnostics can still refer to a way in.
+    /// <para>
+    /// The Display tab no longer carries a Turn on button, because a heading and a
+    /// button for a feature that is switched off is an advertisement for it on the
+    /// one screen the user is not using. The switch on the Settings tab is the only
+    /// control for it, which is also the only place the feature is configured.
+    /// </para>
     /// </summary>
     private void OnTurnOnHardwareBrightness(object sender, RoutedEventArgs e)
     {

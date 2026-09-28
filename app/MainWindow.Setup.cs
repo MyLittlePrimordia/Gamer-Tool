@@ -52,15 +52,22 @@ public partial class MainWindow : Window
         _settings.HardwareBrightnessEnabled = HardwareBrightnessBox.IsChecked == true;
         _display.SetLock(_settings.GammaLock);
 
-        // Off to on is the way back from a monitor that was written off. The
-        // exclusion list is persisted, so without this a single bad minute left a
-        // display permanently greyed out with no route back except editing
-        // settings.json by hand, and the HasProbed guard below meant switching
-        // off and on again did not even re-probe. This is the only control the
-        // feature has, so it is the only place the reset can live.
+        // Off to on is the way back from a monitor that was written off, and from a
+        // feature the app turned off by itself. The exclusion list is persisted, so
+        // without this a single bad minute left a display permanently greyed out
+        // with no route back except editing settings.json by hand, and the HasProbed
+        // guard below meant switching off and on again did not even re-probe.
         if (_settings.HardwareBrightnessEnabled && !wasEnabled)
         {
             Backlight.ForgetExclusions();
+            Backlight.Availability.Restore();
+
+            // Cleared on disk as well as in memory. The note is driven off the
+            // persisted flag, so leaving it set would put the "turned off
+            // automatically" line back under a switch the user has just turned on
+            // themselves.
+            _settings.HardwareBrightnessRetired = false;
+            _settings.HardwareBrightnessFailedRounds = 0;
         }
 
         // Switching this on is the only thing that ever starts a probe, and the
@@ -70,16 +77,118 @@ public partial class MainWindow : Window
             _ = Task.Run(() =>
             {
                 Backlight.Probe();
-                Dispatcher.InvokeAsync(RefreshBacklightRows);
+                Dispatcher.InvokeAsync(() =>
+                {
+                    // The probe may have decided the feature is not worth offering on
+                    // this machine at all. Acting on it here rather than inside the
+                    // probe keeps the settings write and the repaint on the UI
+                    // thread, where they belong.
+                    if (Backlight.ConsumeRetirement())
+                    {
+                        _settings.HardwareBrightnessEnabled = false;
+                        HardwareBrightnessBox.IsChecked = false;
+                    }
+
+                    AfterBacklightProbe();
+                });
             });
         }
         else
         {
             RefreshBacklightRows();
+            RefreshBacklightNote();
         }
 
         ApplyWatchState();
         Commit();
+    }
+
+    /// <summary>
+    /// Everything that has to happen on the UI thread once a probe has finished.
+    /// <para>
+    /// Shared by both probe call sites rather than written twice. The tab switch
+    /// had its own copy that only refreshed the rows, so a probe started by
+    /// opening the Display tab could retire the feature without the switch ever
+    /// moving: the second round that triggers retirement is almost always reached
+    /// by opening the tab, so that is precisely the path that missed it.
+    /// </para>
+    /// </summary>
+    private void AfterBacklightProbe()
+    {
+        // The probe may have decided the feature is not worth offering on this
+        // machine at all. Acting on it here rather than inside the probe keeps the
+        // settings write and the repaint on the UI thread, where they belong.
+        if (Backlight.ConsumeRetirement())
+        {
+            _settings.HardwareBrightnessEnabled = false;
+            HardwareBrightnessBox.IsChecked = false;
+        }
+
+        // The counter is persisted by the probe itself, so this is what saves it.
+        if (Backlight.ConsumeSettingsChanged())
+        {
+            Commit();
+        }
+
+        RefreshBacklightRows();
+        RefreshBacklightNote();
+    }
+
+
+    /// <summary>
+    /// The info badge beside the hardware brightness switch, and nothing at all
+    /// when there is nothing to explain.
+    /// <para>
+    /// A badge rather than a line of text. The amber sentence that used to sit
+    /// under the switch was its own row in the middle of a list of switches, it
+    /// pushed the last row of the settings list under the fold, and it started a
+    /// scrollbar on a tab that had never needed one, which is a worse problem
+    /// than the one it was explaining. The switch it belongs to is labelled in
+    /// plain English on the same row, so the badge only has to say that there is
+    /// a reason to ask.
+    /// </para>
+    /// </summary>
+    private void RefreshBacklightNote()
+    {
+        if (HardwareBrightnessBox is null)
+        {
+            return;
+        }
+
+        // Set on the control rather than on a separate element, so the template
+        // collapses the badge and its column in one step and there is no way for
+        // a glyph to be visible with nothing to say. The tooltip is static copy
+        // and lives with the rest of the row's copy in the XAML.
+        HardwareBrightnessBox.BadgeGlyph = Backlight.Availability.Retired
+            ? "info"
+            : string.Empty;
+    }
+
+    /// <summary>
+    /// The full explanation, in a dialog.
+    /// <para>
+    /// Says what was measured and what was not, and deliberately names no
+    /// particular setting to change. It used to, and it was confidently wrong on
+    /// real hardware: the steps it gave were for a graphics setting that was
+    /// already correct, and following them cost several restarts and changed
+    /// nothing. There is also no way for this app to tell whether following advice
+    /// helped, so anything it offers is a guess wearing a numbered list.
+    /// </para>
+    /// <para>
+    /// No warning block, and no closing line about turning it back on. The dialog
+    /// was three paragraphs and an amber triangle for a fact that is already on
+    /// screen: the switch this explains is right there, off, with a badge on its
+    /// own row inviting the question. Telling somebody they can flip a visible
+    /// switch back on is noise, and a caution icon on a dialog that only
+    /// describes something that already happened makes it read as a fault.
+    /// </para>
+    /// </summary>
+    private void OnHardwareBrightnessWhy(object sender, RoutedEventArgs e)
+    {
+        ShowInfoModal(
+            "Hardware brightness was turned off",
+            Backlight.Availability.Note,
+            string.Empty);
     }
 
 

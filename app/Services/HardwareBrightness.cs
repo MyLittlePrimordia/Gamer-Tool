@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -318,6 +318,45 @@ public sealed class MonitorProbe
     /// </summary>
     public string EdidSource { get; set; } = "none";
 
+    /// <summary>
+    /// Whether the display driver declined to hand back this display's EDID, and
+    /// the block therefore came out of the registry cache instead.
+    /// <para>
+    /// Worth its own flag rather than a string comparison because it is the
+    /// corroboration that turns "the driver gave me no DDC/CI handle" from one
+    /// ambiguous fact into a diagnosis. A display driver has no ordinary reason to
+    /// withhold a monitor's EDID. Withholding it and the DDC/CI handle together is
+    /// what content protection looks like from the outside, and it is the
+    /// difference between advising someone to check an HDCP setting and advising
+    /// them to buy a different cable.
+    /// </para>
+    /// </summary>
+    public bool EdidWithheld => EdidSource != "driver";
+
+    /// <summary>
+    /// Where AMD's per-display HDCP setting is saved on this machine, if anywhere.
+    /// <para>
+    /// The same for this one: a monitor that has merely not answered is a different
+    /// problem from one whose settings are being written somewhere the driver does
+    /// not read, and only the second is worth a paragraph of advice.
+    /// </para>
+    /// </summary>
+    public ProtectionOverrideReading Protection { get; set; } = new();
+
+    /// <summary>
+    /// Whether the driver's account of this display's target is coherent, and why
+    /// not when it is not.
+    /// <para>
+    /// The field that decides which of two very different faults this is. A target
+    /// the driver never set up and a target it is refusing to describe both produce
+    /// a missing DDC/CI handle, an EDID it will not return, and a greyed out row.
+    /// Only one of them is fixed by changing a setting in Adrenalin, and telling
+    /// somebody to do that when their target was never initialised is worse than
+    /// useless advice: it is several clicks and a restart, and it changes nothing.
+    /// </para>
+    /// </summary>
+    public TargetHealthReading Target { get; set; } = new(TargetHealth.Unknown, Array.Empty<string>());
+
     /// <summary>How the display is wired up, and whether HDR is on. Read only.</summary>
     public DisplayLink Link { get; set; } = new();
 
@@ -494,6 +533,15 @@ public static class HardwareBrightness
         // asking it the same question twice.
         IReadOnlyList<DisplayLink> links = ReadDisplayLinks();
 
+        // The same argument for the registry, and the same conclusion: a setting
+        // that is saved in a place the driver does not read is worth naming, and
+        // it is worth naming once.
+        ProtectionOverrideReading protection = AmdProtectionOverride.Read();
+
+        // And once for the target, which is the same on every display and is the
+        // one reading that decides whether the registry is even worth consulting.
+        TargetHealthReading target = ReadTargetHealth();
+
         foreach ((IntPtr hMonitor, string deviceName, string friendly, bool external, EdidReading edid, string edidSource, string hardwareId) in EnumerateMonitors())
         {
             // A single active display is the overwhelmingly common case and there
@@ -512,6 +560,9 @@ public static class HardwareBrightness
                     Edid = edid,
                     EdidSource = edidSource,
                     Link = link,
+                    Protection = protection,
+
+                    Target = target,
                     BlockedReason = "on your exclusion list"
                 });
                 continue;
@@ -533,6 +584,9 @@ public static class HardwareBrightness
                     Edid = edid,
                     EdidSource = edidSource,
                     Link = link,
+                    Protection = protection,
+
+                    Target = target,
                     BlockedReason = edid.Verdict == EdidVerdict.Unreadable
                         ? "no EDID to check"
                         : "EDID not credible: " + string.Join("; ", edid.Reasons)
@@ -554,6 +608,7 @@ public static class HardwareBrightness
             }
 
             BusResult bus = ReadBrightness(hMonitor);
+
             found.Add(new MonitorProbe
             {
                 DeviceName = deviceName,
@@ -563,16 +618,88 @@ public static class HardwareBrightness
                 EdidSource = edidSource,
                 Link = link,
                 Brightness = bus.Reading,
-                NoReplyBecause = bus.Why,
+                NoReplyBecause = ReasonWith(bus, edidSource, edid, protection, target),
                 Outcome = bus.Outcome,
                 LastError = bus.Win32Error == 0 ? null : DdcErrors.Describe(bus.Win32Error),
                 Attempts = bus.Attempts,
                 ProbeMs = bus.ElapsedMs,
-                PhysicalMonitor = bus.PhysicalMonitor
+                PhysicalMonitor = bus.PhysicalMonitor,
+                Protection = protection,
+
+                Target = target
             });
         }
 
         return found;
+    }
+
+
+    /// <summary>
+    /// The reason a display did not answer, with the two facts that are only
+    /// meaningful together attached to it.
+    /// <para>
+    /// A missing DDC/CI handle on its own is genuinely ambiguous. It is what a dock
+    /// or a KVM produces, what a driver with no DDC support produces, and what a
+    /// driver actively protecting the link produces. The EDID settles it, because
+    /// no driver declines to identify a monitor as a matter of course: a driver
+    /// that will not name the display and will not hand out its DDC/CI handle is
+    /// withholding the display's identity, and on AMD that is content protection.
+    /// </para>
+    /// <para>
+    /// The registry finding is added for the same reason. It changes nothing about
+    /// the verdict, which is already decided by the time this runs, and it is only
+    /// reported for the one outcome it can explain.
+    /// </para>
+    /// </summary>
+    private static string? ReasonWith(
+        BusResult bus,
+        string edidSource,
+        EdidReading edid,
+        ProtectionOverrideReading protection,
+        TargetHealthReading target)
+    {
+        if (bus.Why is null)
+        {
+            return null;
+        }
+
+        List<string> notes = new() { bus.Why };
+
+        // A stub target is checked first because when it applies it explains
+        // everything else, and the explanations below are all about a driver
+        // choosing not to talk. They are not what happened here: the driver is not
+        // withholding a target it set up, because the numbers it reports for that
+        // target do not exist. Saying "withholding" would point at a setting and
+        // send somebody off to change it.
+        if (bus.Outcome == BusOutcome.NoDdcPathway && target.Health == TargetHealth.Stub)
+        {
+            notes.Add("The graphics driver has not set this display up: " + target.Summary
+                + ". That accounts for the missing DDC/CI handle and the withheld EDID on its own,"
+                + " and no content protection setting will change it");
+        }
+        else if (bus.Outcome == BusOutcome.NoDdcPathway && edidSource != "driver")
+        {
+            notes.Add(
+                "The driver also declined to return this display's EDID"
+                + (edid.Verdict == EdidVerdict.Plausible
+                    ? ", reading it from the Windows cache instead"
+                    : string.Empty)
+                + ". A driver has no ordinary reason to withhold both, and withholding the display's"
+                + " identity along with its DDC/CI link is what content protection looks like from here");
+        }
+
+        // Only worth saying when the registry actually disagrees with itself. On a
+        // stub target the override is beside the point and naming it is noise.
+        if (bus.Outcome == BusOutcome.NoDdcPathway
+            && target.Health != TargetHealth.Stub
+            && protection.State == ProtectionOverrideState.LegacyOnly)
+        {
+            notes.Add("AMD has this display's HDCP setting saved at " + protection.LegacyPath
+                + " but not where this driver reads it (" + protection.CurrentPath
+                + "), so turning the setting off is not reaching the driver");
+        }
+
+        return string.Join(". ", notes);
     }
 
 
@@ -1201,14 +1328,14 @@ public static class HardwareBrightness
                 {
                     header = new DISPLAYCONFIG_DEVICE_INFO_HEADER
                     {
-                        type = DisplayConfigGetTargetName,
+                        type = TargetNameType,
                         size = (uint)Marshal.SizeOf<DISPLAYCONFIG_TARGET_DEVICE_NAME>(),
                         adapterId = path.targetInfo.adapterId,
                         id = path.targetInfo.id
                     }
                 };
 
-                string friendly = DisplayConfigGetDeviceInfo(ref name) == 0
+                string friendly = DisplayConfigGetTargetDeviceName(ref name) == 0
                     ? name.monitorFriendlyDeviceName
                     : string.Empty;
 
@@ -1216,7 +1343,7 @@ public static class HardwareBrightness
                 {
                     header = new DISPLAYCONFIG_DEVICE_INFO_HEADER
                     {
-                        type = DisplayConfigGetAdvancedColorInfoType,
+                        type = AdvancedColorInfoType,
                         size = (uint)Marshal.SizeOf<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO>(),
                         adapterId = path.targetInfo.adapterId,
                         id = path.targetInfo.id
@@ -1224,7 +1351,7 @@ public static class HardwareBrightness
                 };
 
                 bool hdrActive = false;
-                bool advancedKnown = DisplayConfigGetDeviceInfo(ref colour) == 0;
+                bool advancedKnown = DisplayConfigGetAdvancedColorInfo(ref colour) == 0;
 
                 if (advancedKnown)
                 {
@@ -1258,6 +1385,153 @@ public static class HardwareBrightness
     }
 
 
+    /// <summary>
+    /// Reads the display target and asks whether the driver's account of it hangs
+    /// together.
+    /// <para>
+    /// Separate from <see cref="ReadDisplayLinks"/> on purpose. That one is best
+    /// effort and answers "how is this connected", and a driver that will not
+    /// describe its target at all still gets a link out of it. This one answers a
+    /// different question, is allowed to say "I could not tell", and its answer is
+    /// what decides whether a display that refused to answer is worth blaming on a
+    /// setting.
+    /// </para>
+    /// <para>
+    /// The mode count is compared against the indices the driver reports, which is
+    /// the one check here that needs no interpretation of link types or content
+    /// protection to mean anything.
+    /// </para>
+    /// </summary>
+    private static TargetHealthReading ReadTargetHealth()
+    {
+        try
+        {
+            if (GetDisplayConfigBufferSizes(QueryDisplayConfigOnlyActive, out uint pathCount, out uint modeCount) != 0
+                || pathCount == 0)
+            {
+                return new TargetHealthReading(TargetHealth.Unknown, new[] { "the display topology could not be queried" });
+            }
+
+            var paths = new DISPLAYCONFIG_PATH_INFO[pathCount];
+            var modes = new DISPLAYCONFIG_MODE_INFO[modeCount];
+
+            if (QueryDisplayConfig(
+                    QueryDisplayConfigOnlyActive,
+                    ref pathCount,
+                    paths,
+                    ref modeCount,
+                    modes,
+                    IntPtr.Zero) != 0)
+            {
+                return new TargetHealthReading(TargetHealth.Unknown, new[] { "the display topology could not be queried" });
+            }
+
+            // Reported modes are what the compositor allocated slots for. The driver
+            // names one of them per source and per target, and an index past the end
+            // is naming a slot that does not exist.
+            uint availableModes = modeCount;
+
+            foreach (DISPLAYCONFIG_PATH_INFO path in paths)
+            {
+                if (!path.targetInfo.targetAvailable)
+                {
+                    continue;
+                }
+
+                // Built before being passed, because a method call result cannot be
+                // passed by ref and every one of these is a P/Invoke that needs a
+                // real local to write its return code into.
+                DISPLAYCONFIG_SOURCE_DEVICE_NAME source = SourceRequest(path);
+                DISPLAYCONFIG_TARGET_DEVICE_NAME targetName = TargetNameRequest(path);
+                DISPLAYCONFIG_TARGET_INFO targetInfo = TargetInfoRequest(path);
+                DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO advanced = AdvancedColorRequest(path);
+
+                bool sourceOk = DisplayConfigGetSourceDeviceName(ref source) == 0;
+                bool targetNameOk = DisplayConfigGetTargetDeviceName(ref targetName) == 0;
+                bool targetInfoOk = DisplayConfigGetTargetInfo(ref targetInfo) == 0;
+                bool advancedOk = DisplayConfigGetAdvancedColorInfo(ref advanced) == 0;
+
+                return TargetHealthProbe.Classify(new TargetDescription
+                {
+                    Available = true,
+                    VideoOutputTechnology = path.targetInfo.videoOutputTechnology,
+                    RefreshNumerator = path.targetInfo.refreshRate.Numerator,
+                    RefreshDenominator = path.targetInfo.refreshRate.Denominator,
+                    TargetModeInfoIdx = path.targetInfo.modeInfoIdx,
+                    ModeCount = availableModes,
+                    SourceModeInfoOutOfRange = path.sourceModeInfoIdx >= availableModes,
+                    TargetNameRefused = !targetNameOk,
+                    TargetInfoRefused = !targetInfoOk,
+                    AdvancedColorRefused = !advancedOk,
+                    SourceNameOk = sourceOk,
+                    GdiSourceName = source.viewGdiDeviceName ?? string.Empty
+                });
+            }
+
+            return new TargetHealthReading(TargetHealth.Unknown, new[] { TargetHealthProbe.NoTargetReason });
+        }
+        catch (Exception ex)
+        {
+            // Diagnostics must never be the thing that breaks a probe.
+            TraceLog.Write("HWB target health read failed: " + ex.GetType().Name);
+            return new TargetHealthReading(TargetHealth.Unknown, new[] { "the target could not be examined" });
+        }
+    }
+
+
+    private static DISPLAYCONFIG_SOURCE_DEVICE_NAME SourceRequest(in DISPLAYCONFIG_PATH_INFO path) => new()
+    {
+        header = new DISPLAYCONFIG_DEVICE_INFO_HEADER
+        {
+            type = SourceNameType,
+            size = (uint)Marshal.SizeOf<DISPLAYCONFIG_SOURCE_DEVICE_NAME>(),
+            adapterId = path.sourceInfo.adapterId,
+            id = path.sourceInfo.id
+        }
+    };
+
+
+    private static DISPLAYCONFIG_TARGET_DEVICE_NAME TargetNameRequest(in DISPLAYCONFIG_PATH_INFO path) => new()
+    {
+        header = new DISPLAYCONFIG_DEVICE_INFO_HEADER
+        {
+            type = TargetNameType,
+            size = (uint)Marshal.SizeOf<DISPLAYCONFIG_TARGET_DEVICE_NAME>(),
+            adapterId = path.targetInfo.adapterId,
+            id = path.targetInfo.id
+        }
+    };
+
+
+    /// <summary>
+    /// The target's own capabilities, as opposed to its name. Asked for because a
+    /// driver can in principle answer one and refuse the other, and which of the
+    /// two it answers changes what the refusal means.
+    /// </summary>
+    private static DISPLAYCONFIG_TARGET_INFO TargetInfoRequest(in DISPLAYCONFIG_PATH_INFO path) => new()
+    {
+        header = new DISPLAYCONFIG_DEVICE_INFO_HEADER
+        {
+            type = TargetInfoType,
+            size = (uint)Marshal.SizeOf<DISPLAYCONFIG_TARGET_INFO>(),
+            adapterId = path.targetInfo.adapterId,
+            id = path.targetInfo.id
+        }
+    };
+
+
+    private static DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO AdvancedColorRequest(in DISPLAYCONFIG_PATH_INFO path) => new()
+    {
+        header = new DISPLAYCONFIG_DEVICE_INFO_HEADER
+        {
+            type = AdvancedColorInfoType,
+            size = (uint)Marshal.SizeOf<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO>(),
+            adapterId = path.targetInfo.adapterId,
+            id = path.targetInfo.id
+        }
+    };
+
+
     private static string ConnectionNameOf(uint technology) => technology switch
     {
         1 => "VGA",
@@ -1274,8 +1548,16 @@ public static class HardwareBrightness
 
 
     private const uint QueryDisplayConfigOnlyActive = 0x00000002;
-    private const uint DisplayConfigGetTargetName = 2;
-    private const uint DisplayConfigGetAdvancedColorInfoType = 9;
+
+    // The device-info type codes, which are the same as the leading field of the
+    // header each request carries. Type 1 is both the source name and the target
+    // info: the two requests are told apart by the adapter and id they carry, not
+    // by the code, which is why the constants below are named for what is being
+    // asked rather than reused by number.
+    private const uint SourceNameType = 1;
+    private const uint TargetNameType = 2;
+    private const uint TargetInfoType = 1;
+    private const uint AdvancedColorInfoType = 9;
 
 
     [StructLayout(LayoutKind.Sequential)]
@@ -1427,13 +1709,13 @@ public static class HardwareBrightness
             // happens at all.
             if (hardwareId.Length > 0)
             {
-                foreach ((byte[] edid, string _, string panel) in found)
+                List<(byte[] Edid, string Name, string Panel)> byPanel = found
+                    .Where(f => string.Equals(f.Panel, hardwareId, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                if (byPanel.Count > 0)
                 {
-                    if (string.Equals(panel, hardwareId, StringComparison.OrdinalIgnoreCase))
-                    {
-                        RegistryMatchBy = "panel key " + panel;
-                        return edid;
-                    }
+                    return Longest(byPanel, "panel key " + hardwareId);
                 }
             }
 
@@ -1441,7 +1723,7 @@ public static class HardwareBrightness
             // appears here two or three times over, and the whole EDID is sometimes
             // present on one instance and only the 128 byte base block on another.
             // When every entry names the same panel they are all the same display
-            // and the first one will do. Only when there are genuinely different
+            // and the fullest one will do. Only when there are genuinely different
             // panels does the name have to choose, and that match is loose on
             // purpose: a miss costs us the pre-flight check, never a wrong write.
             string[] distinct = found
@@ -1452,19 +1734,18 @@ public static class HardwareBrightness
 
             if (distinct.Length <= 1)
             {
-                RegistryMatchBy = "single panel name";
-                return found[0].Edid;
+                return Longest(found, "single panel name");
             }
 
-            foreach ((byte[] edid, string name, string _) in found)
+            List<(byte[] Edid, string Name, string Panel)> byName = found
+                .Where(f => f.Name.Length > 0
+                    && (modelName.Contains(f.Name, StringComparison.OrdinalIgnoreCase)
+                        || f.Name.Contains(modelName, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+
+            if (byName.Count > 0)
             {
-                if (name.Length > 0
-                    && (modelName.Contains(name, StringComparison.OrdinalIgnoreCase)
-                        || name.Contains(modelName, StringComparison.OrdinalIgnoreCase)))
-                {
-                    RegistryMatchBy = "loose name match";
-                    return edid;
-                }
+                return Longest(byName, "loose name match");
             }
 
             RegistryMatchBy = "ambiguous, no match";
@@ -1475,6 +1756,47 @@ public static class HardwareBrightness
             LastRegistryError = ex.GetType().Name + ": " + ex.Message;
             return null;
         }
+    }
+
+
+    /// <summary>
+    /// The fullest block out of several entries for one display.
+    /// <para>
+    /// This used to return whichever entry the registry happened to yield first,
+    /// and Windows does not order those by usefulness. A real AOC AG276QZD2 has
+    /// two cached blocks on this machine: the base 128 byte block on the instance
+    /// Windows calls "Generic PnP Monitor", and the full 384 byte block on the
+    /// instance it names properly. Enumeration order decided which one the
+    /// pre-flight check validated, so the check was running against a truncated
+    /// copy of the display's own description and the log could not say which of
+    /// the two it had used.
+    /// <para>
+    /// Longest wins, and ties go to the first, because the entries are the same
+    /// display and a longer block is a strict superset of a shorter one. Nothing
+    /// here can turn a refusal into a pass on the wrong panel, because every
+    /// candidate has already been narrowed to one panel by the caller.
+    /// </para>
+    /// </summary>
+    private static byte[] Longest(
+        IReadOnlyList<(byte[] Edid, string Name, string Panel)> candidates,
+        string how)
+    {
+        (byte[] Edid, string Name, string Panel) best = candidates[0];
+
+        foreach ((byte[] edid, string _, string _) in candidates)
+        {
+            if (edid.Length > best.Edid.Length)
+            {
+                best = (edid, best.Name, best.Panel);
+            }
+        }
+
+        RegistryMatchBy = how + ", "
+            + candidates.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + " entries, took the "
+            + best.Edid.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + " byte block";
+        return best.Edid;
     }
 
     /// <summary>How the registry fallback chose its block, for the log.</summary>
@@ -1697,10 +2019,36 @@ public static class HardwareBrightness
     }
 
 
+    /// <summary>
+    /// The missing field here is not a detail. DISPLAYCONFIG_PATH_INFO is 76
+    /// bytes, and it carries a UINT32 sourceModeInfoIdx between the source and
+    /// the target. Declared without it the struct is 72, and because the two
+    /// sub-structs are laid out sequentially every field of targetInfo is then
+    /// read four bytes early, so the adapter id, the target id and
+    /// videoOutputTechnology are all somebody else's fields.
+    /// <para>
+    /// Measured on a real machine, reading the same buffer both ways: the correct
+    /// layout gives videoOutputTechnology 1 and an adapter id of Low 0 High 264,
+    /// and this one gave 10 and Low 0x0000D9CD High 0. Ten happens to be
+    /// DISPLAYPORT_EXTERNAL, so the bug produced a plausible looking answer
+    /// rather than an obvious one, and the log has been printing
+    /// "DisplayPort, HDR unknown" for every display on every machine as a result.
+    /// The garbage adapter id is the worse half: it is what the request packets
+    /// are built from, so DisplayConfigGetDeviceInfo fails with
+    /// ERROR_INVALID_PARAMETER for a target that exists, which is why HDR has
+    /// read as unknown on every single probe rather than occasionally.
+    /// </para>
+    /// <para>
+    /// The field is never used, and it is declared anyway: leaving it out does not
+    /// make the struct any smaller, it moves everything after it.
+    /// </para>
+    /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     private struct DISPLAYCONFIG_PATH_INFO
     {
         public DISPLAYCONFIG_PATH_SOURCE_INFO sourceInfo;
+
+        public uint sourceModeInfoIdx;
 
         public DISPLAYCONFIG_PATH_TARGET_INFO targetInfo;
 
@@ -1741,14 +2089,16 @@ public static class HardwareBrightness
 
 
     /// <summary>
-    /// The layout has to match the SDK exactly, and it does: 20 bytes for the
-    /// header, 404 for this and 28 for the advanced colour block, all measured on
-    /// a real machine rather than assumed. Two wrong answers were worth ruling
-    /// out along the way. The header is 20 and not 24, because LUID is two 32 bit
-    /// fields and so aligns to 4; adding Pack = 8 does not change that, because
-    /// Pack caps alignment rather than raising it. And PATH_INFO is 72 and not
-    /// 100: 20 plus 48 plus 4 is 72, so QueryDisplayConfig is not writing past
-    /// the array.
+    /// The layout has to match the SDK exactly, and the sizes are measured on a
+    /// real machine rather than assumed: the header is 20 bytes, this one 48 and
+    /// the advanced colour block 16.
+    /// <para>
+    /// The header is 20 and not 24, because LUID is two 32 bit fields and so
+    /// aligns to 4; adding Pack = 8 does not change that, because Pack caps
+    /// alignment rather than raising it. The one that was actually wrong is on
+    /// <see cref="DISPLAYCONFIG_PATH_INFO"/>: it was declared at 72 when the real
+    /// size is 76, which put every target field four bytes out.
+    /// </para>
     /// <para>
     /// The query still fails on some driver and build combinations, returning
     /// ERROR_INVALID_PARAMETER, which is why HDR is reported as a tri-state and
@@ -1780,6 +2130,55 @@ public static class HardwareBrightness
     }
 
 
+    /// <summary>
+    /// The source's GDI name, carried as the control for the target queries: if this
+    /// one is answered then the topology query is working and the driver is
+    /// declining about the target specifically, rather than the whole call having
+    /// failed.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct DISPLAYCONFIG_SOURCE_DEVICE_NAME
+    {
+        public DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string viewGdiDeviceName;
+    }
+
+
+    /// <summary>
+    /// The target's own capabilities: link type, refresh and scaling. Kept separate
+    /// from the name deliberately, because a driver refusing the name while still
+    /// answering this is a meaningfully different thing from refusing both, and
+    /// collapsing them loses the distinction.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DISPLAYCONFIG_TARGET_INFO
+    {
+        public DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+
+        public uint videoOutputTechnology;
+
+        public uint rotation;
+
+        public uint scaling;
+
+        public DISPLAYCONFIG_RATIONAL refreshRate;
+
+        public uint scanLineOrdering;
+
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool targetAvailable;
+
+        public uint statusFlags;
+
+        public ushort desktopModeInfoIdx;
+
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool targetPreferred;
+    }
+
+
     [DllImport("user32.dll")]
     private static extern int GetDisplayConfigBufferSizes(uint flags, out uint numPathArrayElements, out uint numModeInfoArrayElements);
 
@@ -1794,8 +2193,27 @@ public static class HardwareBrightness
         IntPtr currentTopologyId);
 
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_TARGET_DEVICE_NAME requestPacket);
+    /// <summary>
+    /// One entry point, four request shapes.
+    /// <para>
+    /// Declared once per shape rather than relying on an overload, because the
+    /// native function is a single entry point that fills whatever buffer it is
+    /// handed and the header's type field is what tells it which. Four C#
+    /// overloads of the same name would also compile, and would hide the fact that
+    /// these are one call rather than four.
+    /// </para>
+    /// </summary>
+    [DllImport("user32.dll", EntryPoint = "DisplayConfigGetDeviceInfo")]
+    private static extern int DisplayConfigGetTargetDeviceName(ref DISPLAYCONFIG_TARGET_DEVICE_NAME requestPacket);
+
+    [DllImport("user32.dll", EntryPoint = "DisplayConfigGetDeviceInfo")]
+    private static extern int DisplayConfigGetSourceDeviceName(ref DISPLAYCONFIG_SOURCE_DEVICE_NAME requestPacket);
+
+    [DllImport("user32.dll", EntryPoint = "DisplayConfigGetDeviceInfo")]
+    private static extern int DisplayConfigGetTargetInfo(ref DISPLAYCONFIG_TARGET_INFO requestPacket);
+
+    [DllImport("user32.dll", EntryPoint = "DisplayConfigGetDeviceInfo")]
+    private static extern int DisplayConfigGetAdvancedColorInfo(ref DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO requestPacket);
 
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]

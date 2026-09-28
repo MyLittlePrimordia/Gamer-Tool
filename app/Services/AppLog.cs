@@ -254,7 +254,13 @@ public static class AppLog
                 + "   probe " + monitor.ProbeMs.ToString(CultureInfo.InvariantCulture) + "ms");
             lines.Add("    physical mon : " + (monitor.PhysicalMonitor ?? "none"));
             lines.Add("    link         : " + monitor.Link);
+            lines.Add("    target       : " + monitor.Target.Summary);
+            lines.Add("    amd hdcp     : " + monitor.Protection.Summary
+                + (monitor.Protection.AdapterKey.Length > 0
+                    ? "  [class " + monitor.Protection.AdapterKey + "]"
+                    : string.Empty));
             lines.Add("    edid source  : " + monitor.EdidSource
+                + (monitor.EdidWithheld ? "  (driver withheld it)" : string.Empty)
                 + (HardwareBrightness.RegistryMatchBy.Length > 0 && monitor.EdidSource == "registry"
                     ? " (" + Sanitise(HardwareBrightness.RegistryMatchBy) + ")"
                     : string.Empty));

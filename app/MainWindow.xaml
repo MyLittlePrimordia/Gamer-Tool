@@ -285,18 +285,23 @@
                                         </StackPanel>
                                     </Grid>
 
-                                    <Border Grid.Row="1" Style="{StaticResource Hairline}" Margin="0,18,0,16" />
+                                      <!-- Hardware backlight. Built in code because it is
+                                           one row per display and each row decides for
+                                           itself whether it is live: a machine can have
+                                           one monitor that answers DDC/CI and another
+                                           with no pathway at all, and the two must not
+                                           share a single enabled state. The software
+                                           brightness above is untouched either way. -->
+                                      <StackPanel x:Name="BacklightPanel" Grid.Row="2" Margin="0,0,0,4" />
 
-                                    <!-- Hardware backlight. Built in code because it is
-                                         one row per display and each row decides for
-                                         itself whether it is live: a machine can have
-                                         one monitor that answers DDC/CI and another
-                                         with no pathway at all, and the two must not
-                                         share a single enabled state. The software
-                                         brightness above is untouched either way. -->
-                                    <StackPanel x:Name="BacklightPanel" Grid.Row="2" Margin="0,0,0,4" />
-
-                                    <Border Grid.Row="3" Style="{StaticResource Hairline}" Margin="0,14,0,16" />
+                                      <!-- The two rules that bracket the panel. Both collapse
+                                           with it, because a divider with nothing between
+                                           the two things it separates is a line drawn for
+                                           no reason: the whole point of hiding the section
+                                           when the feature is off is that the page reads as
+                                           though the feature was never here. -->
+                                      <Border x:Name="BacklightTopRule" Grid.Row="1" Style="{StaticResource Hairline}" Margin="0,18,0,16" />
+                                      <Border x:Name="BacklightBottomRule" Grid.Row="3" Style="{StaticResource Hairline}" Margin="0,14,0,16" />
 
                                     <Grid Grid.Row="4">
                                         <Grid.ColumnDefinitions>
@@ -1115,7 +1120,35 @@
                                 <ui:OptionToggle x:Name="HardwareBrightnessBox" Style="{StaticResource OptionRow}"
                                                  Glyph="sun" Label="Hardware brightness (DDC/CI)"
                                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                                 BadgeClick="OnHardwareBrightnessWhy"
+                                                 BadgeToolTip="Why was this turned off?"
                                                  ToolTip="Controls the monitor's own backlight over DDC/CI instead of only bending gamma. Off by default: it talks to the monitor over I2C, which on a small number of displays with broken firmware has been known to crash Windows itself. The software controls are unaffected either way." />
+                                <!--
+                                  No row of prose under this switch.
+
+                                  Both earlier attempts put text there: a paragraph
+                                  first, then a one line nudge with a Why? link.
+                                  Both cost more than they were worth. The nudge
+                                  still occupied a row in the middle of a list of
+                                  switches, it started a scrollbar on a tab that
+                                  had never needed one, and "Turned off
+                                  automatically" is a thing the info badge
+                                  underneath already says on its own row.
+
+                                  So the explanation is a glyph, on the same row as
+                                  the switch, and the detail is one click away in a
+                                  dialog. The switch it belongs to is labelled in
+                                  plain English right beside it, and the whole row
+                                  already carries a tooltip saying what it does.
+
+                                  The badge is set from code, because whether it is
+                                  there at all depends on the probe, and the wording
+                                  of its tooltip lives with the policy that decides
+                                  it. The glyph itself is drawn by the OptionRow
+                                  template, which collapses the badge and its
+                                  column when the glyph is empty, so a row without
+                                  one looks exactly as it did before.
+                                -->
                                 <ui:OptionToggle x:Name="GammaLockBox" Style="{StaticResource OptionRow}"
                                                  Glyph="lock" Label="Keep screen locked"
                                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
