@@ -16,6 +16,24 @@ public sealed class DisplayPreset
 
     public const double ChannelGainMax = 1.30;
 
+    /// <summary>The gamma a preset can hold, matching the slider's own range.</summary>
+    public const double GammaMin = 1.0;
+
+    public const double GammaMax = 3.0;
+
+    /// <summary>Percentage ranges, matching the sliders.</summary>
+    public const double ShadowMin = 0.0;
+
+    public const double ShadowMax = 100.0;
+
+    public const double BrightnessMin = -50.0;
+
+    public const double BrightnessMax = 50.0;
+
+    public const double ContrastMin = -50.0;
+
+    public const double ContrastMax = 50.0;
+
     public string Id { get; set; } = string.Empty;
 
     public string Name { get; set; } = string.Empty;
@@ -36,20 +54,6 @@ public sealed class DisplayPreset
 
     public double BlueGain { get; set; } = 1.00;
 
-    public string ShadowText => "+" + ShadowBoost.ToString("0") + "%";
-
-    public string BrightnessText => (Brightness >= 0 ? "+" : string.Empty) + Brightness.ToString("0") + "%";
-
-    public string ContrastText => (Contrast >= 0 ? "+" : string.Empty) + Contrast.ToString("0") + "%";
-
-    public string GammaText => Gamma.ToString("0.00");
-
-    public string RgbText => RedGain.ToString("0.00") + " " + GreenGain.ToString("0.00") + " " + BlueGain.ToString("0.00");
-
-    public string SpecText => "SHADOW " + ShadowText + "   BRIGHT " + BrightnessText + "   CONTRAST " + ContrastText;
-
-    public string CompactSpec => "SHADOW " + ShadowText + "  ·  GAMMA " + GammaText;
-
     public DisplayPreset Copy()
     {
         return new DisplayPreset
@@ -65,6 +69,29 @@ public sealed class DisplayPreset
             GreenGain = GreenGain,
             BlueGain = BlueGain
         };
+    }
+
+    /// <summary>
+    /// Pulls every value back inside the range its own slider enforces.
+    /// <para>
+    /// A settings file or a restored backup is data from outside, and the sliders
+    /// are the app's own statement of what is legal. Without this a gamma of a
+    /// thousand collapses the whole tone curve to white, and there is no value
+    /// the user could have typed into the app to produce it, so nothing on screen
+    /// explains what happened. Clamping is silent but it is also invisible: the
+    /// worst case becomes a slightly wrong picture instead of an unusable one.
+    /// </para>
+    /// </summary>
+    public DisplayPreset Clamp()
+    {
+        Gamma = double.IsFinite(Gamma) ? Math.Clamp(Gamma, GammaMin, GammaMax) : GammaMin;
+        ShadowBoost = double.IsFinite(ShadowBoost) ? Math.Clamp(ShadowBoost, ShadowMin, ShadowMax) : 0.0;
+        Brightness = double.IsFinite(Brightness) ? Math.Clamp(Brightness, BrightnessMin, BrightnessMax) : 0.0;
+        Contrast = double.IsFinite(Contrast) ? Math.Clamp(Contrast, ContrastMin, ContrastMax) : 0.0;
+        RedGain = double.IsFinite(RedGain) ? Math.Clamp(RedGain, ChannelGainMin, ChannelGainMax) : 1.0;
+        GreenGain = double.IsFinite(GreenGain) ? Math.Clamp(GreenGain, ChannelGainMin, ChannelGainMax) : 1.0;
+        BlueGain = double.IsFinite(BlueGain) ? Math.Clamp(BlueGain, ChannelGainMin, ChannelGainMax) : 1.0;
+        return this;
     }
 
     public static DisplayPreset WithBlueLight(DisplayPreset source, int level)

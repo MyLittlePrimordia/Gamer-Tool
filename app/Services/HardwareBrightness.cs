@@ -114,8 +114,6 @@ public sealed class MonitorProbe
     /// </summary>
     public string? NoReplyBecause { get; set; }
 
-    public bool Probed => Brightness is not null;
-
     public string StatusLine
     {
         get
@@ -194,6 +192,31 @@ public static class HardwareBrightness
 
     /// <summary>One lock for the whole bus. DDC/CI is a shared, slow resource.</summary>
     private static readonly object Gate = new();
+
+    /// <summary>
+    /// Set while a call is inside its worker, so only ever one is in there.
+    /// <para>
+    /// The timeout on a wedged monitor abandons the worker but cannot cancel the
+    /// I2C call inside it, and that worker goes on holding the bus lock for as
+    /// long as the hardware takes to answer, which for a wedged panel is forever.
+    /// Without this, every later call started its own worker, and every one of
+    /// them blocked on the lock and was itself abandoned, so a drag across the
+    /// slider queued a thread pool thread per step and none of them ever came
+    /// back. Refusing new work while one is outstanding caps the damage at a
+    /// single consumed thread and reports the bus as busy, which is true.
+    /// </para>
+    /// </summary>
+    private static int _busBusy;
+
+    private static bool TryEnterBus()
+    {
+        return Interlocked.Exchange(ref _busBusy, 1) == 0;
+    }
+
+    private static void LeaveBus()
+    {
+        Interlocked.Exchange(ref _busBusy, 0);
+    }
 
     private static readonly Dictionary<IntPtr, long> LastCallUtc = new();
 
@@ -278,6 +301,32 @@ public static class HardwareBrightness
     /// </para>
     /// </summary>
     public static bool TrySetBrightness(
+        string deviceName,
+        uint value,
+        uint minimum,
+        uint maximum,
+        out string? why)
+    {
+        why = null;
+
+        if (!TryEnterBus())
+        {
+            why = "another brightness call is still waiting on the display, so this one was skipped";
+            return false;
+        }
+
+        try
+        {
+            return WriteBrightness(deviceName, value, minimum, maximum, out why);
+        }
+        finally
+        {
+            LeaveBus();
+        }
+    }
+
+    /// <summary>The body of a write, with the bus already claimed.</summary>
+    private static bool WriteBrightness(
         string deviceName,
         uint value,
         uint minimum,
@@ -434,6 +483,24 @@ public static class HardwareBrightness
     /// </summary>
     private static (BrightnessReading? Reading, string? Why) ReadBrightness(IntPtr hMonitor)
     {
+        if (!TryEnterBus())
+        {
+            return (null, "another call is still waiting on the display, so this one was skipped");
+        }
+
+        try
+        {
+            return ReadBrightnessCore(hMonitor);
+        }
+        finally
+        {
+            LeaveBus();
+        }
+    }
+
+    /// <summary>The body of a read, with the bus already claimed.</summary>
+    private static (BrightnessReading? Reading, string? Why) ReadBrightnessCore(IntPtr hMonitor)
+    {
         Task<(BrightnessReading? Reading, string? Why)> read = Task.Run<(BrightnessReading? Reading, string? Why)>(() =>
         {
             lock (Gate)
@@ -448,13 +515,12 @@ public static class HardwareBrightness
                     return ((BrightnessReading?)null, "the driver reports no physical monitor on this display");
                 }
 
-                PHYSICAL_MONITOR[] monitors = new PHYSICAL_MONITOR[count];
-                int stride = Marshal.SizeOf<PHYSICAL_MONITOR>();
                 // The struct carries a by-value string, so it is not blittable and
                 // an [Out] array of them silently fails to copy the handles back:
                 // every hPhysicalMonitor then reads as zero and the monitor looks
                 // like it declined. A raw buffer with the struct read out of it by
                 // hand is the only version of this that actually works.
+                int stride = Marshal.SizeOf<PHYSICAL_MONITOR>();
                 IntPtr buffer = Marshal.AllocHGlobal(stride * (int)count);
                 try
                 {
@@ -468,7 +534,6 @@ public static class HardwareBrightness
                     for (int i = 0; i < count; i++)
                     {
                         PHYSICAL_MONITOR monitor = Marshal.PtrToStructure<PHYSICAL_MONITOR>(IntPtr.Add(buffer, i * stride));
-                        monitors[i] = monitor;
 
                         if (monitor.hPhysicalMonitor == IntPtr.Zero)
                         {

@@ -17,9 +17,8 @@ public sealed class AppLibraryService
         "crashhandler", "report", "vcredist", "redist", "installer", "helper", "launcher", "dotnet", "uninstall"
     };
 
-    private static readonly string[] SkipExtensions = { ".exe" };
-
     /// <summary>
+
     /// Words that mark a registry DisplayName as a maintenance tool rather than a
     /// program the user installed to play.
     /// <para>
@@ -507,8 +506,30 @@ public static class Vdf
         return sections;
     }
 
-    private static void ParseInto(List<string> tokens, ref int index, Dictionary<string, string> target)
+    /// <summary>
+    /// How deep a VDF object may nest before the parse gives up.
+    /// <para>
+    /// Real manifests are two or three deep. Without a cap, a corrupt or
+    /// deliberately hostile appmanifest or libraryfolders file nests far enough
+    /// to run the stack out, and a stack overflow cannot be caught: the process
+    /// dies with no log line and no emergency reset, which for this app means a
+    /// gamma ramp left applied to the screen. Refusing to go deeper turns that
+    /// into a logged failure and a game missing from the list.
+    /// </para>
+    /// </summary>
+    private const int MaxVdfDepth = 32;
+
+    private static void ParseInto(List<string> tokens, ref int index, Dictionary<string, string> target) =>
+        ParseInto(tokens, ref index, target, 0);
+
+    private static void ParseInto(List<string> tokens, ref int index, Dictionary<string, string> target, int depth)
     {
+        if (depth > MaxVdfDepth)
+        {
+            index = tokens.Count;
+            return;
+        }
+
         while (index < tokens.Count)
         {
             string token = tokens[index];
@@ -534,7 +555,11 @@ public static class Vdf
             if (next.Equals("{", StringComparison.Ordinal))
             {
                 index += 2;
-                ParseInto(tokens, ref index, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+
+                // Nested objects were parsed and thrown away, which is all the
+                // fields this app reads need, so the walk stops descending here
+                // rather than building a tree nobody looks at.
+                ParseInto(tokens, ref index, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), depth + 1);
                 continue;
             }
 

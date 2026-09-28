@@ -16,13 +16,10 @@ public sealed class WatchedWindow
     public string ProcessName { get; set; } = string.Empty;
 }
 
-public sealed class ProcessWatcherService
-{
-    private const int SwSkipTaskbar = 0x400;
+    public sealed class ProcessWatcherService
+    {
+        private DispatcherTimer? _timer;
 
-    private const int SwExclude = 0x400;
-
-    private DispatcherTimer? _timer;
 
     private string _lastKey = string.Empty;
 

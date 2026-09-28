@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -106,8 +106,6 @@ public partial class MainWindow : Window
     private bool _suppressDeviceEvents;
 
 
-    /// <summary>Default playback endpoint name, cached for the audio footer.</summary>
-    private string _systemOutput = string.Empty;
 
 
     private string? _captureSlotId;
@@ -228,18 +226,7 @@ public partial class MainWindow : Window
         // back to the brightness they were found at.
         SessionState.Current.RestoreBacklight = () => Backlight.RestoreAll();
 
-        GammaLockBox.IsChecked = _settings.GammaLock;
-        OsdBox.IsChecked = _settings.ShowOsd;
-        AutoSwitchBox.IsChecked = _settings.AutoSwitch;
-        AutoRevertBox.IsChecked = _settings.AutoRevertOnExit;
-        FxPromptBox.IsChecked = _settings.FxPromptDisabled;
-        StartHiddenBox.IsChecked = _settings.StartHidden;
-        CloseToTrayBox.IsChecked = _settings.CloseToTray;
-        StartWithWindowsBox.IsChecked = _startup.IsEnabled;
-        AntiClipBox.IsChecked = _settings.AntiClip;
-        HardwareBrightnessBox.IsChecked = _settings.HardwareBrightnessEnabled;
-        _audio.AntiClipEnabled = _settings.AntiClip;
-        UpdateAntiClipReadout();
+        SyncControlsFromSettings();
 
         _tray = new TrayService();
         _tray.ShowRequested += RestoreFromTray;
@@ -247,7 +234,10 @@ public partial class MainWindow : Window
         _tray.ResetSoundRequested += () => Dispatcher.Invoke(() => _ = _audio.ResetSoundAsync());
         _tray.QuitRequested += QuitApp;
 
-        LoadDevices();
+        // The output list is not filled here. Working it out means reading the
+        // audio engine, which is slow, and doing that before Show() is what made
+        // the window take seconds to appear. FinishStartupAsync does it once the
+        // window is up. Nothing below this line depends on it.
         LoadTune(_workDisplay, _workAudio);
         RefreshPresetBoxes();
         BuildSlots();
@@ -358,6 +348,46 @@ public partial class MainWindow : Window
         Application.Current.Shutdown();
     }
 
+
+    /// <summary>
+    /// The one place the settings switches are told what the profile says.
+    /// <para>
+    /// This used to be written out inline in the constructor, and a restore
+    /// repeated a copy of it with five rows missing. A control left showing the
+    /// old value while the profile held the new one is worse than either on its
+    /// own, because the next save from any interaction writes the stale control
+    /// back and silently undoes the restore. Anything that replaces the profile
+    /// calls this rather than remembering which switches it has to remember.
+    /// </para>
+    /// <para>
+    /// The startup registry entry is the exception and is asked of the system
+    /// rather than the profile, because that is where the truth lives.
+    /// </para>
+    /// </summary>
+    private void SyncControlsFromSettings()
+    {
+        GammaLockBox.IsChecked = _settings.GammaLock;
+        OsdBox.IsChecked = _settings.ShowOsd;
+        AutoSwitchBox.IsChecked = _settings.AutoSwitch;
+        AutoRevertBox.IsChecked = _settings.AutoRevertOnExit;
+        FxPromptBox.IsChecked = _settings.FxPromptDisabled;
+        StartHiddenBox.IsChecked = _settings.StartHidden;
+        CloseToTrayBox.IsChecked = _settings.CloseToTray;
+        AntiClipBox.IsChecked = _settings.AntiClip;
+        BypassBox.IsChecked = BypassToggle.IsEngaged(_settings.EffectsEnabled);
+        HardwareBrightnessBox.IsChecked = _settings.HardwareBrightnessEnabled;
+
+        StartWithWindowsBox.IsChecked = _startup.IsEnabled;
+        _settings.StartWithWindows = _startup.IsEnabled;
+
+        BlueLightBox.SelectedItem = DisplayPreset.BlueLightNames[
+            Math.Clamp(_settings.BlueLightFilter, 0, DisplayPreset.BlueLightNames.Length - 1)];
+
+        _audio.AntiClipEnabled = _settings.AntiClip;
+        _audio.EffectsEnabled = _settings.EffectsEnabled;
+        _display.SetLock(_settings.GammaLock);
+        UpdateAntiClipReadout();
+    }
 
     private static int StartPage()
     {
@@ -479,9 +509,7 @@ public partial class MainWindow : Window
         _display.SetLock(_settings.GammaLock);
 
         UpdateFxBanner();
-        LoadDevices();
-        EnsureUsableAudioOutput();
-        _ = RefreshFxStateAsync(true);
+        _ = FinishStartupAsync();
 
         _stateTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
         _stateTimer.Tick += (s, e) => _ = RefreshFxStateAsync(false);
@@ -572,6 +600,45 @@ public partial class MainWindow : Window
         UpdateFxBanner();
     }
 
+
+    /// <summary>
+    /// The startup work that has to talk to the audio engine.
+    /// <para>
+    /// Enumerating the output devices and repairing a bad default both read the
+    /// engine's state file, and reading it means starting the engine, waiting for
+    /// it, and then polling for the file to change. That is seconds when the
+    /// engine is slow, and it was being done on the dispatcher during load, so
+    /// the window could sit there unresponsive after it had already appeared.
+    /// The window is on screen by now, so the work moves to a worker and the
+    /// controls are filled in when it lands.
+    /// </para>
+    /// </summary>
+    private async Task FinishStartupAsync()
+    {
+        try
+        {
+            // The blocking read, on a worker.
+            List<DeviceChoice> choices = await Task.Run(BuildDeviceChoices);
+            OutputRepair repair = await Task.Run(DetectOutputRepair);
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                LoadDevicesFrom(choices);
+
+                // The list is handed over so applying a startup repair cannot
+                // enumerate the output devices again on the dispatcher. It used to,
+                // twice, which put the freeze back after the window had appeared.
+                EnsureUsableAudioOutput(repair, choices);
+                _ = RefreshFxStateAsync(true);
+                UpdatePreviewPlayback();
+            });
+        }
+        catch (Exception ex)
+        {
+            // Includes the window shutting down underneath the read.
+            TraceLog.Write("STARTUP AUDIO", ex);
+        }
+    }
 
     private void OnNavChanged(object sender, RoutedEventArgs e)
     {
@@ -834,7 +901,11 @@ public partial class MainWindow : Window
         double rounded = Math.Round(value, 2);
         if (Math.Abs(rounded) < 0.0001)
         {
-            return "0";
+            // Formatted like any other value rather than collapsed to a bare "0".
+            // The band faders, the master gain and the balance all came through
+            // here while the effect readouts did not, so one panel showed "0" on
+            // some rows and "0.0" on others for the same state.
+            return (0.0).ToString(format, CultureInfo.InvariantCulture);
         }
 
         string text = rounded.ToString(format, CultureInfo.InvariantCulture);

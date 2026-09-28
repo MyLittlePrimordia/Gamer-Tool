@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Threading;
 using System.Windows;
@@ -14,39 +14,23 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        foreach (string arg in e.Args)
+        // The developer entry points are compiled out of a release build. They
+        // widen what a shipped binary will do on a command line: --makeicon
+        // writes a file to a path the caller names, and --selftest walks the
+        // drive enumerating installed programs and writes to the production log.
+        // Neither is a vulnerability on its own, and both are genuinely useful
+        // while working on the icon and on game scanning, so they are kept behind
+        // a symbol rather than deleted.
+        //
+        // The symbol means these lines are only compiled by a Debug build, so a
+        // Debug build is part of the gate. A Release only check will not notice
+        // when this block stops compiling.
+#if DEBUG
+        if (HandleDeveloperArguments(e.Args))
         {
-            if (arg.Equals("--makeicon", StringComparison.OrdinalIgnoreCase))
-            {
-                string target = GetArg(e.Args, "--makeicon") ?? "GamerTool.ico";
-                if (string.IsNullOrWhiteSpace(target))
-                {
-                    target = "GamerTool.ico";
-                }
-
-                try
-                {
-                    IconFactory.WriteToFile(target);
-                    string preview = Path.ChangeExtension(target, ".preview.png");
-                    IconFactory.WritePreview(preview, 256);
-                    TraceLog.Write("ICON WROTE " + Path.GetFullPath(target) + " " + new FileInfo(target).Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                }
-                catch (Exception ex)
-                {
-                    TraceLog.Write("ICON", ex);
-                }
-
-                Shutdown(0);
-                return;
-            }
-
-            if (arg.Equals("--selftest", StringComparison.OrdinalIgnoreCase))
-            {
-                RunSelfTest();
-                Shutdown(0);
-                return;
-            }
+            return;
         }
+#endif
 
         // Ownership is taken with WaitOne rather than with the constructor's
         // initiallyOwned argument, because "created" only reports whether this
@@ -124,6 +108,50 @@ public partial class App : Application
         }
     }
 
+#if DEBUG
+    /// <summary>
+    /// Runs and exits for the developer flags. Returns true when one of them was
+    /// handled and startup should stop there.
+    /// </summary>
+    private bool HandleDeveloperArguments(string[] args)
+    {
+        foreach (string arg in args)
+        {
+            if (arg.Equals("--makeicon", StringComparison.OrdinalIgnoreCase))
+            {
+                string target = GetArg(args, "--makeicon") ?? "GamerTool.ico";
+                if (string.IsNullOrWhiteSpace(target))
+                {
+                    target = "GamerTool.ico";
+                }
+
+                try
+                {
+                    IconFactory.WriteToFile(target);
+                    string preview = Path.ChangeExtension(target, ".preview.png");
+                    IconFactory.WritePreview(preview, 256);
+                    TraceLog.Write("ICON WROTE " + Path.GetFullPath(target) + " " + new FileInfo(target).Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+                catch (Exception ex)
+                {
+                    TraceLog.Write("ICON", ex);
+                }
+
+                Shutdown(0);
+                return true;
+            }
+
+            if (arg.Equals("--selftest", StringComparison.OrdinalIgnoreCase))
+            {
+                RunSelfTest();
+                Shutdown(0);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static void RunSlotSelfTest()
     {
         try
@@ -199,6 +227,7 @@ public partial class App : Application
         return null;
     }
 
+
     private static void RunSelfTest()
     {
         TraceLog.Write("SELFTEST START");
@@ -240,6 +269,8 @@ public partial class App : Application
             TraceLog.Write("SELFTEST", ex);
         }
     }
+
+#endif
 
     /// <summary>
     /// The crash handler's way out. Goes to the same rolling log as everything
@@ -297,3 +328,5 @@ public partial class App : Application
         base.OnExit(e);
     }
 }
+
+

@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 using Size = System.Windows.Size;
 
 namespace GamerTool.UI;
@@ -88,7 +89,14 @@ public sealed class MarqueeBox : ContentControl
     {
         ClipToBounds = true;
         Focusable = false;
-        LayoutUpdated += (_, _) => Update();
+
+        // Deliberately not LayoutUpdated. That event fires on every layout pass
+        // of the entire visual tree, and there is one of these per preset and per
+        // app dropdown in every slot row, so a dozen of them were being asked
+        // whether anything had changed dozens of times a second for the life of
+        // the process. A size change on this box or on the thing it watches is the
+        // only thing that can change the answer, and both say so directly.
+        SizeChanged += (_, _) => Update();
     }
 
     public override void OnApplyTemplate()
@@ -109,19 +117,25 @@ public sealed class MarqueeBox : ContentControl
         {
             previous.MouseEnter -= OnHostHoverChanged;
             previous.MouseLeave -= OnHostHoverChanged;
+            previous.SizeChanged -= OnWatchedSizeChanged;
         }
         _watched = ReferenceEquals(TemplatedParent, this) ? null : TemplatedParent as FrameworkElement;
         if (_watched is FrameworkElement next)
         {
             next.MouseEnter += OnHostHoverChanged;
             next.MouseLeave += OnHostHoverChanged;
+            next.SizeChanged += OnWatchedSizeChanged;
         }
 
         _lastAvailable = -1;
         _lastNeeded = -1;
         _lastActive = false;
         SyncActive();
+        Update();
     }
+
+    /// <summary>The watched dropdown resizing can change whether the name fits.</summary>
+    private void OnWatchedSizeChanged(object sender, SizeChangedEventArgs e) => Update();
 
 
     /// <summary>
@@ -157,6 +171,30 @@ public sealed class MarqueeBox : ContentControl
 
     private void OnHostHoverChanged(object sender, MouseEventArgs e) => SyncActive();
 
+    /// <summary>
+    /// The name changing is the other half of what has to be noticed.
+    /// <para>
+    /// The box's own size does not move when a longer preset name is selected,
+    /// so a size change on its own says nothing, and the width that decides
+    /// whether the slide is needed comes from the content's measured size, which
+    /// is only final once layout has run. So a content change schedules an update
+    /// after layout rather than doing it inline. It matters most after a restore,
+    /// which swaps every name in the dropdowns at once with nothing under the
+    /// pointer to cause a hover and give the answer away.
+    /// </para>
+    /// </summary>
+    protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
+    {
+        base.OnPropertyChanged(e);
+
+        if (e.Property == ContentProperty)
+        {
+            // Invalidated rather than updated: the new width is not known yet.
+            _lastAvailable = -1;
+            _lastNeeded = -1;
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(Update));
+        }
+    }
 
     private void SyncActive()
     {

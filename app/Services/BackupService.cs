@@ -9,15 +9,27 @@ namespace GamerTool.Services;
 
 public sealed class BackupFile
 {
-    public string Format { get; set; } = BackupService.FormatTag;
+    /// <summary>
+    /// Empty and zero by default, deliberately, and the writer sets both.
+    /// <para>
+    /// These used to default to the real tag and version so a backup could be
+    /// built without naming them. That is exactly what made the file impossible
+    /// to validate: any JSON object at all deserialises into a BackupFile, and
+    /// with the tag and version pre-filled it then looked like a valid one. An
+    /// unrelated file became an empty profile that the app would offer to
+    /// restore over a real one. A tag that has to be written to be believed is
+    /// the whole point of having a tag.
+    /// </para>
+    /// </summary>
+    public string Format { get; set; } = string.Empty;
 
-    public int Version { get; set; } = BackupService.FormatVersion;
+    public int Version { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.Now;
 
     public string CreatedOn { get; set; } = string.Empty;
 
-    public AppSettings Settings { get; set; } = new();
+    public AppSettings? Settings { get; set; }
 }
 
 public sealed class RestoreReport
@@ -125,6 +137,8 @@ public sealed class BackupService
     {
         BackupFile file = new()
         {
+            Format = FormatTag,
+            Version = FormatVersion,
             CreatedOn = Environment.MachineName,
             Settings = settings
         };
@@ -169,12 +183,36 @@ public sealed class BackupService
         }
     }
 
+    /// <summary>
+    /// Members whose presence proves a JSON object is one of this app's own
+    /// profile files rather than some other file that happens to parse.
+    /// <para>
+    /// A settings.json written by a build that predates the backup wrapper is
+    /// still a genuine profile and still worth restoring, so it is accepted
+    /// without a tag. But that path cannot simply trust the shape either, for
+    /// the same reason the tagged path cannot: any JSON object deserialises into
+    /// an empty profile and looks like a real one. So the object has to be shown
+    /// to carry at least one name this app actually writes.
+    /// </para>
+    /// </summary>
+    private static readonly string[] ProfileMarkers =
+    {
+        "Schema", "Slots", "UserHotkeys", "ActiveDisplayPresetId", "ActiveAudioPresetId",
+        "CustomDisplayPresets", "CustomAudioPresets", "AppProfiles", "CustomCombos",
+        "GammaLock", "ShowOsd", "StartHidden", "CloseToTray", "AntiClip", "BlueLightFilter"
+    };
+
     private static AppSettings? Read(string json)
     {
         try
         {
             BackupFile? file = JsonSerializer.Deserialize<BackupFile>(json, Options);
-            if (file is not null && file.Settings is not null && file.Settings.Slots is not null)
+            if (file is not null
+                && string.Equals(file.Format, FormatTag, StringComparison.Ordinal)
+                && file.Version > 0
+                && file.Version <= FormatVersion
+                && file.Settings is not null
+                && file.Settings.Slots is not null)
             {
                 return file.Settings;
             }
@@ -185,11 +223,42 @@ public sealed class BackupService
 
         try
         {
-            return JsonSerializer.Deserialize<AppSettings>(json, Options);
+            AppSettings? bare = JsonSerializer.Deserialize<AppSettings>(json, Options);
+            return bare is not null && CarriesProfileMarkers(json) ? bare : null;
         }
         catch (JsonException)
         {
             return null;
+        }
+    }
+
+    /// <summary>True when the JSON holds at least one name this app writes.</summary>
+    private static bool CarriesProfileMarkers(string json)
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            foreach (JsonProperty property in document.RootElement.EnumerateObject())
+            {
+                foreach (string marker in ProfileMarkers)
+                {
+                    if (string.Equals(property.Name, marker, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 

@@ -1,5 +1,6 @@
 ﻿using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
+using System.Linq;
 using System.Text;
 using Microsoft.Win32;
 
@@ -7,7 +8,18 @@ namespace GamerTool.Services;
 
 public static class MonitorNameResolver
 {
-    private static readonly Dictionary<string, string> Cache = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// Display names already worked out, keyed by device id.
+    /// <para>
+    /// Concurrent because <see cref="Resolve"/> is public and the cache is
+    /// static. It happened to be called only from the UI thread, but nothing
+    /// about the type said so, and a plain dictionary written from two threads
+    /// does not throw, it corrupts. Bounded in practice by the number of display
+    /// connections, and a fallback name is memoised like any other so a monitor
+    /// is not re-read on every scan.
+    /// </para>
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, string> Cache = new(StringComparer.OrdinalIgnoreCase);
 
     public static string Resolve(string? deviceId, string? reportedName, int ordinal)
     {
@@ -18,15 +30,7 @@ public static class MonitorNameResolver
             return fallback;
         }
 
-        string key = deviceId;
-        if (Cache.TryGetValue(key, out string? cached))
-        {
-            return cached;
-        }
-
-        string resolved = FromRegistry(deviceId) ?? FromEdid(deviceId) ?? fallback;
-        Cache[key] = resolved;
-        return resolved;
+        return Cache.GetOrAdd(deviceId, key => FromRegistry(key) ?? FromEdid(key) ?? fallback);
     }
 
     private static bool IsUseful(string? name)
@@ -149,8 +153,9 @@ public static class MonitorNameResolver
             foreach (string sub in baseKey.GetSubKeyNames())
             {
                 using RegistryKey? entry = baseKey.OpenSubKey(sub + @"\Device Parameters");
-                object? raw = entry?.GetValue("EDID");
-                if (raw is not byte[] edid || edid.Length < 128)
+                byte[]? edid = ReadEdidValue(entry?.GetValue("EDID"));
+
+                if (edid is null)
                 {
                     continue;
                 }
@@ -168,6 +173,28 @@ public static class MonitorNameResolver
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The EDID as bytes, whichever shape the registry hands it back.
+    /// <para>
+    /// The value reads back as <c>byte[]</c> in theory and as <c>Object[]</c> in
+    /// practice, and a bare <c>is byte[]</c> test throws the second shape away
+    /// silently, which is what left this file naming a perfectly good panel
+    /// "Screen 1" while the file that reads the same value for the backlight
+    /// probe had already worked round it.
+    /// </para>
+    /// </summary>
+    private static byte[]? ReadEdidValue(object? raw)
+    {
+        return raw switch
+        {
+            byte[] direct when direct.Length >= 128 => direct,
+            object[] boxed when boxed.Length >= 128 => boxed
+                .Select(v => v is byte b ? b : (byte)0)
+                .ToArray(),
+            _ => null
+        };
     }
 
     private static string? ReadDescriptor(byte[] edid, byte tag)

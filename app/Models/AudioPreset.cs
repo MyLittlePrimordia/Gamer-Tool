@@ -268,10 +268,6 @@ public sealed class AudioPreset
 
     public string MasterGainText => (MasterGain >= 0 ? "+" : string.Empty) + MasterGain.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
 
-    public string SpecText => "CLARITY " + ClarityText + "   BASS " + BassBoostText;
-
-    public string CompactSpec => "CLARITY " + ClarityText + "  ·  BASS " + BassBoostText;
-
     public double Band(int index)
     {
         if (index < 0 || index >= Bands.Length)
@@ -282,15 +278,64 @@ public sealed class AudioPreset
         return Bands[index];
     }
 
-    public double[] GainList(int count)
+    /// <summary>
+    /// Pulls every value back inside the range the engine and the sliders accept,
+    /// and drops a stored centre frequency that is not legal for its band.
+    /// <para>
+    /// Same reasoning as <see cref="DisplayPreset.Clamp"/>. The frequency case
+    /// matters more than it looks: a frequency outside its band's window is
+    /// ignored by the engine without a word, so a bad value in a restored file
+    /// produces a fader that looks set and does nothing, and the only clue is
+    /// that the dial and the label disagree.
+    /// </para>
+    /// </summary>
+    public AudioPreset Clamp()
     {
-        double[] list = new double[count];
-        for (int i = 0; i < count; i++)
+        int count = NumBands <= 0 ? PresetBandCount : NumBands;
+
+        for (int i = 0; i < Bands.Length; i++)
         {
-            list[i] = Math.Clamp(Band(i), GainMin, GainMax);
+            Bands[i] = double.IsFinite(Bands[i]) ? Math.Clamp(Bands[i], GainMin, GainMax) : 0.0;
         }
 
-        return list;
+        Clarity = ClampEffect(Clarity);
+        Ambience = ClampEffect(Ambience);
+        Surround = ClampEffect(Surround);
+        DynamicBoost = ClampEffect(DynamicBoost);
+        BassBoost = ClampEffect(BassBoost);
+        MasterGain = ClampRange(MasterGain, MasterGainMin, MasterGainMax, 0.0);
+        VolumeLeveling = ClampRange(VolumeLeveling, LevelingMin, LevelingMax, 0.0);
+        FilterQ = ClampRange(FilterQ, FilterQMin, FilterQMax, 1.0);
+        Balance = ClampRange(Balance, -20.0, 20.0, 0.0);
+
+        if (!HasFrequencyDial(count))
+        {
+            // No dials at this count, so a band has exactly one legal frequency
+            // and anything stored is either that or nothing.
+            if (Frequencies.Length > 0)
+            {
+                Frequencies = Array.Empty<double>();
+            }
+
+            return this;
+        }
+
+        for (int i = 0; i < Frequencies.Length; i++)
+        {
+            BandWindow window = Window(count, i);
+            Frequencies[i] = double.IsFinite(Frequencies[i])
+                ? Math.Clamp(Frequencies[i], window.Min, window.Max)
+                : BandFrequency(count, i);
+        }
+
+        return this;
+    }
+
+    private static double ClampEffect(double value) => ClampRange(value, EffectMin, EffectMax, 0.0);
+
+    private static double ClampRange(double value, double min, double max, double fallback)
+    {
+        return double.IsFinite(value) ? Math.Clamp(value, min, max) : fallback;
     }
 
     public AudioPreset Copy()
@@ -355,13 +400,23 @@ public sealed class AudioPreset
         };
     }
 
+    /// <summary>
+    /// A band centre for a label under a fader.
+    /// <para>
+    /// Whole hertz below a kilohertz, then one decimal place of kilohertz, then
+    /// whole kilohertz. The old rule switched to two decimals below 10 kHz, which
+    /// put five bare integers in a row and then four values like "1.36K" and
+    /// "4.67K" beside them, so one row of ten labels read as two different kinds
+    /// of number. It also implied a precision the band grid does not have: nobody
+    /// tunes a 4666 Hz band to two decimal places of kilohertz.
+    /// </para>
+    /// </summary>
     public static string FormatFrequency(double hz)
     {
         if (hz >= 1000.0)
         {
             double k = hz / 1000.0;
-            string text = k.ToString(k >= 10.0 ? "0" : "0.00", System.Globalization.CultureInfo.InvariantCulture);
-            return text + "K";
+            return k.ToString(k >= 10.0 ? "0" : "0.0", System.Globalization.CultureInfo.InvariantCulture) + "K";
         }
 
         return hz.ToString("0", System.Globalization.CultureInfo.InvariantCulture);

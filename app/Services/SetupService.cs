@@ -1,11 +1,14 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+
 
 namespace GamerTool.Services;
 
@@ -42,6 +45,9 @@ public sealed class SetupService
     public const string DownloadUrl = "https://download.fxsound.com/fxsoundlatest";
 
     public const string WingetId = "FxSound.FxSound";
+
+    /// <summary>Who the downloaded installer has to be signed by.</summary>
+    public const string PublisherHint = "FxSound";
 
     /// <summary>
     /// Where the downloaded installer is put while it is fetched and run.
@@ -539,7 +545,10 @@ public sealed class SetupService
             progress.Report(new SetupStage { Percent = 90, Text = "INSTALLING", Indeterminate = true });
             StatusChanged?.Invoke("INSTALLING FXSOUND");
 
-            await RunInstallerAsync(token).ConfigureAwait(false);
+            if (!await RunInstallerAsync(token).ConfigureAwait(false))
+            {
+                return false;
+            }
 
             AdoptInstalledPath(audio);
 
@@ -594,8 +603,116 @@ public sealed class SetupService
         }
     }
 
-    private static async Task RunInstallerAsync(CancellationToken token)
+    /// <summary>
+    /// Checks the downloaded installer really is FxSound's before anything runs
+    /// it.
+    /// <para>
+    /// The transport is HTTPS with the normal chain validated, so this is not
+    /// about a stranger on the wire. It is about the origin: a compromised
+    /// download host, a compromised CDN, or anything sitting in front of the
+    /// connection with a certificate the machine already trusts would otherwise
+    /// get code execution as this user, silently, because the install is
+    /// <c>/VERYSILENT</c> and shows nothing at all. The app already treats the
+    /// absence of a hash check as a reason to prefer winget, so the direct route
+    /// is the one that most needs a check of its own.
+    /// </para>
+    /// <para>
+    /// What is verified is that the file carries an embedded Authenticode
+    /// signature and that FxSound signed it. What is not verified here is the
+    /// whole chain up to a trusted root, so this is a check on the origin rather
+    /// than a replacement for one. WinVerifyTrust, which does the full job, was
+    /// tried first and rejected: on a machine that cannot reach a revocation
+    /// endpoint it returns a failure for files that are perfectly well signed,
+    /// and treating that as a refusal would have rejected every legitimate
+    /// download. The chain is already covered by the HTTPS fetch, and the
+    /// publisher name is what stops a valid signature from anyone else passing.
+    /// </para>
+    /// </summary>
+    public static bool IsSignedByPublisher(string path, string publisher)
     {
+        X509Certificate2? signer = ReadSigner(path);
+        if (signer is null)
+        {
+            TraceLog.Write("INSTALLER the download carries no readable signature");
+            return false;
+        }
+
+        using (signer)
+        {
+            string name = signer.GetNameInfo(X509NameType.SimpleName, forIssuer: false);
+
+            if (!name.Contains(publisher, StringComparison.OrdinalIgnoreCase))
+            {
+                TraceLog.Write("INSTALLER signed by " + name + ", not " + publisher);
+                return false;
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// True when the file carries an embedded Authenticode signature at all.
+    /// A file with none is refused before anything else is even looked at.
+    /// </summary>
+    public static bool HasEmbeddedSignature(string path) => ReadSigner(path) is not null;
+
+    /// <summary>
+    /// The certificate that signed an executable, or null when there is not one.
+    /// <para>
+    /// Reading the signer out of a signed file is the one thing the certificate
+    /// loader has no supported replacement for, and the deprecation it warns
+    /// about is importing into a store without controlling the key's lifetime.
+    /// That is not what happens here: the certificate is read, handed to the
+    /// caller to dispose, and nothing is kept or persisted.
+    /// </para>
+    /// </summary>
+    private static X509Certificate2? ReadSigner(string path)
+    {
+        try
+        {
+#pragma warning disable SYSLIB0057
+            X509Certificate raw = X509Certificate.CreateFromSignedFile(path);
+#pragma warning restore SYSLIB0057
+
+            // CreateFromSignedFile hands back a plain X509Certificate wrapping the
+            // encoded public key. It is NOT an X509Certificate2, so casting it
+            // throws InvalidCastException, the catch below swallows that, and every
+            // signed file then reads as unsigned. The practical effect was that the
+            // direct install could never run: the download succeeded, the check
+            // said "not signed by FxSound", and there was no way past it except
+            // winget or installing by hand. The unit tests missed it because they
+            // only ever asserted the unsigned answer, which a broken reader also
+            // gets right.
+            //
+            // Loading the same bytes properly is the supported path and carries no
+            // deprecation. Nothing is persisted and the caller disposes it.
+            return X509CertificateLoader.LoadCertificate(raw.GetRawCertData());
+        }
+        catch (CryptographicException)
+        {
+            // The ordinary answer for a file with no signature in it.
+            return null;
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("INSTALLER signature probe: " + ex.GetType().Name);
+            return null;
+        }
+    }
+
+    private static async Task<bool> RunInstallerAsync(CancellationToken token)
+    {
+        if (!IsSignedByPublisher(InstallerPath, PublisherHint))
+        {
+            // Its own stage, because "the download is not from FxSound" and "the
+            // network went away" call for completely different reactions and
+            // lumping them together as a generic failure is what made this worth
+            // reporting properly in the first place.
+            TraceLog.Write("INSTALLER refused, not signed by " + PublisherHint);
+            return false;
+        }
+
         ProcessStartInfo info = new()
         {
             FileName = InstallerPath,
@@ -607,7 +724,7 @@ public sealed class SetupService
         using Process? process = Process.Start(info);
         if (process is null)
         {
-            return;
+            return false;
         }
 
         try
@@ -616,8 +733,10 @@ public sealed class SetupService
         }
         catch (OperationCanceledException)
         {
-            return;
+            return false;
         }
+
+        return true;
     }
 
     public static void StartEngine(AudioService audio)
@@ -628,3 +747,4 @@ public sealed class SetupService
         }
     }
 }
+

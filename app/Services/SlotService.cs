@@ -119,13 +119,39 @@ public sealed class SlotService
         return slots;
     }
 
+    /// <summary>
+    /// Brings a saved slot list up to date, and supplies the shipped one when
+    /// there is nothing to bring up.
+    /// <para>
+    /// The emptiness check is at the top on purpose. It used to sit at the
+    /// bottom, after the legacy combo and app profile passes had each contributed
+    /// slots of their own, which meant a brand new profile came out with four
+    /// legacy combos rather than the six shipped slots, never got the neutral
+    /// Desktop slot at all, and then had those four written to disk, so every
+    /// later launch loaded them too. A restore went the same way and came back
+    /// with four slots the user had never asked for.
+    /// </para>
+    /// <para>
+    /// The combo pass is gone rather than ported. Its four entries pair up
+    /// different presets from the shipped slots under the same names, so
+    /// carrying them across would change what an existing install loads; and
+    /// their ids collide with the shipped ones, so there is nowhere to put them
+    /// without a mapping table. <see cref="ComboPreset"/> is kept only so a
+    /// settings file that still carries custom combos can be read and ignored.
+    /// </para>
+    /// </summary>
     public static List<HotkeySlot> Migrate(AppSettings settings)
     {
+        if (settings.Slots is null || settings.Slots.Count == 0)
+        {
+            return DefaultSlots();
+        }
+
         List<HotkeySlot> slots = new();
         HashSet<string> usedIds = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string> usedKeys = new(StringComparer.OrdinalIgnoreCase);
 
-        foreach (HotkeySlot slot in settings.Slots ?? new List<HotkeySlot>())
+        foreach (HotkeySlot slot in settings.Slots)
         {
             if (string.IsNullOrWhiteSpace(slot.Id))
             {
@@ -145,35 +171,10 @@ public sealed class SlotService
             slots.Add(slot);
         }
 
-        foreach (ComboPreset combo in ComboPreset.Defaults)
-        {
-            string key = HotkeyKey(combo.Hotkey);
-            if (slots.Any(s => string.Equals(HotkeyKey(s.Hotkey), key, StringComparison.OrdinalIgnoreCase)))
-            {
-                continue;
-            }
-
-            string id = combo.Id.Replace("combo_", "slot_", StringComparison.Ordinal);
-            if (usedIds.Contains(id))
-            {
-                continue;
-            }
-
-            usedIds.Add(id);
-            slots.Add(new HotkeySlot
-            {
-                Id = id,
-                Name = combo.Name,
-                DisplayPresetId = combo.DisplayPresetId,
-                AudioPresetId = combo.AudioPresetId,
-                Hotkey = combo.Hotkey,
-                AutoActivate = false,
-                Enabled = true
-            });
-        }
-
         foreach (ComboPreset combo in settings.CustomCombos ?? new List<ComboPreset>())
         {
+            // A custom combo from a build that had them becomes a slot, so
+            // nothing a user made is silently dropped on upgrade.
             string id = combo.Id.StartsWith("slot_", StringComparison.Ordinal) ? combo.Id : AppProfileTools.NewId("slot");
             if (!usedIds.Add(id))
             {
@@ -194,6 +195,18 @@ public sealed class SlotService
 
         foreach (AppProfile profile in settings.AppProfiles ?? new List<AppProfile>())
         {
+            // A profile that already has a slot pointing at it is left alone.
+            // This pass used to run unconditionally and mint a fresh id every
+            // time, so each launch added one more slot per profile and the list
+            // grew without bound.
+            bool already = slots.Any(s => !string.IsNullOrWhiteSpace(profile.ExePath)
+                && string.Equals(s.AppExePath, profile.ExePath, StringComparison.OrdinalIgnoreCase));
+
+            if (already)
+            {
+                continue;
+            }
+
             HotkeySlot slot = new()
             {
                 Id = AppProfileTools.NewId("slot"),
@@ -227,11 +240,6 @@ public sealed class SlotService
             {
                 slot.Hotkey = string.Empty;
             }
-        }
-
-        if (slots.Count == 0)
-        {
-            slots.AddRange(DefaultSlots());
         }
 
         ResolveAutoClaims(slots);
@@ -284,9 +292,42 @@ public sealed class SlotService
         }
     }
 
+    /// <summary>
+    /// The one key identity, delegated to the one canonicaliser. See
+    /// <see cref="HotkeyService.Normalise"/> for why it has to be that and not a
+    /// local string cleanup.
+    /// </summary>
     public static string HotkeyKey(string hotkey)
     {
-        return HotkeyServiceNormalizer.Normalize(hotkey);
+        return HotkeyService.Normalise(hotkey);
+    }
+
+    /// <summary>
+    /// True when the slot's own presets are the ones currently loaded, which is
+    /// what makes a slot key a toggle.
+    /// <para>
+    /// A half that the slot does not set counts as matching. A sound-only slot
+    /// has no screen preset, so comparing that half against whatever screen is
+    /// loaded could never succeed and the key could only ever turn the slot on.
+    /// The same went for a screen-only slot and for the empty preset id a
+    /// deleted slot leaves behind. Such a slot does not own that half of the
+    /// tune, so it cannot be the thing that tells on from off.
+    /// </para>
+    /// </summary>
+    public static bool IsLoaded(HotkeySlot slot, string activeDisplayId, string activeAudioId)
+    {
+        if (!slot.HasWork)
+        {
+            return false;
+        }
+
+        bool screen = string.IsNullOrWhiteSpace(slot.DisplayPresetId)
+            || string.Equals(slot.DisplayPresetId, activeDisplayId, StringComparison.OrdinalIgnoreCase);
+
+        bool sound = string.IsNullOrWhiteSpace(slot.AudioPresetId)
+            || string.Equals(slot.AudioPresetId, activeAudioId, StringComparison.OrdinalIgnoreCase);
+
+        return screen && sound;
     }
 
     public static HashSet<string> TargetProcessNames(IEnumerable<HotkeySlot> slots)
@@ -377,18 +418,5 @@ public sealed class SlotService
         }
 
         return null;
-    }
-}
-
-public static class HotkeyServiceNormalizer
-{
-    public static string Normalize(string hotkey)
-    {
-        if (string.IsNullOrWhiteSpace(hotkey))
-        {
-            return string.Empty;
-        }
-
-        return hotkey.Trim().ToUpperInvariant().Replace("CONTROL", "CTRL").Replace("WINDOWS", "WIN");
     }
 }

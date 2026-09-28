@@ -34,6 +34,9 @@ public sealed class SessionState
 
 public static class EmergencyReset
 {
+    /// <summary>Per-call budget for the exit path. See <see cref="AudioService"/>.</summary>
+    private const int ShutdownWaitMs = 1200;
+
     public static void Run()
     {
         SessionState state = SessionState.Current;
@@ -73,8 +76,15 @@ public static class EmergencyReset
                 if (audio.IsInstalled)
                 {
                     AudioPreset flat = AudioPreset.Flat();
-                    audio.Run(audio.BuildApplyCommand(flat, string.Empty));
-                    audio.Run("--power=0");
+
+                    // The short budget, deliberately. This runs from the exit path
+                    // with no window left to show a wait, and it makes two calls,
+                    // so at the normal budget quitting would hang for seconds
+                    // after the last pixel had gone. The engine is started on its
+                    // way out either way; how long it takes to accept the command
+                    // is not worth the user watching nothing happen.
+                    audio.Run(audio.BuildApplyCommand(flat, string.Empty), ShutdownWaitMs);
+                    audio.Run("--power=0", ShutdownWaitMs);
                 }
             }
 

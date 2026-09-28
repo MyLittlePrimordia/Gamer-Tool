@@ -64,6 +64,15 @@ public partial class MainWindow : Window
 
     private async void OnRestoreClick(object sender, RoutedEventArgs e)
     {
+        await PickAndRestoreAsync();
+    }
+
+    /// <summary>
+    /// Asks for a file and restores it. Split out so a rejected file can offer
+    /// another go without sending the user back to Settings first.
+    /// </summary>
+    private async Task PickAndRestoreAsync()
+    {
         Microsoft.Win32.OpenFileDialog dialog = new()
         {
             Title = "PICK A BACKUP FILE",
@@ -79,8 +88,17 @@ public partial class MainWindow : Window
         AppSettings? incoming = _backups.Import(dialog.FileName, out RestoreReport report, out string error);
         if (incoming is null)
         {
-            MessageBox.Show(this, "That file is not a Gamer Tool backup.", "Gamer Tool", MessageBoxButton.OK, MessageBoxImage.Warning);
             TraceLog.Write("BACKUP IMPORT " + error);
+            ShowResultModal(
+                "NOT A GAMER TOOL BACKUP",
+                error == "FILE NOT FOUND"
+                    ? "That file is not there any more."
+                    : "That file is not a Gamer Tool backup, so there is nothing in it to restore.",
+                failed: true,
+                "Pick another",
+                () => _ = PickAndRestoreAsync(),
+                "Close",
+                () => { });
             return;
         }
 
@@ -93,21 +111,16 @@ public partial class MainWindow : Window
 
         _backups.Repair(incoming, monitors, soundDevices, _appList, _audio.ExePath, report);
 
-        MessageBoxResult answer = MessageBox.Show(
-            this,
-            "Replace everything on this PC with the backup?" + Environment.NewLine + Environment.NewLine
-                + report.Headline + Environment.NewLine + Environment.NewLine
-                + "Slots with a game that is not installed here come back as not set, with auto start off.",
-            "Restore backup",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Question);
-
-        if (answer != MessageBoxResult.Yes)
-        {
-            return;
-        }
-
-        ApplyRestored(incoming, report);
+        // The app's own dialog rather than a Windows one. This is the most
+        // expensive mis-click in the app, and it is also the one that has to look
+        // like the delete-a-preset and reset-the-slots confirmations it sits
+        // beside, so the user gets one warning shape rather than two.
+        ShowConfirmModal(
+            "REPLACE EVERYTHING ON THIS PC?",
+            report.Headline + ". Slots with a game that is not installed here come back as not set, with auto start off.",
+            "Replace",
+            () => ApplyRestored(incoming, report),
+            "Cancel");
     }
 
 
@@ -116,17 +129,16 @@ public partial class MainWindow : Window
         _settings = incoming;
         _audio.ExePath = _settings.FxSoundPath;
 
-        _display.SetLock(_settings.GammaLock);
+        // The backlight service was built holding the profile that was just
+        // replaced, so it is repointed before anything can ask it anything.
+        _backlight?.Rebind(_settings);
+
         _watcher.Stop();
         _hotkeys.Clear();
 
-        GammaLockBox.IsChecked = _settings.GammaLock;
-        OsdBox.IsChecked = _settings.ShowOsd;
-        AutoSwitchBox.IsChecked = _settings.AutoSwitch;
-        StartHiddenBox.IsChecked = _settings.StartHidden;
-        CloseToTrayBox.IsChecked = _settings.CloseToTray;
-        StartWithWindowsBox.IsChecked = _startup.SetEnabled(_settings.StartWithWindows);
-        _settings.StartWithWindows = _startup.IsEnabled;
+        // One call for every switch, so a control cannot be left showing the old
+        // profile's value while the profile holds the new one.
+        SyncControlsFromSettings();
 
         _workDisplay = (FindDisplay(_settings.ActiveDisplayPresetId) ?? DisplayPreset.Flat()).Copy();
         _workAudio = (FindAudio(_settings.ActiveAudioPresetId) ?? AudioPreset.Flat()).Copy();
@@ -140,6 +152,7 @@ public partial class MainWindow : Window
         RegisterHotkeys();
         ApplyWatchState();
         UpdateFxBanner();
+        RefreshBacklightRows();
         _ = RefreshFxStateAsync(true);
         Commit();
 

@@ -1,10 +1,12 @@
-using System;
+﻿using System;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using GamerTool.Models;
 using Brush = System.Windows.Media.Brush;
 using Brushes = System.Windows.Media.Brushes;
 using Color = System.Windows.Media.Color;
@@ -31,6 +33,11 @@ namespace GamerTool.UI;
 public sealed class FrequencyDial : Control
 {
     /// <summary>The dial is a 270 degree arc with the gap at the bottom, like the engine's own control.</summary>
+    /// <summary>
+    /// The white the value dot is drawn in, the same near-white the effect slider
+    /// handles use, so a dial and a Dynamic Boost knob are visibly the same thing.
+    /// </summary>
+    private static readonly Brush KnobFill = Frozen(Color.FromArgb(0xFF, 0xF0, 0xF0, 0xF0));
     private const double StartAngle = 135.0;
 
     private const double SweepAngle = 270.0;
@@ -94,6 +101,38 @@ public sealed class FrequencyDial : Control
     private double _dragCentreX;
     private double _dragCentreY;
 
+    /// <summary>
+    /// The window this band sits in, held as hertz so the automation peer has a
+    /// real range to report rather than a step count it would have to describe in
+    /// words. Set once when the strip is built.
+    /// </summary>
+    private double _minimumHertz = 62.0;
+
+    private double _maximumHertz = 85.0;
+
+    /// <summary>Where the dial currently is, in hertz, for the read-back.</summary>
+    private double _currentHertz;
+
+    /// <summary>Names the band, so a screen reader says which band it is on.</summary>
+    public void SetBand(string name, double minimumHertz, double maximumHertz, double currentHertz)
+    {
+        _minimumHertz = minimumHertz;
+        _maximumHertz = maximumHertz;
+        _currentHertz = currentHertz;
+        System.Windows.Automation.AutomationProperties.SetName(this, name);
+        TrackHertz();
+    }
+
+    /// <summary>Where the dial is now, in hertz, for a readout or a tooltip.</summary>
+    public double CurrentHertz => _currentHertz;
+
+    /// <summary>Moves the dial to a frequency rather than to a detent.</summary>
+    public void SetStepFromHertz(double hertz)
+    {
+        double clamped = Math.Clamp(hertz, _minimumHertz, _maximumHertz);
+        SetStep(AudioPreset.StepFromFrequency(new AudioPreset.BandWindow(_minimumHertz, _maximumHertz), clamped));
+    }
+
     public FrequencyDial()
     {
         // A hand, because the value is turned rather than dragged on a line.
@@ -116,7 +155,18 @@ public sealed class FrequencyDial : Control
         }
 
         SetValue(StepProperty, clamped);
+        TrackHertz();
         ValueChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Keeps the hertz the automation peer reports in step with the detent, since
+    /// the two are related by the band window rather than by a fixed ratio.
+    /// </summary>
+    private void TrackHertz()
+    {
+        _currentHertz = AudioPreset.FrequencyFromStep(
+            new AudioPreset.BandWindow(_minimumHertz, _maximumHertz), Step);
     }
 
     protected override void OnRender(DrawingContext dc)
@@ -136,17 +186,42 @@ public sealed class FrequencyDial : Control
         }
 
         var centre = new Point(RenderSize.Width / 2.0, RenderSize.Height / 2.0);
-        double thickness = Math.Max(1.6, size * 0.11);
+        // About a tenth of the dial's width. Thinner than this and a 38 pixel dial is
+    // a hairline that reads as a scratch on the panel; much thicker and the arc
+    // becomes a solid wedge with a gap in it rather than a dial with a reading.
+    double thickness = Math.Max(2.6, size * 0.14);
         double max = Math.Max(Steps, 1.0);
         double fraction = Math.Clamp(Step / max, 0.0, 1.0);
 
-        // The empty part of the ring, so the dial reads as a range rather than a dot on nothing.
-        var track = new Pen(new SolidColorBrush(Color.FromArgb(46, 255, 255, 255)), thickness)
-        {
-            StartLineCap = PenLineCap.Round,
-            EndLineCap = PenLineCap.Round
-        };
-        dc.DrawGeometry(null, track, Arc(centre, radius, StartAngle, SweepAngle));
+        // The empty ring depends only on the size, and the dot's position only on
+        // the fraction, so both are cached. Dragging a dial repaints at mouse
+        // rate, and rebuilding a path, two pens and a brush on every one of those
+        // is a lot of garbage for a picture that is mostly the same shape.
+  RingMetrics metrics = new(radius, thickness);
+  if (_cachedRing is null || !_cachedRing.Metrics.Matches(metrics))
+  {
+  // The engine draws the empty part of its band dials in a dark maroon, the same
+  // pink as the filled part but almost out of it, rather than in a neutral grey.
+  // A grey ring on a black panel read as a separate control that happened to sit
+  // under the fader; a maroon one reads as part of the same dial.
+  // The unfilled part of the ring is the same grey the effect sliders use for their
+  // grooves, so a dial and a Dynamic Boost handle read as the same family of
+  // control. It was a dark maroon, which made the dial a second pink object
+  // competing with the arc instead of a track with a value on it.
+  var track = new Pen(new SolidColorBrush(Color.FromArgb(0xFF, 0x33, 0x33, 0x33)), thickness)
+  {
+  StartLineCap = PenLineCap.Round,
+  EndLineCap = PenLineCap.Round
+  };
+  track.Freeze();
+
+
+            _cachedRing = new CachedRing(metrics, track, Arc(centre, radius, StartAngle, SweepAngle));
+        }
+
+        // The empty part of the ring, so the dial reads as a range rather than a
+        // dot on nothing.
+        dc.DrawGeometry(null, _cachedRing.Pen, _cachedRing.Geometry);
 
         // How much of the ring is filled.
         if (fraction > 0.0001)
@@ -156,17 +231,34 @@ public sealed class FrequencyDial : Control
                 StartLineCap = PenLineCap.Round,
                 EndLineCap = PenLineCap.Round
             };
+            active.Freeze();
             dc.DrawGeometry(null, active, Arc(centre, radius, StartAngle, SweepAngle * fraction));
         }
 
         // The dot, sitting on the ring at the current angle.
         double angle = (StartAngle + (SweepAngle * fraction)) * Math.PI / 180.0;
         var dot = new Point(centre.X + (radius * Math.Cos(angle)), centre.Y + (radius * Math.Sin(angle)));
-        double dotSize = Math.Max(2.4, size * 0.20);
-        dc.DrawEllipse(Accent, null, dot, dotSize / 2.0, dotSize / 2.0);
+        double dotSize = Math.Max(3.0, size * 0.17);
+        dc.DrawEllipse(KnobFill, null, dot, dotSize / 2.0, dotSize / 2.0);
     }
 
+    private readonly record struct RingMetrics(double Radius, double Thickness)
+    {
+        public bool Matches(RingMetrics other) => Radius.Equals(other.Radius) && Thickness.Equals(other.Thickness);
+    }
+
+    private sealed record CachedRing(RingMetrics Metrics, Pen Pen, Geometry Geometry);
+
+    private CachedRing? _cachedRing;
+
     /// <summary>Builds an arc as a path, so the ring can be drawn with round caps like the engine's.</summary>
+    private static Brush Frozen(Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
+    }
+
     private static Geometry Arc(Point centre, double radius, double startDegrees, double sweepDegrees)
     {
         double start = startDegrees * Math.PI / 180.0;
@@ -288,7 +380,114 @@ public sealed class FrequencyDial : Control
         e.Handled = true;
     }
 
-    protected override AutomationPeer OnCreateAutomationPeer() => new FrameworkElementAutomationPeer(this);
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+
+        // The dial was focusable but did nothing with a key, so a keyboard could
+        // land on it and go nowhere. Arrows step one detent, Page steps ten, Home
+        // and End go to the ends, which is what every other dial in Windows does.
+        double step = 1.0;
+        bool handled = true;
+
+        switch (e.Key)
+        {
+            case Key.Left:
+            case Key.Down:
+                SetStep(Step - step);
+                break;
+
+            case Key.Right:
+            case Key.Up:
+                SetStep(Step + step);
+                break;
+
+            case Key.PageDown:
+                SetStep(Step - 10.0);
+                break;
+
+            case Key.PageUp:
+                SetStep(Step + 10.0);
+                break;
+
+            case Key.Home:
+                SetStep(0.0);
+                break;
+
+            case Key.End:
+                SetStep(Steps);
+                break;
+
+            default:
+                handled = false;
+                break;
+        }
+
+        e.Handled = handled;
+    }
+
+    /// <summary>
+    /// Reports the dial as a named, described control rather than an anonymous
+    /// one.
+    /// <para>
+    /// It used to return a bare <see cref="FrameworkElementAutomationPeer"/>,
+    /// which announces a control with no name and nothing else, so a screen reader
+    /// said the word for the class and stopped. The name says which band, and the
+    /// help text says what the keys do and what range the band is allowed to move
+    /// in, which is the part someone tuning by ear actually needs.
+    /// </para>
+    /// <para>
+    /// WPF has no range peer that will read from a plain control: its own
+    /// RangeBaseAutomationPeer only reports on a real RangeBase, which this is
+    /// not. Getting a live range would mean deriving from Slider and reworking
+    /// the hit testing and the drag, which is a rewrite of the control players
+    /// touch most, for a screen reader improvement. The keyboard support and the
+    /// description are the parts worth having for that price.
+    /// </para>
+    /// </summary>
+    protected override AutomationPeer OnCreateAutomationPeer() => new DialAutomationPeer(this);
+
+    private sealed class DialAutomationPeer : FrameworkElementAutomationPeer
+    {
+        private readonly FrequencyDial _owner;
+
+        public DialAutomationPeer(FrequencyDial owner)
+            : base(owner)
+        {
+            _owner = owner;
+        }
+
+        protected override AutomationControlType GetAutomationControlTypeCore()
+        {
+            return AutomationControlType.Slider;
+        }
+
+        protected override string GetClassNameCore()
+        {
+            return nameof(FrequencyDial);
+        }
+
+        protected override string GetNameCore()
+        {
+            string label = System.Windows.Automation.AutomationProperties.GetName(_owner);
+            return string.IsNullOrWhiteSpace(label) ? "Band frequency" : label;
+        }
+
+        protected override string GetHelpTextCore()
+        {
+            string help = System.Windows.Automation.AutomationProperties.GetHelpText(_owner);
+            if (!string.IsNullOrWhiteSpace(help))
+            {
+                return help;
+            }
+
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "Between {0:0.##} and {1:0.##} hertz. Arrow keys step by one hertz, page keys by ten, home and end go to the ends.",
+                _owner._minimumHertz,
+                _owner._maximumHertz);
+        }
+    }
 
     /// <summary>Reads the dial's detent, used when saving a tune.</summary>
     public double CurrentStep => Step;
@@ -296,3 +495,4 @@ public sealed class FrequencyDial : Control
     /// <summary>A short description of the dial for screen readers and tooltips.</summary>
     public string Describe(double hertz) => hertz.ToString("0.##", CultureInfo.InvariantCulture) + " Hz";
 }
+

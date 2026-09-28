@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -25,9 +25,8 @@ public static class FxPresetFile
     /// <summary>The preset name the app writes under and then selects.</summary>
     public const string PresetName = "GamerTool";
 
-    private const string TemplateAsset = "GamerTool.assets.fac-template.fac";
-
     /// <summary>Where FxSound keeps its presets.</summary>
+
     public static string PresetsFolder => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "FxSound",
@@ -39,7 +38,7 @@ public static class FxPresetFile
     /// written. A failure here is not fatal: the scalar settings can still be
     /// pushed, only the curve is lost, so the caller carries on.
     /// </summary>
-    public static string? Write(AudioPreset preset, IReadOnlyList<double> frequencies)
+    public static string? Write(AudioPreset preset, IReadOnlyList<double> frequencies, bool effectsEnabled)
     {
         try
         {
@@ -64,7 +63,7 @@ public static class FxPresetFile
                     : AudioPreset.BandFrequency(count, i);
             }
 
-            RewriteEq(lines, freqs, gains);
+            RewriteEq(lines, freqs, gains, effectsEnabled);
             SetName(lines, PresetName);
 
             Directory.CreateDirectory(PresetsFolder);
@@ -99,7 +98,7 @@ public static class FxPresetFile
     }
 
 
-    private static void RewriteEq(List<string> lines, IReadOnlyList<double> frequencies, IReadOnlyList<double> gains)
+    private static void RewriteEq(List<string> lines, IReadOnlyList<double> frequencies, IReadOnlyList<double> gains, bool effectsEnabled)
     {
         int start = lines.FindIndex(l => l.Contains("Number of EQ Bands", StringComparison.Ordinal));
         if (start < 0)
@@ -109,7 +108,23 @@ public static class FxPresetFile
 
         var rebuilt = new List<string>(lines.GetRange(0, start));
         rebuilt.Add(frequencies.Count + ": Number of EQ Bands");
-        rebuilt.Add("1: On/Off Flag");
+        // The engine ignores this field when it loads a preset, so it does not
+        // decide what the user hears. It is written to match the effect being
+        // asked for anyway, so the file is not describing the opposite of what the
+        // app just did to the engine, and so the two cannot drift apart unnoticed.
+        //
+        // 1 is on and 0 is off, which is the opposite of what the line reads
+        // like. Every preset FxSound itself writes carries a 1, the shipped
+        // template carries a 1, and the version of this app that predates the
+        // bypass wrote a 1 unconditionally and had a working equaliser. So the
+        // bypass writes a 0.
+        //
+        // The curve itself does not come from here. The band gains below travel
+        // separately, in a --set_band_gain command of their own after the preset
+        // has been selected, because the engine applies a selected preset's gains
+        // after it has finished parsing the command line, so gains sent in the
+        // same invocation are discarded.
+        rebuilt.Add((effectsEnabled ? "1" : "0") + ": On/Off Flag");
 
         for (int i = 0; i < frequencies.Count; i++)
         {

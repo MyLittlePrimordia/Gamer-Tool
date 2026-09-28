@@ -1,15 +1,9 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 using GamerTool.Services;
 
 namespace GamerTool.Models;
-
-public sealed class UserHotkey
-{
-    public string TargetId { get; set; } = string.Empty;
-
-    public string Hotkey { get; set; } = string.Empty;
-}
 
 public sealed class AppSettings
 {
@@ -61,6 +55,42 @@ public sealed class AppSettings
     public bool AntiClip { get; set; } = true;
 
     /// <summary>
+    /// Whether the equaliser bands and the effects reach the output at all.
+    /// <c>true</c> is the normal state: the curve and the effects are live.
+    /// <c>false</c> is the bypass: every band flat and every effect at zero.
+    /// </summary>
+    /// <remarks>
+    /// Global rather than part of a saved tune, so throwing it holds for whatever
+    /// sound preset is loaded next.
+    /// <para>
+    /// Named for what it holds rather than for the switch that drives it, because
+    /// the two genuinely point opposite ways: the user throws a BYPASS, and this
+    /// goes false. It used to be called <c>BypassEnabled</c> while behaving
+    /// exactly like this, so <c>BypassEnabled == true</c> meant the chain was
+    /// live. The setting was therefore named for the opposite of its own value,
+    /// the BYPASS switch on the audio tab was wired straight to it, and the app
+    /// came up with BYPASS showing on while the equaliser was running. A name
+    /// that has to be second-guessed is worse than no name, so the setting says
+    /// what it holds and <see cref="Services.BypassToggle"/> holds the one
+    /// deliberate inversion between it and the switch.
+    /// </para>
+    /// </remarks>
+    public bool EffectsEnabled { get; set; } = true;
+
+    /// <summary>
+    /// The name <see cref="EffectsEnabled"/> had before it was renamed, read once
+    /// and then discarded so an existing profile keeps the state it was saved in.
+    /// </summary>
+    /// <remarks>
+    /// The rename changed the name, not the meaning, so the value carries across
+    /// untouched. A profile that never had the key leaves this null and keeps the
+    /// initialiser, which is processing on, so an install that predates the switch
+    /// is not left muted.
+    /// </remarks>
+    [JsonPropertyName("BypassEnabled")]
+    public bool? LegacyBypassEnabled { get; set; }
+
+    /// <summary>
     /// Hardware backlight control over DDC/CI. Off by default and opt-in on
     /// purpose: it talks to the monitor over I2C, which is the one thing in this
     /// app that can upset hardware. The software gamma ramp is unaffected either
@@ -96,8 +126,6 @@ public sealed class AppSettings
 
     public List<HotkeySlot> Slots { get; set; } = new();
 
-    public List<UserHotkey> UserHotkeys { get; set; } = new();
-
     public List<DisplayPreset> CustomDisplayPresets { get; set; } = new();
 
     public List<AudioPreset> CustomAudioPresets { get; set; } = new();
@@ -113,7 +141,7 @@ public sealed class AppSettings
     public int Schema { get; set; }
 
     /// <summary>The version this build writes.</summary>
-    public const int CurrentSchema = 1;
+    public const int CurrentSchema = 2;
 
     /// <summary>
     /// Brings settings written by an older build up to date.
@@ -122,6 +150,11 @@ public sealed class AppSettings
     /// neutral ones. Without this an existing install would carry on opening on
     /// the old tune, because a changed property initialiser says nothing about
     /// values that were already saved.
+    /// <para>
+    /// Schema 2 is the <c>BypassEnabled</c> to <see cref="EffectsEnabled"/>
+    /// rename. Nothing about the value changed, so this only has to move it across
+    /// under the new name.
+    /// </para>
     /// </summary>
     public void Migrate()
     {
@@ -136,105 +169,39 @@ public sealed class AppSettings
             ActiveAudioPresetId = "flat";
         }
 
+        if (Schema < 2)
+        {
+            AdoptLegacyBypass();
+        }
+
         Schema = CurrentSchema;
     }
 
-    public string? GetHotkey(string targetId)
+    /// <summary>
+    /// Folds a pre-rename <c>BypassEnabled</c> key into <see cref="EffectsEnabled"/>,
+    /// then forgets it so it is not written back out on every save.
+    /// </summary>
+    /// <remarks>
+    /// Safe to call more than once, and safe to call on a profile that never had
+    /// the key. <see cref="ProfileManager.Normalize"/> calls it on every load as
+    /// well as from here, because restoring a backup replaces the whole profile
+    /// without passing through the startup migration, and a restored profile has
+    /// to keep its bypass state for the same reason a loaded one does.
+    /// </remarks>
+    public void AdoptLegacyBypass()
     {
-        for (int i = 0; i < UserHotkeys.Count; i++)
+        if (!LegacyBypassEnabled.HasValue)
         {
-            if (string.Equals(UserHotkeys[i].TargetId, targetId, StringComparison.OrdinalIgnoreCase))
-            {
-                return UserHotkeys[i].Hotkey;
-            }
+            return;
         }
 
-        return HotkeyDefaults.Get(targetId);
+        // Straight copy, not an inversion. The old name was wrong and the value was
+        // not: BypassEnabled == true already meant the bands and effects were
+        // live, which is what EffectsEnabled == true means.
+        EffectsEnabled = LegacyBypassEnabled.Value;
+        LegacyBypassEnabled = null;
     }
 
-    public void SetHotkey(string targetId, string hotkey)
-    {
-        for (int i = 0; i < UserHotkeys.Count; i++)
-        {
-            if (string.Equals(UserHotkeys[i].TargetId, targetId, StringComparison.OrdinalIgnoreCase))
-            {
-                UserHotkeys[i].Hotkey = hotkey;
-                return;
-            }
-        }
 
-        UserHotkeys.Add(new UserHotkey { TargetId = targetId, Hotkey = hotkey });
-    }
 }
 
-public static class HotkeyDefaults
-{
-    public static string Get(string targetId)
-    {
-        if (targetId.StartsWith("combo_", StringComparison.OrdinalIgnoreCase))
-        {
-            switch (targetId)
-            {
-                case "combo_tactical":
-                    return "ALT+1";
-                case "combo_royale":
-                    return "ALT+2";
-                case "combo_story":
-                    return "ALT+3";
-                case "combo_night":
-                    return "ALT+4";
-            }
-        }
-
-        if (targetId.StartsWith("display_", StringComparison.OrdinalIgnoreCase))
-        {
-            int number = NumberOf(targetId, DisplayPreset.Defaults);
-            if (number > 0)
-            {
-                return "CTRL+ALT+" + number.ToString();
-            }
-        }
-
-        if (targetId.StartsWith("audio_", StringComparison.OrdinalIgnoreCase))
-        {
-            int number = NumberOf(targetId, AudioPreset.Defaults);
-            if (number > 0)
-            {
-                return "CTRL+SHIFT+" + number.ToString();
-            }
-        }
-
-        return string.Empty;
-    }
-
-    public static string TargetId(string kind, string presetId)
-    {
-        return kind + "_" + presetId;
-    }
-
-    private static int NumberOf(string targetId, IReadOnlyList<DisplayPreset> presets)
-    {
-        for (int i = 0; i < presets.Count; i++)
-        {
-            if (string.Equals(TargetId("display", presets[i].Id), targetId, StringComparison.OrdinalIgnoreCase))
-            {
-                return i + 1;
-            }
-        }
-
-        return 0;
-    }
-
-    private static int NumberOf(string targetId, IReadOnlyList<AudioPreset> presets)
-    {
-        for (int i = 0; i < presets.Count; i++)
-        {
-            if (string.Equals(TargetId("audio", presets[i].Id), targetId, StringComparison.OrdinalIgnoreCase))
-            {
-                return i + 1;
-            }
-        }
-
-        return 0;
-    }
-}

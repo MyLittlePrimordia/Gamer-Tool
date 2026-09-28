@@ -35,6 +35,22 @@ jobs:
       - name: Build (warnings are errors)
         run: dotnet build app/GamerTool.csproj -c Release --no-restore -warnaserror
 
+      # The release build is the one that ships, but the developer flags behind
+      # #if DEBUG are only compiled here. Without this a change that breaks the
+      # debug build stays green until someone goes looking for it, which is
+      # exactly the sort of thing that quietly rots. Cheap, so keep it.
+      - name: Build Debug (developer flags)
+        run: dotnet build app/GamerTool.csproj -c Debug --no-restore -warnaserror
+
+      # The unit tests cover the parts that decide what a new user sees, what a
+      # restore is allowed to replace, and what reaches the screen and the
+      # engine. They run before the publish so a regression stops the release
+      # rather than reaching a download.
+      - name: Test
+        run: |
+          dotnet restore tests/GamerTool.Tests/GamerTool.Tests.csproj
+          dotnet test tests/GamerTool.Tests/GamerTool.Tests.csproj -c Release --no-restore -warnaserror -v minimal
+
       # Single file, self contained, compressed. The publish settings live in
       # GamerTool.csproj so the local and CI builds cannot drift apart.
       - name: Publish Standalone Executable
@@ -55,6 +71,15 @@ jobs:
           name: GamerTool-Standalone
           path: ./publish/GamerTool.exe
           if-no-files-found: error
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GamerTool-Tests
+          path: tests/GamerTool.Tests/TestResults
+          if-no-files-found: ignore
+          retention-days: 7
 
       # Keeps a single rolling "latest" release whose EXE is replaced on every
       # push, so the permanent download URL stays stable:

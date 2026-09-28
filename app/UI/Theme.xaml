@@ -1,5 +1,6 @@
-<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib"
                     xmlns:ui="clr-namespace:GamerTool.UI">
 
     <!-- ============================================================
@@ -8,6 +9,48 @@
          pixels off. Surfaces step up in tiny increments (#070707, #0E0E0E)
          so depth is readable without ever looking like a grey panel.
          ============================================================ -->
+    <!-- ============================================================
+         RADIUS SCALE
+         There were ten corner radii in use across the app and no rule
+         behind any of them: 14 on the frame, 13 on the frame's clip
+         and the nav track, 12 on the modal, 10 on surfaces, 9 on the
+         nav pills, 8 on controls, 7 on wells and pickers, 6 on chips and
+         menus, and 4 on two badges, one of which was hardcoded in C#.
+         Four values cover every one of those roles, and a fifth is
+         derived from the frame for the clip that has to line up with it.
+         ============================================================ -->
+    <CornerRadius x:Key="RadiusFrame">14</CornerRadius>
+    <CornerRadius x:Key="RadiusSurface">10</CornerRadius>
+    <CornerRadius x:Key="RadiusControl">8</CornerRadius>
+    <CornerRadius x:Key="RadiusChip">4</CornerRadius>
+    <!-- The window's content is clipped to the frame's own shape, one pixel in,
+         so the rounding has to be the frame's rounding less that pixel. Deriving
+         it here rather than restating the arithmetic in a comment is what stops
+         the two drifting apart the next time the frame changes. -->
+    <CornerRadius x:Key="RadiusClip">13</CornerRadius>
+
+    <!-- ============================================================
+         HOVER
+         Three different hovers for the same idea: a solid fill on the
+         buttons, five percent white on the nav pills, four percent on
+         the list rows and eight percent on the small pills. One fill
+         and one overlay, and the alpha is the same everywhere. -->
+    <SolidColorBrush x:Key="HoverFill" Color="#171717" />
+    <SolidColorBrush x:Key="HoverOverlay" Color="#0AFFFFFF" />
+    <SolidColorBrush x:Key="HoverOverlayStrong" Color="#14FFFFFF" />
+
+    <SolidColorBrush x:Key="DisabledOpacityBrush" Color="#FFFFFF" />
+    <sys:Double x:Key="DisabledOpacity">0.35</sys:Double>
+    <sys:Double x:Key="PressedOpacity">0.65</sys:Double>
+
+    <!-- The focus ring. Every focusable control in the app showed nothing at all
+         when reached by keyboard, and most could not be reached by keyboard in
+         the first place because their styles set Focusable to false. The ring is
+         a light neutral rather than any tab accent so it reads the same on all
+         four tabs, and it is brighter than every surface it lands on. -->
+    <SolidColorBrush x:Key="FocusRing" Color="#EAFBF7" />
+    <SolidColorBrush x:Key="FocusRingFill" Color="#1AFFFFFF" />
+
     <SolidColorBrush x:Key="AppBg" Color="#000000" />
     <SolidColorBrush x:Key="PageBg" Color="#000000" />
     <SolidColorBrush x:Key="CardBg" Color="#070707" />
@@ -58,15 +101,6 @@
         <Setter Property="SnapsToDevicePixels" Value="True" />
     </Style>
 
-    <!-- Page heading. Small on purpose: the nav pill already names the tab. -->
-    <Style x:Key="PageTitle" TargetType="TextBlock">
-        <Setter Property="FontFamily" Value="{StaticResource SansDisplay}" />
-        <Setter Property="FontSize" Value="16" />
-        <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="Foreground" Value="{StaticResource TextHi}" />
-        <Setter Property="VerticalAlignment" Value="Center" />
-    </Style>
-
     <!-- All-caps micro label used for card headings. -->
     <Style x:Key="SectionHeader" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource Sans}" />
@@ -110,23 +144,15 @@
         <Setter Property="Background" Value="{StaticResource CardBg}" />
         <Setter Property="BorderBrush" Value="{StaticResource Line}" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusSurface}" />
         <Setter Property="Padding" Value="14" />
-    </Style>
-
-    <Style x:Key="InnerCard" TargetType="Border">
-        <Setter Property="Background" Value="{StaticResource WellBg}" />
-        <Setter Property="BorderBrush" Value="{StaticResource Line}" />
-        <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="8" />
-        <Setter Property="Padding" Value="10" />
     </Style>
 
     <Style x:Key="Well" TargetType="Border">
         <Setter Property="Background" Value="{StaticResource WellBg}" />
         <Setter Property="BorderBrush" Value="{StaticResource Line}" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusControl}" />
         <Setter Property="Padding" Value="10" />
     </Style>
 
@@ -153,7 +179,7 @@
         <Setter Property="Background" Value="#000000" />
         <Setter Property="BorderBrush" Value="{StaticResource Line}" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusSurface}" />
         <Setter Property="Padding" Value="10" />
         <Setter Property="ClipToBounds" Value="True" />
     </Style>
@@ -172,7 +198,7 @@
 
     <Style x:Key="Tile" TargetType="Border">
         <Setter Property="Background" Value="{StaticResource CardBg}" />
-        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusSurface}" />
         <Setter Property="Padding" Value="12" />
     </Style>
 
@@ -207,14 +233,20 @@
          Only the plate is shared. The three rows that use it carry different
          contents and differ in whether the whole row or just the control is the
          click target, so each still writes its own five column grid inside. -->
-    <Style x:Key="ActionRow" TargetType="Border">
-        <Setter Property="Height" Value="40" />
-        <Setter Property="CornerRadius" Value="8" />
+  <Style x:Key="ActionRow" TargetType="Border">
+    <Setter Property="Height" Value="40" />
+    <!-- Same gap as OptionRow and for the same reason: these rows are in the
+         same list as the switches, so a different rhythm would be visible as a
+         jog where one kind of row gives way to the other. That is the job the
+         dividers used to do, and they were three lines that earned none. -->
+    <Setter Property="Margin" Value="0,4,0,0" />
+
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusControl}" />
         <Setter Property="Padding" Value="8,0" />
         <Setter Property="Background" Value="Transparent" />
         <Style.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-                <Setter Property="Background" Value="#0AFFFFFF" />
+                <Setter Property="Background" Value="{StaticResource HoverOverlay}" />
             </Trigger>
         </Style.Triggers>
     </Style>
@@ -230,11 +262,10 @@
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Foreground" Value="#D0D0D0" />
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="Focusable" Value="False" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border Background="Transparent">
+                    <Border x:Name="Bd" Background="Transparent" BorderBrush="Transparent" BorderThickness="1">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                     <ControlTemplate.Triggers>
@@ -243,6 +274,11 @@
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
                             <Setter Property="Foreground" Value="#7DEFFA" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource FocusRingFill}" />
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+                            <Setter TargetName="Bd" Property="BorderThickness" Value="1" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -254,7 +290,7 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border Background="Transparent">
+                    <Border x:Name="Bd" Background="Transparent" BorderBrush="Transparent" BorderThickness="1">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                     <ControlTemplate.Triggers>
@@ -263,6 +299,11 @@
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
                             <Setter Property="Foreground" Value="#FFB4B4" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource FocusRingFill}" />
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+                            <Setter TargetName="Bd" Property="BorderThickness" Value="1" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -283,14 +324,13 @@
         <Setter Property="Tag" Value="0" />
         <Setter Property="Glyph" Value="desktop" />
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="Focusable" Value="False" />
         <Setter Property="Width" Value="86" />
         <Setter Property="Height" Value="46" />
         <Setter Property="Margin" Value="3" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ui:NavPill">
-                    <Border x:Name="Bg" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" CornerRadius="9">
+                    <Border x:Name="Bg" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" CornerRadius="{StaticResource RadiusControl}">
                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                             <ui:EmojiImage HorizontalAlignment="Center" Width="23" Height="23" Stretch="Uniform" Glyph="{TemplateBinding Glyph}" />
                             <TextBlock x:Name="Label" Text="Display" Margin="0,2,0,0" HorizontalAlignment="Center"
@@ -307,6 +347,10 @@
                             <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource AccentDisplay}" />
                             <Setter TargetName="Label" Property="Foreground" Value="{StaticResource AccentDisplay}" />
                         </Trigger>
+<Trigger Property="IsKeyboardFocusWithin" Value="True">
+<Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+<Setter TargetName="Bg" Property="BorderThickness" Value="2" />
+</Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
@@ -317,14 +361,13 @@
         <Setter Property="Tag" Value="1" />
         <Setter Property="Glyph" Value="speaker" />
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="Focusable" Value="False" />
         <Setter Property="Width" Value="86" />
         <Setter Property="Height" Value="46" />
         <Setter Property="Margin" Value="3" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ui:NavPill">
-                    <Border x:Name="Bg" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" CornerRadius="9">
+                    <Border x:Name="Bg" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" CornerRadius="{StaticResource RadiusControl}">
                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                             <ui:EmojiImage HorizontalAlignment="Center" Width="23" Height="23" Stretch="Uniform" Glyph="{TemplateBinding Glyph}" />
                             <TextBlock x:Name="Label" Text="Audio" Margin="0,2,0,0" HorizontalAlignment="Center"
@@ -341,6 +384,10 @@
                             <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource AccentAudio}" />
                             <Setter TargetName="Label" Property="Foreground" Value="{StaticResource AccentAudio}" />
                         </Trigger>
+<Trigger Property="IsKeyboardFocusWithin" Value="True">
+<Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+<Setter TargetName="Bg" Property="BorderThickness" Value="2" />
+</Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
@@ -351,14 +398,13 @@
         <Setter Property="Tag" Value="2" />
         <Setter Property="Glyph" Value="key" />
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="Focusable" Value="False" />
         <Setter Property="Width" Value="86" />
         <Setter Property="Height" Value="46" />
         <Setter Property="Margin" Value="3" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ui:NavPill">
-                    <Border x:Name="Bg" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" CornerRadius="9">
+                    <Border x:Name="Bg" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" CornerRadius="{StaticResource RadiusControl}">
                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                             <ui:EmojiImage HorizontalAlignment="Center" Width="23" Height="23" Stretch="Uniform" Glyph="{TemplateBinding Glyph}" />
                             <TextBlock x:Name="Label" Text="Hotkeys" Margin="0,2,0,0" HorizontalAlignment="Center"
@@ -375,6 +421,10 @@
                             <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource AccentHotkeys}" />
                             <Setter TargetName="Label" Property="Foreground" Value="{StaticResource AccentHotkeys}" />
                         </Trigger>
+<Trigger Property="IsKeyboardFocusWithin" Value="True">
+<Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+<Setter TargetName="Bg" Property="BorderThickness" Value="2" />
+</Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
@@ -385,14 +435,13 @@
         <Setter Property="Tag" Value="3" />
         <Setter Property="Glyph" Value="gear" />
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="Focusable" Value="False" />
         <Setter Property="Width" Value="86" />
         <Setter Property="Height" Value="46" />
         <Setter Property="Margin" Value="3" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ui:NavPill">
-                    <Border x:Name="Bg" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" CornerRadius="9">
+                    <Border x:Name="Bg" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" CornerRadius="{StaticResource RadiusControl}">
                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                             <ui:EmojiImage HorizontalAlignment="Center" Width="23" Height="23" Stretch="Uniform" Glyph="{TemplateBinding Glyph}" />
                             <TextBlock x:Name="Label" Text="Settings" Margin="0,2,0,0" HorizontalAlignment="Center"
@@ -409,6 +458,10 @@
                             <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource AccentSettings}" />
                             <Setter TargetName="Label" Property="Foreground" Value="{StaticResource AccentSettings}" />
                         </Trigger>
+<Trigger Property="IsKeyboardFocusWithin" Value="True">
+<Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+<Setter TargetName="Bg" Property="BorderThickness" Value="2" />
+</Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
@@ -426,7 +479,6 @@
         <Setter Property="BorderBrush" Value="{StaticResource Line}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="Focusable" Value="False" />
         <Setter Property="Height" Value="30" />
         <Setter Property="MinWidth" Value="0" />
         <Setter Property="Padding" Value="14,0" />
@@ -438,7 +490,7 @@
                             Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="8"
+                            CornerRadius="{StaticResource RadiusControl}"
                             Padding="{TemplateBinding Padding}">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
                                           TextElement.FontFamily="{TemplateBinding FontFamily}"
@@ -446,18 +498,23 @@
                                           TextElement.FontWeight="{TemplateBinding FontWeight}"
                                           TextElement.Foreground="{TemplateBinding Foreground}" />
                     </Border>
-                    <ControlTemplate.Triggers>
-                        <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource Hover}" />
-                            <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource LineStrong}" />
-                        </Trigger>
-                        <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="Bd" Property="Opacity" Value="0.65" />
-                        </Trigger>
-                        <Trigger Property="IsEnabled" Value="False">
-                            <Setter TargetName="Bd" Property="Opacity" Value="0.32" />
-                        </Trigger>
-                    </ControlTemplate.Triggers>
+                      <ControlTemplate.Triggers>
+                          <Trigger Property="IsMouseOver" Value="True">
+                              <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverFill}" />
+                              <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource LineStrong}" />
+                          </Trigger>
+                          <Trigger Property="IsPressed" Value="True">
+                              <Setter TargetName="Bd" Property="Opacity" Value="{StaticResource PressedOpacity}" />
+                          </Trigger>
+                          <Trigger Property="IsEnabled" Value="False">
+                              <Setter TargetName="Bd" Property="Opacity" Value="{StaticResource DisabledOpacity}" />
+                          </Trigger>
+                          <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                              <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+                              <Setter TargetName="Bd" Property="BorderThickness" Value="2" />
+                          </Trigger>
+                      </ControlTemplate.Triggers>
+
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
@@ -474,17 +531,10 @@
         <Setter Property="Foreground" Value="{StaticResource TextMid}" />
     </Style>
 
-    <Style x:Key="WarnButton" TargetType="Button" BasedOn="{StaticResource BaseButton}">
-        <Setter Property="Background" Value="#3A2A08" />
-        <Setter Property="Foreground" Value="{StaticResource Amber}" />
-        <Setter Property="BorderBrush" Value="#6B4E10" />
-    </Style>
-
     <!-- Vector icon button. The glyph is a stroked outline scaled inside a
          Viewbox, so one 24 unit path reads correctly at any button size. -->
     <Style x:Key="IconButton" TargetType="ui:IconButton">
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="Focusable" Value="False" />
         <Setter Property="Width" Value="30" />
         <Setter Property="Height" Value="30" />
         <Setter Property="MinWidth" Value="0" />
@@ -499,40 +549,51 @@
                 <ControlTemplate TargetType="ui:IconButton">
                     <Border x:Name="Bd" Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8">
-                        <!-- The glyph is centred explicitly on all three axes
-                             rather than left to the Viewbox, which was measured
-                             putting every icon about two pixels down and to the
-                             right of the middle of its own button. -->
-                        <Grid Background="Transparent">
-                            <Viewbox Width="{TemplateBinding IconSize}" Height="{TemplateBinding IconSize}"
-                                     Stretch="Uniform"
-                                     HorizontalAlignment="Center" VerticalAlignment="Center">
-                                <!-- Measured correction. Every glyph was landing about
-                                     2.3 units down and to the right of the middle of
-                                     its own button, and that offset survived changing
-                                     the alignments, the wrapping and the device pixel
-                                     snapping, so it is corrected here explicitly
-                                     rather than left to look almost right. -->
-                                <Viewbox.RenderTransform>
-                                    <TranslateTransform X="-2.3" Y="-2.3" />
-                                </Viewbox.RenderTransform>
-                                <Path x:Name="Glyph" Data="{TemplateBinding Icon}"
-                                      Stroke="{TemplateBinding Foreground}"
-                                      StrokeThickness="1.7" StrokeLineJoin="Round" Fill="Transparent"
-                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Viewbox>
-                        </Grid>
+                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{StaticResource RadiusControl}">
+          <!-- The glyph is centred on all three axes, and IconNudge is
+               applied to the Viewbox rather than to the path inside it.
+               Both details were arrived at by measuring the rendered
+               button rather than by looking at it.
+
+               The nudge belongs on the Viewbox because that is the
+               element whose size is IconSize, so a correction there is
+               in the same units the measurement was taken in. On the
+               path it would be a canvas unit scaled by whatever factor
+               the Viewbox happened to apply, which is not a number
+               anyone can check by reading it.
+
+               What it corrects is the difference between the middle of
+               the bounding box and the middle of the ink, which are
+               not the same thing: a magnifier is a ring with a thin
+               handle, so most of its mass sits up and to the left. Those
+               offsets are in Icons.cs, measured, and the largest is
+               about a pixel. -->
+          <Grid Background="Transparent">
+            <Viewbox Width="{TemplateBinding IconSize}" Height="{TemplateBinding IconSize}"
+                     Stretch="Uniform"
+                     RenderTransform="{TemplateBinding IconNudge}"
+                     HorizontalAlignment="Center" VerticalAlignment="Center">
+              <Path x:Name="Glyph" Data="{TemplateBinding Icon}"
+                    Stroke="{TemplateBinding Foreground}"
+                    StrokeThickness="1.7" StrokeLineJoin="Round" Fill="Transparent"
+                    HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Viewbox>
+          </Grid>
+
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource Hover}" />
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverFill}" />
                             <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource LineStrong}" />
                             <Setter Property="Foreground" Value="{StaticResource TextHi}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter TargetName="Bd" Property="Opacity" Value="0.3" />
+                            <Setter TargetName="Bd" Property="Opacity" Value="{StaticResource DisabledOpacity}" />
                         </Trigger>
+<Trigger Property="IsKeyboardFocusWithin" Value="True">
+<Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+<Setter TargetName="Bd" Property="BorderThickness" Value="2" />
+</Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
@@ -546,7 +607,6 @@
     <Style x:Key="ModernSlider" TargetType="Slider">
         <Setter Property="Height" Value="20" />
         <Setter Property="IsMoveToPointEnabled" Value="True" />
-        <Setter Property="Focusable" Value="False" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="Template">
             <Setter.Value>
@@ -584,6 +644,11 @@
                                                     <Setter TargetName="Knob" Property="Height" Value="13" />
                                                 </Trigger>
                                                 <Trigger Property="IsDragging" Value="True">
+                                                    <Setter TargetName="Ring" Property="Opacity" Value="1" />
+                                                    <Setter TargetName="Knob" Property="Width" Value="13" />
+                                                    <Setter TargetName="Knob" Property="Height" Value="13" />
+                                                </Trigger>
+                                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
                                                     <Setter TargetName="Ring" Property="Opacity" Value="1" />
                                                     <Setter TargetName="Knob" Property="Width" Value="13" />
                                                     <Setter TargetName="Knob" Property="Height" Value="13" />
@@ -634,7 +699,6 @@
     <Style x:Key="ModernSliderBipolar" TargetType="Slider">
         <Setter Property="Height" Value="20" />
         <Setter Property="IsMoveToPointEnabled" Value="True" />
-        <Setter Property="Focusable" Value="False" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="Template">
             <Setter.Value>
@@ -714,6 +778,11 @@
                                                     <Setter TargetName="Knob" Property="Width" Value="13" />
                                                     <Setter TargetName="Knob" Property="Height" Value="13" />
                                                 </Trigger>
+                                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                                    <Setter TargetName="Ring" Property="Opacity" Value="1" />
+                                                    <Setter TargetName="Knob" Property="Width" Value="13" />
+                                                    <Setter TargetName="Knob" Property="Height" Value="13" />
+                                                </Trigger>
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
                                     </Thumb.Template>
@@ -745,7 +814,13 @@
          spilling out of it. -->
     <Style x:Key="BandSliderVertical" TargetType="Slider">
         <Setter Property="IsSnapToTickEnabled" Value="True" />
-        <Setter Property="TickFrequency" Value="0.5" />
+        <!-- A quarter of a decibel. This is the app's choice and not a limit in the
+             engine: the live push formats a gain with one decimal and the preset
+             file with two, so a finer step is carried all the way. A tenth was
+             available too and is finer than the roughly one decibel that most
+             people can actually hear on a band, so a quarter is the useful
+             resolution rather than the finest one. -->
+        <Setter Property="TickFrequency" Value="0.25" />
         <Setter Property="Orientation" Value="Vertical" />
         <Setter Property="Focusable" Value="True" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
@@ -774,7 +849,7 @@
                                  track has been measured. Narrower than the solid
                                  groove the colour trims use, because the engine's
                                  band line is a fine dash rather than a bar. -->
-                            <Canvas x:Name="DashHost" Width="3" HorizontalAlignment="Center" />
+                            <Canvas x:Name="DashHost" Width="2" HorizontalAlignment="Center" />
                         </Grid>
 
                         <Grid Width="5" HorizontalAlignment="Center">
@@ -846,44 +921,55 @@
 
 
                         <Track x:Name="PART_Track" Width="{TemplateBinding Width}" HorizontalAlignment="Center">
-                            <Track.DecreaseRepeatButton>
-                                <RepeatButton Command="Slider.DecreaseLarge" Focusable="False" IsTabStop="False">
-                                    <RepeatButton.Template>
-                                        <ControlTemplate TargetType="RepeatButton">
-                                            <Border Background="Transparent" />
-                                        </ControlTemplate>
-                                    </RepeatButton.Template>
-                                </RepeatButton>
-                            </Track.DecreaseRepeatButton>
-                            <Track.Thumb>
-                                <Thumb>
-                                    <Thumb.Template>
-                                        <ControlTemplate TargetType="Thumb">
-                                            <!-- A ring rather than the old flat dash, to match
-                                                 FxSound's equaliser. Eleven pixels is the
-                                                 largest that still fits the twelve pixel
-                                                 fader a 31 band strip gets, so the knob
-                                                 looks the same at every band count. -->
-                                            <Grid Background="Transparent" Width="{TemplateBinding Width}" Height="22">
-                                                <Ellipse x:Name="Ring" Width="11" Height="11"
-                                                         VerticalAlignment="Center" HorizontalAlignment="Center"
-                                                         Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}" />
-                                                <Ellipse x:Name="Hole" Width="5" Height="5"
-                                                         VerticalAlignment="Center" HorizontalAlignment="Center"
-                                                         Fill="#0B0B0B" />
-                                            </Grid>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="Ring" Property="Width" Value="13" />
-                                                    <Setter TargetName="Ring" Property="Height" Value="13" />
-                                                    <Setter TargetName="Hole" Property="Fill" Value="#000000" />
-                                                </Trigger>
-                                                <Trigger Property="IsDragging" Value="True">
-                                                    <Setter TargetName="Ring" Property="Width" Value="13" />
-                                                    <Setter TargetName="Ring" Property="Height" Value="13" />
-                                                    <Setter TargetName="Hole" Property="Fill" Value="#000000" />
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
+              <Track.DecreaseRepeatButton>
+                <RepeatButton Command="Slider.DecreaseLarge" Focusable="False" IsTabStop="False">
+                  <RepeatButton.Template>
+                    <ControlTemplate TargetType="RepeatButton">
+                      <Border Background="Transparent" />
+                    </ControlTemplate>
+                  </RepeatButton.Template>
+                </RepeatButton>
+              </Track.DecreaseRepeatButton>
+              <Track.Thumb>
+                <!-- Named so the window can ask the thumb where it actually is.
+                     A vertical Track keeps the thumb's centre half a thumb inside
+                     each end, so the knob cannot reach the very top or the very
+                     bottom of the band area, and the equaliser curve has to be
+                     drawn to the knob rather than the other way round. The knob is
+                     deliberately not hidden or shrunk to get that travel: it is
+                     the slider's drag handle, and a hidden one is not hit tested,
+                     which silently stops the band responding to the mouse. -->
+                <Thumb x:Name="BandThumb" Width="{TemplateBinding Width}">
+                  <Thumb.Template>
+                    <ControlTemplate TargetType="Thumb">
+                      <!-- A solid white knob, the same handle the effect sliders use,
+                         so the band faders and a Clarity or Dynamic Boost slider
+                         read as one set of controls.
+                         It used to be a ring with a black dot in the middle. The
+                         black was a fix for a different problem: with the centre
+                         left open, the dashed band line showed straight through
+                         the knob as it was dragged past. Filling it solid fixes
+                         that better than the black dot did, because an opaque disc
+                         hides the line completely instead of making the hole look
+                         deliberate. Fourteen pixels rather than the effect sliders'
+                         eleven, because this sits on a tall vertical fader where a
+                         smaller handle is harder to line up with a band. -->
+                    <Grid Background="Transparent" Width="{TemplateBinding Width}" Height="22">
+                      <Ellipse x:Name="Ring" Width="14" Height="14"
+                               VerticalAlignment="Center" HorizontalAlignment="Center"
+                               Fill="#F0F0F0" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="Ring" Property="Width" Value="16" />
+                        <Setter TargetName="Ring" Property="Height" Value="16" />
+                      </Trigger>
+                      <Trigger Property="IsDragging" Value="True">
+                        <Setter TargetName="Ring" Property="Width" Value="16" />
+                        <Setter TargetName="Ring" Property="Height" Value="16" />
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+
                                         </ControlTemplate>
                                     </Thumb.Template>
                                 </Thumb>
@@ -913,29 +999,31 @@
         </Setter>
     </Style>
 
-    <!-- Three 40px-tall colour trims sit side by side, so they read as a
-         compact group instead of a third column of long sliders. -->
-    <Style x:Key="TrimSlider" TargetType="Slider" BasedOn="{StaticResource ModernSlider}">
-        <Setter Property="Height" Value="46" />
-        <Setter Property="VerticalAlignment" Value="Bottom" />
-    </Style>
+    <!-- ==================== SWITCHES ====================
 
-    <!-- ==================== SWITCHES ==================== -->
+         One switch, one set of numbers, one set of states. It used to exist twice:
+         once as a standalone toggle and once inlined in the settings list's row,
+         because a template trigger cannot read a custom property back off its own
+         templated parent. The sizes had already drifted apart, and so had the
+         behaviour, which is why the anti-clip switch on the Audio tab was rose
+         while every switch in Settings was green with no way to ask otherwise.
 
-    <Style x:Key="ModernToggle" TargetType="CheckBox">
-        <Setter Property="Foreground" Value="{StaticResource AccentSettings}" />
+         The Accent is set by the style, not read off the templated parent, so both
+         places can point at this one template. -->
+
+    <Style x:Key="SwitchTrack" TargetType="ui:SwitchToggle">
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="Focusable" Value="False" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="Template">
             <Setter.Value>
-                <ControlTemplate TargetType="CheckBox">
+                <ControlTemplate TargetType="ui:SwitchToggle">
                     <Border x:Name="Track" Width="34" Height="20" CornerRadius="10"
                             Background="#141414" BorderBrush="{StaticResource LineStrong}" BorderThickness="1">
                         <Ellipse x:Name="Knob" Width="12" Height="12" Fill="#767676" HorizontalAlignment="Left" Margin="3,0,0,0" />
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsChecked" Value="True">
-                            <Setter TargetName="Track" Property="Background" Value="{Binding Foreground, RelativeSource={RelativeSource TemplatedParent}}" />
+                            <Setter TargetName="Track" Property="Background" Value="{Binding Accent, RelativeSource={RelativeSource TemplatedParent}}" />
                             <Setter TargetName="Track" Property="BorderBrush" Value="Transparent" />
                             <Setter TargetName="Knob" Property="Fill" Value="#04231A" />
                             <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right" />
@@ -945,7 +1033,11 @@
                             <Setter TargetName="Track" Property="Opacity" Value="0.82" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter TargetName="Track" Property="Opacity" Value="0.35" />
+                            <Setter TargetName="Track" Property="Opacity" Value="{StaticResource DisabledOpacity}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="Track" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+                            <Setter TargetName="Track" Property="BorderThickness" Value="2" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -953,18 +1045,23 @@
         </Setter>
     </Style>
 
+
     <!-- Emoji + label + switch. One click anywhere on the row flips it. The whole
          row is the hit area, and the emoji keeps its own colour when the row is
          on or off so the setting still reads at a glance. -->
+  <Style x:Key="OptionRow" TargetType="ui:OptionToggle">
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Height" Value="40" />
+    <!-- The gap between rows lives here rather than on each row in the list, so
+         that every row is spaced identically by construction. It used to be set
+         on the first two rows only, which left the third sitting flush against
+         the second and the list with a step in it halfway down. -->
+    <Setter Property="Margin" Value="0,4,0,0" />
 
-    <Style x:Key="OptionRow" TargetType="ui:OptionToggle">
-        <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="Focusable" Value="False" />
-        <Setter Property="Height" Value="40" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ui:OptionToggle">
-                    <Border x:Name="Bg" Background="Transparent" CornerRadius="8" Padding="8,0">
+                    <Border x:Name="Bg" Background="Transparent" CornerRadius="{StaticResource RadiusControl}" Padding="8,0">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
@@ -979,26 +1076,25 @@
                             <TextBlock Grid.Column="2" VerticalAlignment="Center" Text="{TemplateBinding Label}"
                                        FontFamily="{StaticResource Sans}" FontSize="12"
                                        Foreground="{TemplateBinding Foreground}" TextTrimming="CharacterEllipsis" />
-                            <Border x:Name="Track" Grid.Column="4" Width="34" Height="20" CornerRadius="10"
-                                    Background="#141414" BorderBrush="{StaticResource LineStrong}" BorderThickness="1">
-                                <Ellipse x:Name="Knob" Width="12" Height="12" Fill="#767676" HorizontalAlignment="Left" Margin="3,0,0,0" />
-                            </Border>
+
+                            <!-- The shared switch, not a second copy of it. The row's
+                                 accent comes from Accent rather than being hardcoded,
+                                 so this list can be a different colour from the
+                                 standalone toggles if it ever needs to be. -->
+                            <ui:SwitchToggle Grid.Column="4" Style="{StaticResource SwitchTrack}"
+                                              Accent="{StaticResource AccentSettings}"
+                                              IsChecked="{Binding IsChecked, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}" />
                         </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bg" Property="Background" Value="#0AFFFFFF" />
-                        </Trigger>
-                        <Trigger Property="IsChecked" Value="True">
-                            <Setter TargetName="Track" Property="Background" Value="{StaticResource AccentSettings}" />
-                            <Setter TargetName="Track" Property="BorderBrush" Value="Transparent" />
-                            <Setter TargetName="Knob" Property="Fill" Value="#04231A" />
-                            <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right" />
-                            <Setter TargetName="Knob" Property="Margin" Value="0,0,3,0" />
+                            <Setter TargetName="Bg" Property="Background" Value="{StaticResource HoverOverlay}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Foreground" Value="{StaticResource TextLow}" />
-                            <Setter TargetName="Track" Property="Opacity" Value="0.35" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="Bg" Property="Background" Value="{StaticResource FocusRingFill}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -1007,6 +1103,7 @@
         <Setter Property="FontFamily" Value="{StaticResource Sans}" />
         <Setter Property="Foreground" Value="{StaticResource TextHi}" />
     </Style>
+
 
     <!-- ==================== INPUTS ==================== -->
 
@@ -1024,16 +1121,17 @@
             <Setter.Value>
                 <ControlTemplate TargetType="TextBox">
                     <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="7">
+                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{StaticResource RadiusControl}">
                         <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center" />
                     </Border>
                     <ControlTemplate.Triggers>
-                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                            <Setter TargetName="Bd" Property="BorderBrush" Value="#2A9D92" />
-                        </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="Bd" Property="Opacity" Value="0.5" />
                         </Trigger>
+<Trigger Property="IsKeyboardFocusWithin" Value="True">
+<Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+<Setter TargetName="Bd" Property="BorderThickness" Value="2" />
+</Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
@@ -1099,14 +1197,13 @@
         <Setter Property="FontSize" Value="11.5" />
         <Setter Property="Foreground" Value="{StaticResource TextHi}" />
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="Focusable" Value="False" />
         <Setter Property="Height" Value="28" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ComboBox">
                     <Grid>
                         <Border x:Name="Bd" Background="{StaticResource WellBg}" BorderBrush="{StaticResource Line}"
-                                BorderThickness="1" CornerRadius="7" Padding="9,0">
+                                BorderThickness="1" CornerRadius="{StaticResource RadiusControl}" Padding="9,0">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -1133,7 +1230,7 @@
                                VerticalOffset="4" IsOpen="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}}"
                                PopupAnimation="Fade" Focusable="False">
                             <Border Background="#0A0A0A" BorderBrush="{StaticResource LineStrong}" BorderThickness="1"
-                                    CornerRadius="8" Padding="4"
+                                    CornerRadius="{StaticResource RadiusControl}" Padding="4"
                                     MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}">
                                 <ScrollViewer MaxHeight="300" VerticalScrollBarVisibility="Auto">
                                     <ItemsPresenter />
@@ -1148,6 +1245,10 @@
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="Bd" Property="Opacity" Value="0.45" />
                         </Trigger>
+<Trigger Property="IsKeyboardFocusWithin" Value="True">
+<Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+<Setter TargetName="Bd" Property="BorderThickness" Value="2" />
+</Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
@@ -1171,7 +1272,7 @@
     <DataTemplate x:Key="PresetChoiceItem">
         <StackPanel Orientation="Horizontal">
             <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
-            <Border Margin="7,0,0,0" CornerRadius="4" Padding="5,1" VerticalAlignment="Center"
+            <Border Margin="7,0,0,0" CornerRadius="{StaticResource RadiusChip}" Padding="5,1" VerticalAlignment="Center"
                     Background="#1C1C1C"
                     Visibility="{Binding BuiltIn, Converter={StaticResource ThemeInverseBool}}">
                 <TextBlock Text="YOURS" FontSize="8.5" FontWeight="SemiBold"
@@ -1188,7 +1289,7 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ComboBoxItem">
-                    <Border x:Name="Bd" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="{StaticResource RadiusControl}" Padding="{TemplateBinding Padding}">
                         <ContentPresenter TextElement.FontFamily="{TemplateBinding FontFamily}"
                                           TextElement.FontSize="{TemplateBinding FontSize}"
                                           TextElement.Foreground="{TemplateBinding Foreground}" />
@@ -1219,10 +1320,6 @@
         <Setter Property="Padding" Value="2" />
         <Setter Property="HorizontalAlignment" Value="Center" />
         <Setter Property="VerticalAlignment" Value="Center" />
-    </Style>
-
-    <Style x:Key="ToolBar" TargetType="Border">
-        <Setter Property="Background" Value="Transparent" />
     </Style>
 
     <Style x:Key="StatusBar" TargetType="Border">
@@ -1259,83 +1356,28 @@
         <Setter Property="FontFamily" Value="{StaticResource Emoji}" />
         <Setter Property="FontSize" Value="12" />
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="Focusable" Value="False" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border x:Name="Bg" Background="{TemplateBinding Background}" CornerRadius="6">
+                    <Border x:Name="Bg" Background="{TemplateBinding Background}" CornerRadius="{StaticResource RadiusControl}">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bg" Property="Background" Value="#14FFFFFF" />
+                            <Setter TargetName="Bg" Property="Background" Value="{StaticResource HoverOverlayStrong}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="Bg" Property="Background" Value="{StaticResource FocusRingFill}" />
+                            <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+                            <Setter TargetName="Bg" Property="BorderThickness" Value="1" />
                         </Trigger>
                     </ControlTemplate.Triggers>
+
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
     </Style>
 
-    <!-- The day and night pair. Two pixels of padding rather than three so the
-         track comes out exactly 30 tall, matching the 30 tall play button in the
-         audio card's header. The two cards then have identical inner geometry,
-         so the preview and the spectrum boxes sit in the same place. -->
-    <Style x:Key="PillTrack" TargetType="Border">
-        <Setter Property="Background" Value="#0A0A0A" />
-        <Setter Property="BorderBrush" Value="{StaticResource Line}" />
-        <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="8" />
-        <Setter Property="Padding" Value="2" />
-    </Style>
-
-    <!-- ==================== SCROLLBAR ====================
-         Only ever reached as a safety net: the pages are sized so nothing
-         overflows, but a user can pile on unlimited custom presets and slots. -->
-    <Style x:Key="ModernScroll" TargetType="ScrollBar">
-        <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Width" Value="8" />
-        <Setter Property="Template">
-            <Setter.Value>
-                <ControlTemplate TargetType="ScrollBar">
-                    <Grid Background="Transparent">
-                        <Track x:Name="PART_Track" IsDirectionReversed="True">
-                            <Track.Thumb>
-                                <Thumb>
-                                    <Thumb.Template>
-                                        <ControlTemplate TargetType="Thumb">
-                                            <Border Background="#2E2E2E" CornerRadius="3" Width="4" HorizontalAlignment="Center" />
-                                        </ControlTemplate>
-                                    </Thumb.Template>
-                                </Thumb>
-                            </Track.Thumb>
-                            <Track.IncreaseRepeatButton>
-                                <RepeatButton Command="ScrollBar.PageDownCommand" Focusable="False">
-                                    <RepeatButton.Template>
-                                        <ControlTemplate TargetType="RepeatButton">
-                                            <Border Background="Transparent" />
-                                        </ControlTemplate>
-                                    </RepeatButton.Template>
-                                </RepeatButton>
-                            </Track.IncreaseRepeatButton>
-                            <Track.DecreaseRepeatButton>
-                                <RepeatButton Command="ScrollBar.PageUpCommand" Focusable="False">
-                                    <RepeatButton.Template>
-                                        <ControlTemplate TargetType="RepeatButton">
-                                            <Border Background="Transparent" />
-                                        </ControlTemplate>
-                                    </RepeatButton.Template>
-                                </RepeatButton>
-                            </Track.DecreaseRepeatButton>
-                        </Track>
-                    </Grid>
-                </ControlTemplate>
-            </Setter.Value>
-        </Setter>
-    </Style>
-
-    <!-- Make the thin dark scrollbar the default everywhere, including the
-         dropdown popups, so no stock light-grey bar can ever show up. -->
-    <Style TargetType="ScrollBar" BasedOn="{StaticResource ModernScroll}" />
 
     <!-- Deliberately visible slim bar, used only on the Hotkeys tab, which is the
          one page allowed to scroll because the slot list has no natural ceiling. -->
@@ -1388,6 +1430,17 @@
         </Setter>
     </Style>
 
+
+    <!-- ==================== SCROLLBAR ====================
+         One scrollbar for the whole app. There used to be two, differing
+         only in ways nobody could see: an 8 pixel track with a 4 pixel bar
+         against a 10 pixel track with a 3 pixel bar. Two designs for one
+         control is one too many, and the slim one's comment claimed it
+         was only on the Hotkeys tab when Settings was using it too. The
+         implicit style has to come after the keyed one it is based on,
+         because a StaticResource resolves in declaration order. -->
+    <Style TargetType="ScrollBar" BasedOn="{StaticResource SlimScroll}" />
+
     <Style TargetType="ScrollViewer">
         <Setter Property="VerticalScrollBarVisibility" Value="Auto" />
         <Setter Property="HorizontalScrollBarVisibility" Value="Disabled" />
@@ -1409,7 +1462,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="ToolTip">
                     <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{StaticResource RadiusControl}" Padding="{TemplateBinding Padding}">
                         <ContentPresenter />
                     </Border>
                 </ControlTemplate>
@@ -1418,3 +1471,11 @@
     </Style>
 
 </ResourceDictionary>
+
+
+
+
+
+
+
+

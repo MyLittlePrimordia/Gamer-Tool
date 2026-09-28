@@ -23,9 +23,8 @@ public sealed class DisplayService
 {
     private const int RampSize = 256;
 
-    private const int RampWords = RampSize * 3;
-
     private readonly Dictionary<string, Ramp> _originalRamps = new(StringComparer.OrdinalIgnoreCase);
+
 
     private readonly List<string> _monitors = new();
 
@@ -101,9 +100,6 @@ public sealed class DisplayService
 
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
-
-    [DllImport("user32.dll")]
-    private static extern int GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
 
     public event Action<string>? StatusChanged;
 
@@ -412,11 +408,12 @@ public sealed class DisplayService
         IntPtr hdc = CreateDC("DISPLAY", device, null, IntPtr.Zero);
         if (hdc == IntPtr.Zero)
         {
-            hdc = CreateDC("DISPLAY", null, null, IntPtr.Zero);
-        }
-
-        if (hdc == IntPtr.Zero)
-        {
+            // No fallback to the default display. Opening the unnamed DC gives
+            // the primary monitor, so a write meant for the second screen would
+            // land on the first, and the original ramp read back from it would be
+            // filed under the second device's name, leaving the reset path with
+            // the wrong screen's curve. Failing here says which screen is the
+            // problem instead of quietly tinting the wrong one.
             StatusChanged?.Invoke("NO SCREEN");
             return false;
         }
@@ -508,7 +505,7 @@ public sealed class DisplayService
         Working = DisplayPreset.Flat();
         ActiveName = "STANDARD";
         _dirty = false;
-        StatusChanged?.Invoke(any ? "SCREEN RESET" : "SCREEN RESET");
+        StatusChanged?.Invoke(any ? "SCREEN RESET" : "NOTHING TO RESET");
         return any;
     }
 
@@ -551,15 +548,13 @@ public sealed class DisplayService
         }
 
         _tick++;
+
         IntPtr foreground = GetForegroundWindow();
         bool changed = foreground != _lastForeground;
-        if (changed)
-        {
-            GetWindowThreadProcessId(foreground, out _);
-        }
-
         _lastForeground = foreground;
+
         if (changed || _dirty || _tick % 2 == 0)
+
         {
             Push();
         }

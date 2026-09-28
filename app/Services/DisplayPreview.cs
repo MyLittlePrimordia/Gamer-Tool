@@ -23,8 +23,6 @@ public enum PreviewScene
 
 public sealed class DisplayPreview
 {
-    private const int MaxWidth = 900;
-
     private const string AnimatedAsset = "animated.gif";
 
     /// <summary>
@@ -110,6 +108,14 @@ public sealed class DisplayPreview
 
     private Scene? _transition;
 
+    /// <summary>
+    /// Guards <see cref="_transition"/>. The loop is decoded on a worker and read
+    /// on the UI thread, and a <see cref="Scene"/> is not complete until every
+    /// frame has been laid over the one before it, so publishing the reference
+    /// without a barrier would let a reader see a half-built frame list.
+    /// </summary>
+    private readonly object _transitionGate = new();
+
     private Task? _transitionLoad;
 
     /// <summary>
@@ -118,6 +124,15 @@ public sealed class DisplayPreview
     /// of garbage for a picture the size of a playing card.
     /// </summary>
     private byte[]? _scratch;
+
+    /// <summary>
+    /// The ramp table for the preset currently being previewed, kept across
+    /// frames. It was rebuilt on every call, which is a fresh ramp and a fresh
+    /// 768 byte table each time, and the loop calls this at its own frame rate.
+    /// </summary>
+    private byte[]? _lut;
+
+    private DisplayPreset? _lutSource;
 
     public DisplayPreview()
     {
@@ -157,12 +172,28 @@ public sealed class DisplayPreview
     /// </summary>
     public Task EnsureSceneReadyAsync(PreviewScene scene)
     {
-        if (scene != PreviewScene.Transition || _transition is not null)
+        if (scene != PreviewScene.Transition)
         {
             return Task.CompletedTask;
         }
 
-        return _transitionLoad ??= Task.Run(() => _transition = LoadTransition());
+        lock (_transitionGate)
+        {
+            if (_transition is not null)
+            {
+                return Task.CompletedTask;
+            }
+
+            return _transitionLoad ??= Task.Run(() =>
+            {
+                Scene? loaded = LoadTransition();
+
+                lock (_transitionGate)
+                {
+                    _transition = loaded;
+                }
+            });
+        }
     }
 
     /// <summary>
@@ -193,7 +224,7 @@ public sealed class DisplayPreview
         byte[] pixels = _scratch;
         Buffer.BlockCopy(source, 0, pixels, 0, source.Length);
 
-        byte[] lut = DisplayService.BuildPreviewLut(preset);
+        byte[] lut = LutFor(preset);
 
         for (int i = 0; i < pixels.Length; i += 4)
         {
@@ -218,18 +249,56 @@ public sealed class DisplayPreview
     }
 
     /// <summary>
+    /// The preview ramp for a preset, rebuilt only when the values behind it
+    /// actually change. The loop redraws at its own rate and a slider drag
+    /// redraws on a timer, so this was being asked for a fresh ramp and a fresh
+    /// 768 byte table dozens of times a second to produce the same bytes.
+    /// <para>
+    /// Compared field by field rather than by building a key array, because
+    /// building the key would allocate on the very path this is meant to make
+    /// free. The blue light trim is folded in by the caller before it gets here,
+    /// so the channel gains it arrives with are the ones that matter.
+    /// </para>
+    /// </summary>
+    private byte[] LutFor(DisplayPreset preset)
+    {
+        if (_lut is not null && _lutSource is not null && SameCurve(_lutSource, preset))
+        {
+            return _lut;
+        }
+
+        _lutSource = preset.Copy();
+        _lut = DisplayService.BuildPreviewLut(preset);
+        return _lut;
+    }
+
+    private static bool SameCurve(DisplayPreset a, DisplayPreset b)
+    {
+        return a.Gamma.Equals(b.Gamma)
+            && a.ShadowBoost.Equals(b.ShadowBoost)
+            && a.Brightness.Equals(b.Brightness)
+            && a.Contrast.Equals(b.Contrast)
+            && a.RedGain.Equals(b.RedGain)
+            && a.GreenGain.Equals(b.GreenGain)
+            && a.BlueGain.Equals(b.BlueGain);
+    }
+
+    /// <summary>
     /// A scene that is not there falls back to a still one rather than to nothing.
     /// The switcher keeps working and the box keeps showing a picture, so a missing
     /// clip can never leave an empty hole in the panel.
     /// </summary>
     private Scene? DataFor(PreviewScene scene)
     {
-        return scene switch
+        lock (_transitionGate)
         {
-            PreviewScene.Night => _night ?? _day,
-            PreviewScene.Transition => _transition ?? _night ?? _day,
-            _ => _day
-        };
+            return scene switch
+            {
+                PreviewScene.Night => _night ?? _day,
+                PreviewScene.Transition => _transition ?? _night ?? _day,
+                _ => _day
+            };
+        }
     }
 
     private static Scene? LoadStill(byte[] raw)
@@ -273,7 +342,7 @@ public sealed class DisplayPreview
     private const long MaxAnimatedBytes = 48L * 1024 * 1024;
 
     /// <summary>
-    /// About as wide as the preview panel is at the window's usual size, and the
+    /// As wide as the preview panel is at the window's usual size, and the
     /// point below which the loop is not scaled any further. The row is a fixed
     /// 230 high and the width is whatever the window leaves over, so this is a
     /// design target rather than a measurement: a loop held well under the size it
@@ -281,6 +350,19 @@ public sealed class DisplayPreview
     /// budget on pixels that only get magnified.
     /// </summary>
     private const int PanelWidth = 410;
+
+    /// <summary>
+    /// The width the still images are held at.
+    /// <para>
+    /// The panel draws its picture into 410 pixels, so anything wider is thrown
+    /// away by the scaling that draws it. It used to be 900, which meant every
+    /// frame the ramp was applied to was about 2.4 times larger than it needed to
+    /// be, and the ramp is a per-pixel loop on the UI thread. This is the same
+    /// reasoning as <see cref="FitWidth"/> applies to the loop, applied to the
+    /// two stills, which were being decoded large and used small.
+    /// </para>
+    /// </summary>
+    private static int WorkingWidth => PanelWidth;
 
     private Scene? LoadTransition()
     {
@@ -641,7 +723,7 @@ public sealed class DisplayPreview
             return null;
         }
 
-        int targetWidth = Math.Min(source.PixelWidth, MaxWidth);
+        int targetWidth = Math.Min(source.PixelWidth, WorkingWidth);
         int targetHeight = (int)Math.Round(source.PixelHeight * (targetWidth / (double)source.PixelWidth));
         if (targetHeight < 1)
         {

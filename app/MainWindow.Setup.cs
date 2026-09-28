@@ -264,16 +264,29 @@ public partial class MainWindow : Window
 
         // The rest of a fresh launch, without the fresh launch. AdoptInstalledPath
         // has already re-resolved the exe, and this is everything else the app
-        // does at startup that touches the engine: drop the cached read, re-enumerate
-        // the endpoints, repair the output if the install moved it, then put the
-        // current tune back and read it back out of the engine to prove it took.
-        _audio.InvalidateCache();
-        LoadDevices();
-        EnsureUsableAudioOutput();
-        _ = RefreshFxStateAsync(true);
-        UpdateFxBanner();
-        ApplyAudio(_workAudio.Copy(), false);
-        Flash("FxSound ready, sound is live");
+        // does at startup that touches the engine. It waits for the reads rather
+        // than blocking, because the dialog below claims the app is already
+        // talking to the engine and that claim should not be made ahead of the
+        // work that backs it.
+        bool reached = await HandshakeWithEngineAsync("FxSound ready, sound is live");
+
+        if (!reached)
+        {
+            // The install itself worked, so this is not a failure. But the dialog
+            // is not going to claim the app is already talking to the engine when
+            // the handshake says otherwise: a restart usually clears it, and if it
+            // does not, the settings tab can retry without reinstalling.
+            ShowResultModal(
+                "FXSOUND INSTALLED",
+                "FxSound installed, but Gamer Tool could not reach it yet. This often clears on "
+                + "restart. If it does not, the settings tab can try again.",
+                failed: false,
+                "Restart Gamer Tool",
+                RestartSelf,
+                "Not now",
+                () => { });
+            return;
+        }
 
         // Restarting is offered, not imposed, and not claimed to be required: the
         // apply above is verified against the engine, so if the engine is not
@@ -400,14 +413,25 @@ public partial class MainWindow : Window
 
         _fxUpdateAvailable = false;
         _fxUpdateVersion = string.Empty;
-        _audio.InvalidateCache();
-        LoadDevices();
-        EnsureUsableAudioOutput();
-        _ = RefreshFxStateAsync(true);
-        UpdateFxBanner();
-        ApplyAudio(_workAudio.Copy(), false);
-        Flash("FxSound updated");
+
+        // The update landed but the handshake is what says the app can actually
+        // use it, so the two are reported separately rather than the update being
+        // called done on the strength of the installer alone.
+        if (await HandshakeWithEngineAsync("FxSound updated"))
+        {
+            return;
+        }
+
+        ShowResultModal(
+            "UPDATED, NOT CONNECTED",
+            "FxSound updated, but Gamer Tool could not reach it yet. This often clears on restart.",
+            failed: false,
+            "Restart Gamer Tool",
+            RestartSelf,
+            "Not now",
+            () => { });
     }
+
 
 
     private void OnStartEngineClick(object sender, RoutedEventArgs e)

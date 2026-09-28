@@ -107,9 +107,13 @@ public partial class MainWindow : Window
             ? "No slots"
             : count.ToString(CultureInfo.InvariantCulture) + (count == 1 ? " slot" : " slots");
 
-        SlotHint.Text = count == 0
+        // One line, under the list, and only when there is nothing to read. It
+        // used to hold a permanent twenty two word instruction for a control that
+        // already looks like a key and already explains itself on hover.
+        SlotEmptyHint.Visibility = count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        SlotEmptyHint.Text = count == 0
             ? "Hit + to add a slot."
-            : "Click a key box, then hold Ctrl or Alt and press the combo you want. Press it again to switch that slot back off.";
+            : "Press a key box, then hold Ctrl or Alt and press the combo you want.";
 
         if (count == 0)
             return;
@@ -150,10 +154,16 @@ public partial class MainWindow : Window
             Text = slot.Hotkey,
             Tag = slot.Id,
             Height = 28,
+
+            // The whole instruction lives here rather than in a permanent footer.
+            // It is what the box is for, and the box already looks like a key.
             ToolTip = string.IsNullOrWhiteSpace(slot.Hotkey)
-                ? "Click to set"
-                : slot.Hotkey
+                ? "Click, then hold Ctrl or Alt and press the combo you want"
+                : slot.Hotkey + "  ·  click to change, press again to switch this slot off"
         };
+
+        System.Windows.Automation.AutomationProperties.SetName(
+            keyBox, "Key for " + (string.IsNullOrWhiteSpace(slot.Name) ? "slot" : slot.Name));
         keyBox.GotKeyboardFocus += (s, e) =>
         {
             _captureSlotId = slot.Id;
@@ -206,9 +216,10 @@ public partial class MainWindow : Window
         Grid.SetColumn(appBox, 10);
 
         bool canAuto = slot.HasWork && (slot.IsSelfTarget || slot.HasTarget);
-        CheckBox autoBox = new()
+        GamerTool.UI.SwitchToggle autoBox = new()
         {
-            Style = (Style)FindResource("ModernToggle"),
+            Style = (Style)FindResource("SwitchTrack"),
+            Accent = (System.Windows.Media.Brush)FindResource("AccentHotkeys"),
             IsChecked = slot.AutoActivate,
             IsEnabled = slot.AutoActivate || canAuto,
             Tag = slot.Id,
@@ -216,6 +227,8 @@ public partial class MainWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right,
             ToolTip = AutoToolTip(slot)
         };
+
+        System.Windows.Automation.AutomationProperties.SetName(autoBox, "Load this slot automatically");
         autoBox.Checked += (s, e) => SetSlotFlag(slot, "auto", true);
         autoBox.Unchecked += (s, e) => SetSlotFlag(slot, "auto", false);
         Grid.SetColumn(autoBox, 12);
@@ -497,12 +510,10 @@ public partial class MainWindow : Window
             Flash("Auto load off for " + other.Name);
         }
 
-        if (AutoClaimants(slot).Count > 0)
-        {
-            Commit();
-            BuildSlots();
-            ApplyWatchState();
-        }
+        // Deliberately no Commit or BuildSlots here. The callers that release a
+        // claim are already in the middle of a change that commits and rebuilds
+        // (a key capture, a game target, the auto switch), so doing it again
+        // here rebuilt the whole board twice for one click.
     }
 
 
@@ -931,10 +942,14 @@ public partial class MainWindow : Window
                 return;
             }
 
-            bool screenMatches = string.Equals(slot.DisplayPresetId, _activeDisplayId, StringComparison.OrdinalIgnoreCase);
-            bool soundMatches = string.Equals(slot.AudioPresetId, _activeAudioId, StringComparison.OrdinalIgnoreCase);
+            if (!slot.HasWork)
+            {
+                RailStatus.Text = "NOTHING SET";
+                Flash("Nothing set on " + slot.Name, true);
+                return;
+            }
 
-            if (screenMatches && soundMatches)
+            if (SlotService.IsLoaded(slot, _activeDisplayId, _activeAudioId))
             {
                 GoScreenNeutral();
                 await GoSoundNeutralAsync();

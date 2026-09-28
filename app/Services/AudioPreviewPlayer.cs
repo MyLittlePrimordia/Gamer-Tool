@@ -9,7 +9,6 @@ public sealed class AudioPreviewPlayer : IDisposable
     private readonly MediaPlayer _player = new();
     private bool _disposed;
     private bool _playing;
-    private bool _loop = true;
 
     public AudioPreviewPlayer()
     {
@@ -137,18 +136,6 @@ public sealed class AudioPreviewPlayer : IDisposable
         }
     }
 
-    public void Toggle()
-    {
-        if (_playing)
-        {
-            Pause();
-        }
-        else
-        {
-            Play();
-        }
-    }
-
     public void Play()
     {
         if (_disposed)
@@ -242,7 +229,7 @@ public sealed class AudioPreviewPlayer : IDisposable
 
     private void OnMediaEnded(object? sender, EventArgs e)
     {
-        if (_disposed || !_loop)
+        if (_disposed)
         {
             return;
         }

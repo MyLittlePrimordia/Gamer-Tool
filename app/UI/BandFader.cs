@@ -1,10 +1,13 @@
-using System;
+﻿using System;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using Brush = System.Windows.Media.Brush;
 using Color = System.Windows.Media.Color;
+using Point = System.Windows.Point;
 using Rectangle = System.Windows.Shapes.Rectangle;
 
 namespace GamerTool.UI;
@@ -50,7 +53,9 @@ public sealed class BandFader : Slider
 
     private Canvas? _dashHost;
 
-    private Brush? _dashBrush;
+    private Brush? _dashGradient;
+
+    private double _dashGradientHeight = -1.0;
 
     public override void OnApplyTemplate()
     {
@@ -66,6 +71,30 @@ public sealed class BandFader : Slider
         LayoutDashes();
     }
 
+    /// <summary>
+    /// Where the knob actually is, in this element's own coordinates, or null
+    /// before the template has been applied.
+    /// <para>
+    /// This exists because working the knob's position out from the value is
+    /// wrong. A vertical Track keeps the thumb's centre half a thumb inside each
+    /// end, so scaling the value across the control's full height puts the curve
+    /// up to eleven pixels from the knob, and the gap is worst at +12 and -12,
+    /// which is where the eye checks first. The knob cannot be moved out of that
+    /// inset without shrinking it to nothing and losing the drag handle, so the
+    /// curve is moved to meet the knob instead.
+    /// </para>
+    /// </summary>
+    public Point? KnobCentre()
+    {
+        if (GetTemplateChild("BandThumb") is not Thumb knob || knob.ActualHeight <= 0.0)
+        {
+            return null;
+        }
+
+        return knob.TranslatePoint(
+            new Point(knob.ActualWidth / 2.0, knob.ActualHeight / 2.0),
+            this);
+    }
     /// <summary>
     /// Swaps the solid groove, the zero marker and the coloured bars for the
     /// dashed line the engine draws its bands with.
@@ -84,6 +113,11 @@ public sealed class BandFader : Slider
         SetVisibility("UpperFill", band ? Visibility.Collapsed : Visibility.Visible);
         SetVisibility("LowerFill", band ? Visibility.Collapsed : Visibility.Visible);
 
+        // A band fader keeps its thumb. Hiding it so the window could paint a knob
+        // instead was a mistake: the thumb is the slider's drag handle, and a
+        // hidden or collapsed one is not hit tested, so the bands stopped
+        // responding to the mouse altogether. The knob is where WPF puts it and
+        // the curve is moved to meet it, not the other way round.
         if (_dashHost is not null)
         {
             _dashHost.Visibility = band ? Visibility.Visible : Visibility.Collapsed;
@@ -98,7 +132,20 @@ public sealed class BandFader : Slider
         }
     }
 
-    /// <summary>Fills the host with as many dashes as the current track height needs.</summary>
+    /// <summary>
+    /// Fills the host with the run of dashes that fits the current track height.
+    /// <para>
+    /// They are one Path rather than one Rectangle each, and that is not a
+    /// tidiness choice. A gradient brush with Absolute mapping is resolved in the
+    /// space of whatever shape it is painted on, and a Rectangle inside a Canvas
+    /// has its own origin: Canvas.Top moves the child without moving its coordinate
+    /// space. So a gradient spanning the whole track, shared by forty little
+    /// rectangles, gave every dash the first two percent of the ramp and the
+    /// column came out flat white. One Path for the whole column has one local
+    /// space, the ramp runs the full height, and the dashes fade from white at the
+    /// top to pink at the bottom the way the engine draws them.
+    /// </para>
+    /// </summary>
     private void LayoutDashes()
     {
         if (_dashHost is null)
@@ -121,35 +168,64 @@ public sealed class BandFader : Slider
             return;
         }
 
-        _dashBrush ??= ResolveGrooveBrush();
-
+        var geometry = new PathGeometry();
         double step = DashLength + DashGap;
         for (double y = 0.0; y < height; y += step)
         {
-            var dash = new Rectangle
+            double dash = Math.Min(DashLength, height - y);
+            var figure = new PathFigure
             {
-                Width = width,
-                Height = Math.Min(DashLength, height - y),
-                Fill = _dashBrush
+                StartPoint = new Point(0.0, y),
+                IsClosed = true,
+                IsFilled = true,
             };
-            Canvas.SetTop(dash, y);
-            Canvas.SetLeft(dash, 0.0);
-            _dashHost.Children.Add(dash);
+
+            figure.Segments.Add(new LineSegment(new Point(width, y), true));
+            figure.Segments.Add(new LineSegment(new Point(width, y + dash), true));
+            figure.Segments.Add(new LineSegment(new Point(0.0, y + dash), true));
+            figure.Segments.Add(new LineSegment(new Point(0.0, y), true));
+            geometry.Figures.Add(figure);
         }
+
+        geometry.Freeze();
+
+        _dashHost.Children.Add(new Path
+        {
+            Data = geometry,
+            Fill = DashBrushFor(height),
+            IsHitTestVisible = false,
+        });
     }
 
     /// <summary>
-    /// Takes the groove colour from the theme so the dashes cannot drift away
-    /// from the solid groove the colour trims still use.
+    /// The fade down the column: near white at the top of the track, a muted pink
+    /// by the bottom. One brush for the whole column, cached, because the track
+    /// height is the only thing that changes it.
     /// </summary>
-    private Brush ResolveGrooveBrush()
+    private Brush DashBrushFor(double height)
     {
-        object? themed = Resources["Groove"];
-        if (themed is Brush themedBrush)
+        if (_dashGradient is not null && Math.Abs(_dashGradientHeight - height) < 0.5)
         {
-            return themedBrush;
+            return _dashGradient;
         }
 
-        return new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33));
+        var brush = new LinearGradientBrush(
+            new GradientStopCollection
+            {
+                new GradientStop(Color.FromArgb(0xFF, 0xF0, 0xF0, 0xF4), 0.0),
+                new GradientStop(Color.FromArgb(0xFF, 0xFF, 0x8A, 0xB4), 0.5),
+                new GradientStop(Color.FromArgb(0xFF, 0xE8, 0x5C, 0x96), 1.0),
+            },
+            new Point(0.0, 0.0),
+            new Point(0.0, Math.Max(height, 1.0)))
+        {
+            MappingMode = BrushMappingMode.Absolute,
+        };
+
+        brush.Freeze();
+        _dashGradient = brush;
+        _dashGradientHeight = height;
+        return brush;
     }
+
 }

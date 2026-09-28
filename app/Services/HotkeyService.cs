@@ -122,7 +122,7 @@ public sealed class HotkeyService : IDisposable
             return false;
         }
 
-        _bindings[id] = new HotkeyBinding { Id = id, TargetId = targetId, Text = Normalize(text) };
+        _bindings[id] = new HotkeyBinding { Id = id, TargetId = targetId, Text = Normalise(text) };
         return true;
     }
 
@@ -141,51 +141,36 @@ public sealed class HotkeyService : IDisposable
         return IntPtr.Zero;
     }
 
-    public static string Normalize(string text)
-    {
-        if (!TryParse(text, out HotkeyModifiers mods, out Key key))
-        {
-            return text.ToUpperInvariant();
-        }
-
-        StringBuilder builder = new();
-        if ((mods & HotkeyModifiers.Control) != 0)
-        {
-            builder.Append("CTRL+");
-        }
-
-        if ((mods & HotkeyModifiers.Alt) != 0)
-        {
-            builder.Append("ALT+");
-        }
-
-        if ((mods & HotkeyModifiers.Shift) != 0)
-        {
-            builder.Append("SHIFT+");
-        }
-
-        if ((mods & HotkeyModifiers.Win) != 0)
-        {
-            builder.Append("WIN+");
-        }
-
-        builder.Append(KeyToken(key));
-        return builder.ToString();
-    }
-
     /// <summary>
-    /// Reduces a key string to a form two of them can be compared by. Keys reach
-    /// the app from three places that all format differently: the live capture
-    /// writes "ALT+1", a restored backup can hold "alt+1" or "ALT + 1", and a
-    /// hand edited file can hold anything. Comparing the raw strings would let a
-    /// duplicate through on spacing alone, which is exactly the case the duplicate
-    /// check exists to prevent.
+    /// Reduces a key string to the one form two of them can be compared by.
+    /// <para>
+    /// Keys reach the app from three places that all format them differently: the
+    /// live capture writes "ALT+1", a restored backup can hold "alt+1" or
+    /// "ALT + 1" or "CONTROL+ALT+1", and a hand edited file can hold anything.
+    /// Comparing the raw strings would let a duplicate through on spacing alone,
+    /// or on a modifier spelled out, or on the modifiers being written in a
+    /// different order, which is exactly the case the duplicate check exists to
+    /// prevent. So this parses the string properly and rebuilds it in one fixed
+    /// order, and anything unparseable falls back to a stripped uppercase form so
+    /// two identical pieces of nonsense still collide rather than both claiming
+    /// the same key.
+    /// </para>
+    /// <para>
+    /// This is the single canonicaliser for the whole app. Duplicate detection at
+    /// load time, duplicate detection at registration time and the clash check in
+    /// the capture handler all call it, which is what makes those three agree.
+    /// </para>
     /// </summary>
     public static string Normalise(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
             return string.Empty;
+        }
+
+        if (TryParse(text, out HotkeyModifiers mods, out Key key))
+        {
+            return FromInput(key, mods);
         }
 
         StringBuilder builder = new(text.Length);

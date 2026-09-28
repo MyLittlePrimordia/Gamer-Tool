@@ -20,9 +20,8 @@ public static class IconFactory
 
     private static readonly Color Teal = Color.FromArgb(255, 45, 212, 191);
 
-    private static readonly Color Blurple = Color.FromArgb(255, 99, 102, 241);
-
     public static int[] Sizes { get; } = { 16, 20, 24, 32, 40, 48, 64, 128, 256 };
+
 
     public static Bitmap Render(int size)
     {

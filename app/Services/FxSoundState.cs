@@ -229,20 +229,4 @@ public sealed class FxSoundState
 
         return fallback;
     }
-
-    public string Describe()
-    {
-        return "V" + Version + " POWER " + (Power ? "ON" : "OFF") + " PRESET " + SelectedPreset;
-    }
-
-    public string Frequencies()
-    {
-        List<string> parts = new();
-        foreach (FxBandState band in Equalizer.Bands)
-        {
-            parts.Add(band.FrequencyText);
-        }
-
-        return string.Join(" ", parts);
-    }
 }

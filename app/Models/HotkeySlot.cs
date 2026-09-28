@@ -44,14 +44,6 @@ public sealed class HotkeySlot
         }
     }
 
-    public string ScopeText
-    {
-        get
-        {
-            return MonitorDevice.Length == 0 ? "ALL SCREENS" : MonitorDevice.ToUpperInvariant();
-        }
-    }
-
     public bool HasWork
     {
         get

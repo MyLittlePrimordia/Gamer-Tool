@@ -8,11 +8,13 @@ using GamerTool.Models;
 using GamerTool.Services;
 using Brush = System.Windows.Media.Brush;
 using Color = System.Windows.Media.Color;
+using Point = System.Windows.Point;
+using Size = System.Windows.Size;
 
 namespace GamerTool.UI;
 
 /// <summary>
-/// Draws a live spectrum of the preview track into a plain Grid.
+/// Draws a live spectrum of the preview track.
 ///
 /// The magnitudes are pre-computed offline from the embedded preview track and
 /// shipped as a small table of bytes, because WPF's MediaPlayer will not hand up
@@ -27,17 +29,19 @@ namespace GamerTool.UI;
 /// </summary>
 public sealed class SpectrumView
 {
-    private const int Bars = 48;
+    /// <summary>How many bars the row is divided into.</summary>
+    public const int BarCount = 48;
+
     private const double LowHz = 40.0;
     private const double HighHz = 16000.0;
 
-    private readonly Grid _host;
-    private readonly Border[] _bars = new Border[Bars];
+    /// <summary>The gap between bars, in whole device pixels.</summary>
+    private const double GapPixels = 2.0;
 
-    /// <summary>The row of bars, inset so the group can be centred on its own.</summary>
-    private Grid _barGrid = null!;
-    private readonly double[] _level = new double[Bars];
-    private readonly double[] _barCentreHz = new double[Bars];
+    private readonly Grid _host;
+    private readonly SpectrumBars _bars;
+    private readonly double[] _level = new double[BarCount];
+    private readonly double[] _barCentreHz = new double[BarCount];
     private readonly DispatcherTimer _timer;
     private readonly Func<TimeSpan> _position;
     private readonly Func<bool> _playing;
@@ -57,14 +61,15 @@ public sealed class SpectrumView
         _position = position;
         _playing = playing;
 
-        for (int i = 0; i < Bars; i++)
+        for (int i = 0; i < BarCount; i++)
         {
-            double t = (i + 0.5) / Bars;
+            double t = (i + 0.5) / BarCount;
             _barCentreHz[i] = LowHz * Math.Pow(HighHz / LowHz, t);
         }
 
-        Load();
+        _bars = new SpectrumBars(BarBrush());
         BuildBars();
+        Load();
 
         _timer = new DispatcherTimer(DispatcherPriority.Render)
         {
@@ -99,11 +104,8 @@ public sealed class SpectrumView
     public void Stop()
     {
         _timer.Stop();
-        for (int i = 0; i < Bars; i++)
-        {
-            _level[i] = 0;
-            _bars[i].Height = 4;
-        }
+        Array.Clear(_level);
+        _bars.SetIdle(true);
     }
 
     public void Release()
@@ -112,8 +114,8 @@ public sealed class SpectrumView
     }
 
     /// <summary>
-    /// Reads the pre-computed magnitudes. Header layout, kept in lockstep with
-    /// the generator that bakes Assets\spectrum.bin from the preview track:
+    /// Reads the pre-computed magnitudes. Header layout, kept in lockstep with the
+    /// generator that bakes Assets\spectrum.bin from the preview track:
     /// 0 magic, 4 version, 8 bars, 12 frames, 16 rate, 20 hop, 24 fft, 28 length.
     /// </summary>
     private void Load()
@@ -134,9 +136,22 @@ public sealed class SpectrumView
             int hop = BitConverter.ToInt32(raw, 20);
             int length = BitConverter.ToInt32(raw, 28);
 
-            if (bars != Bars || hop <= 0 || rate <= 0 || length <= 0 || raw.Length < HeaderSize + length)
+            // The frame count has to agree with the byte count as well as with the
+            // length, because the tick indexes straight into the table by frame. A
+            // header claiming more frames than the table holds put an out of range
+            // read inside a sixteen millisecond timer, and an exception in a timer
+            // becomes a dialog per tick that cannot be dismissed. The asset is
+            // embedded so this needs a broken build, but the check is a comparison.
+            if (bars != BarCount
+                || hop <= 0
+                || rate <= 0
+                || length <= 0
+                || raw.Length < HeaderSize + length
+                || _frameCount <= 0
+                || (long)_frameCount * BarCount > length)
             {
-                TraceLog.Write("SPECTRUM bad header bars=" + bars + " hop=" + hop + " len=" + length);
+                TraceLog.Write("SPECTRUM bad header bars=" + bars + " hop=" + hop + " len=" + length + " frames=" + _frameCount);
+                _frameCount = 0;
                 return;
             }
 
@@ -165,38 +180,11 @@ public sealed class SpectrumView
         _host.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         _host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-        // The bars live in their own grid rather than directly in the host, so
-        // that the row of them can be inset to centre the group. The axis stays
-        // in the host and keeps the full width, which is right: the zero line is
-        // the width of the box, the bars are the width that divides evenly.
-        _barGrid = new Grid();
-        _barGrid.VerticalAlignment = VerticalAlignment.Stretch;
-        Grid.SetRow(_barGrid, 0);
-        Grid.SetColumn(_barGrid, 0);
-        _host.Children.Add(_barGrid);
-
-        for (int i = 0; i < Bars; i++)
-        {
-            // Widths are filled in by LayoutColumns once the real width is known.
-            _barGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0) });
-
-            // Centred in the upper cell, so Height can simply be twice the level
-            // and the bar reaches the same distance up as down. Width is centred
-            // too rather than inset by a margin, so the gap between neighbours is
-            // the same everywhere.
-            Border bar = new()
-            {
-                CornerRadius = new CornerRadius(1.5),
-                Background = BarBrush(i),
-                Height = 0,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            Grid.SetColumn(bar, i);
-            Grid.SetRow(bar, 0);
-            _bars[i] = bar;
-            _barGrid.Children.Add(bar);
-        }
+        _bars.HorizontalAlignment = HorizontalAlignment.Stretch;
+        _bars.VerticalAlignment = VerticalAlignment.Stretch;
+        Grid.SetRow(_bars, 0);
+        Grid.SetColumn(_bars, 0);
+        _host.Children.Add(_bars);
 
         // The zero line the bars sit on, so the symmetry is visible even in
         // silence and it is obvious that silence is the middle, not the bottom.
@@ -230,46 +218,16 @@ public sealed class SpectrumView
     /// </summary>
     private void LayoutColumns()
     {
-        if (_barGrid is null || _barGrid.ColumnDefinitions.Count != Bars || _host.ActualWidth <= 0.0)
+        if (_host.ActualWidth <= 0.0)
         {
             return;
         }
 
         double scale = VisualTreeHelper.GetDpi(_host).DpiScaleX;
-        if (scale <= 0.0)
-        {
-            scale = 1.0;
-        }
-
-        int deviceWidth = (int)Math.Round(_host.ActualWidth * scale);
-        int pitch = deviceWidth / Bars;
-
-        // Below about three pixels of pitch there is no room for a bar and a gap,
-        // and a sub pixel bar would only look like noise.
-        if (pitch < 3)
-        {
-            return;
-        }
-
-        int groupWidth = pitch * Bars;
-        int insetLeft = (deviceWidth - groupWidth) / 2;
-        int insetRight = deviceWidth - groupWidth - insetLeft;
-
-        _barGrid.Margin = new Thickness(insetLeft / scale, 0, insetRight / scale, 0);
-
-        const double GapPixels = 2.0;
-        for (int i = 0; i < Bars; i++)
-        {
-            _barGrid.ColumnDefinitions[i].Width = new GridLength(pitch / scale);
-            if (_bars[i] is not null)
-            {
-                _bars[i].Width = Math.Max(1.0, (pitch - GapPixels) / scale);
-            }
-        }
+        _bars.Layout(_host.ActualWidth, scale);
     }
 
-
-    private static Brush BarBrush(int index)
+    private static Brush BarBrush()
     {
         // One flat colour for every bar, taken from the audio accent. An earlier
         // version walked the bars into violet, which put a second, lighter pink
@@ -328,10 +286,10 @@ public sealed class SpectrumView
             }
         }
 
-        int offset = first * Bars;
-        int next = playing && first + 1 < _frameCount ? offset + Bars : offset;
+        int offset = first * BarCount;
+        int next = playing && first + 1 < _frameCount ? offset + BarCount : offset;
 
-        for (int bar = 0; bar < Bars; bar++)
+        for (int bar = 0; bar < BarCount; bar++)
         {
             double target = 0.0;
 
@@ -361,19 +319,199 @@ public sealed class SpectrumView
             {
                 _level[bar] = 0.0;
             }
-
-            // Half the available height each way from the axis. With no floor at
-            // all, silence is genuinely empty and only the zero line is left.
-            _bars[bar].Height = playing || _level[bar] > 0.0
-                ? Math.Max(1, Math.Round(_level[bar] * available) * 2)
-                : 0.0;
         }
+
+        // One call, one redraw. This used to be forty-eight Height assignments,
+        // which is forty-eight layout invalidations a tick, at sixty ticks a
+        // second, for a picture that only changes height.
+        _bars.Update(_level, available);
     }
 
     /// <summary>Centre frequency of a bar, exposed so the window can match EQ bands to bars.</summary>
     public static double BarCentre(int bar)
     {
-        double t = (bar + 0.5) / Bars;
+        double t = (bar + 0.5) / BarCount;
         return LowHz * Math.Pow(HighHz / LowHz, t);
+    }
+}
+
+/// <summary>
+/// The row of bars, drawn in one pass rather than as one element each.
+/// <para>
+/// They used to be forty-eight Borders whose Height was assigned on every tick.
+/// Assigning Height invalidates layout, and the tick runs at sixty hertz, so that
+/// was around two thousand nine hundred layout passes a second to draw a picture
+/// that never changes shape, only height. A single element that overrides
+/// <see cref="OnRender"/> draws the lot with no layout involved at all.
+/// </para>
+/// <para>
+/// The pitch is still worked out in whole device pixels, for the reason given on
+/// <see cref="SpectrumView.LayoutColumns"/>: 423 pixels across 48 bars is 8.81
+/// each, which cannot be drawn as equal whole pixel steps, and letting the
+/// leftover land in the gaps makes the row read as unevenly spaced.
+/// </para>
+/// </summary>
+public sealed class SpectrumBars : FrameworkElement
+{
+    private const int Count = SpectrumView.BarCount;
+    private const double GapPixels = 2.0;
+
+    private readonly Brush _brush;
+    private readonly double[] _level = new double[Count];
+
+    private double _pitch = 8;
+    private double _barWidth = 6;
+    private double _inset;
+    private double _available = 1;
+    private double _radius = 1.5;
+    private bool _idle = true;
+    private string _idleText = "Play a sample to hear this preset";
+
+    public SpectrumBars(Brush brush)
+    {
+        _brush = brush;
+        SnapsToDevicePixels = true;
+    }
+
+    /// <summary>
+    /// The line shown while nothing is playing. Without it the hero was a large
+    /// black rectangle with a thirty pixel play button in the corner of it, which
+    /// is the same footprint as the Display tab's preview and none of its
+    /// content.
+    /// </summary>
+    public void SetIdle(string text)
+    {
+        _idleText = text;
+        _idle = true;
+        InvalidateVisual();
+    }
+
+    public void SetIdle(bool idle)
+    {
+        _idle = idle;
+        InvalidateVisual();
+    }
+
+    /// <summary>Takes the current levels and asks for a single redraw.</summary>
+    public void Update(IReadOnlyList<double> levels, double available)
+    {
+        _idle = false;
+
+        int count = Math.Min(levels.Count, _level.Length);
+        for (int i = 0; i < count; i++)
+        {
+            _level[i] = levels[i];
+        }
+
+        _available = Math.Max(available, 1);
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Re-lays the bars out for a new width. Whole device pixels throughout, so
+    /// the pitch is identical everywhere along the row and the leftover becomes
+    /// an equal inset at each end.
+    /// </summary>
+    public void Layout(double actualWidth, double dpiScale)
+    {
+        double scale = dpiScale > 0 ? dpiScale : 1.0;
+        int deviceWidth = (int)Math.Round(actualWidth * scale);
+        int pitch = deviceWidth / Count;
+
+        // Below about three pixels of pitch there is no room for a bar and a gap,
+        // and a sub pixel bar would only look like noise.
+        if (pitch < 3)
+        {
+            return;
+        }
+
+        _pitch = pitch / scale;
+        _barWidth = Math.Max(1.0, (pitch - GapPixels) / scale);
+        _radius = Math.Min(1.5, _barWidth / 2.0);
+
+        int groupWidth = pitch * Count;
+        int insetLeft = (deviceWidth - groupWidth) / 2;
+        _inset = insetLeft / scale;
+
+        InvalidateVisual();
+    }
+
+    protected override void OnRender(DrawingContext dc)
+    {
+        base.OnRender(dc);
+
+        if (_idle)
+        {
+            DrawIdleState(dc);
+            return;
+        }
+
+        double centreY = RenderSize.Height / 2.0;
+        double x = _inset;
+
+        for (int i = 0; i < Count; i++)
+        {
+            // Doubled, because the bar is centred on the axis and grows both ways,
+            // so a loud passage reads as a thick symmetric band rather than a row
+            // of spikes climbing to one side.
+            double height = Math.Max(1, Math.Round(_level[i] * _available) * 2);
+            dc.DrawRoundedRectangle(_brush, null, new Rect(x, centreY - (height / 2.0), _barWidth, height), _radius, _radius);
+            x += _pitch;
+        }
+    }
+
+    /// <summary>
+    /// The resting state: the zero line, and one line saying what to press.
+    /// </summary>
+    private void DrawIdleState(DrawingContext dc)
+    {
+        double centreY = RenderSize.Height / 2.0;
+
+        // The zero line is still drawn, so the box reads as an analyser at rest
+        // rather than as an empty panel.
+        dc.DrawRectangle(
+            new SolidColorBrush(Color.FromArgb(0x38, 0xFF, 0xFF, 0xFF)),
+            null,
+            new Rect(0, centreY - 0.5, RenderSize.Width, 1));
+
+        if (string.IsNullOrWhiteSpace(_idleText) || RenderSize.Width < 120)
+        {
+            return;
+        }
+
+        FormattedText text = new(
+            _idleText,
+            System.Globalization.CultureInfo.InvariantCulture,
+            FlowDirection.LeftToRight,
+            new Typeface(
+                new System.Windows.Media.FontFamily("Segoe UI Variable Text, Segoe UI, Inter, system-ui, sans-serif"),
+                System.Windows.FontStyles.Normal,
+                System.Windows.FontWeights.Normal,
+                System.Windows.FontStretches.Normal),
+            11,
+            new SolidColorBrush(Color.FromArgb(0x8E, 0xFF, 0xFF, 0xFF)),
+            1.25);
+
+        if (RenderSize.Width < 120)
+        {
+            return;
+        }
+
+        dc.DrawText(text, new Point(
+            Math.Max(0, (RenderSize.Width - text.Width) / 2.0),
+            centreY - (text.Height / 2.0)));
+    }
+
+    /// <summary>Measures as whatever it is given, since it draws rather than lays out.</summary>
+    protected override Size MeasureOverride(Size availableSize)
+    {
+        return new Size(
+            double.IsInfinity(availableSize.Width) ? 0 : availableSize.Width,
+            double.IsInfinity(availableSize.Height) ? 0 : availableSize.Height);
+    }
+
+    protected override Size ArrangeOverride(Size finalSize)
+    {
+        return finalSize;
     }
 }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -63,11 +63,37 @@ public partial class MainWindow
 
         if (!Backlight.IsEnabled)
         {
-            BacklightPanel.Children.Add(new TextBlock
+            // A heading and a button, not a sentence. It used to be thirteen words
+            // of grey instruction sitting between two rules in the middle of the
+            // page, naming a control that lives on another tab and is already
+            // labelled in plain English there. Turning the feature on is one click
+            // from here now instead of find the tab, find the row, find the switch.
+            StackPanel off = new()
             {
-                Style = (Style)FindResource("CardSub"),
-                Text = "Hardware brightness is off. Turn it on in Settings to control the monitor's own backlight."
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            off.Children.Add(new TextBlock
+            {
+                Style = (Style)FindResource("SectionHeader"),
+                Text = "HARDWARE BRIGHTNESS OFF",
+                VerticalAlignment = VerticalAlignment.Center
             });
+
+            Button turnOn = new()
+            {
+                Content = "Turn on",
+                Style = (Style)FindResource("GhostButton"),
+                Margin = new Thickness(12, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                MinWidth = 92,
+                ToolTip = "Control the monitor's own backlight over DDC/CI"
+            };
+            turnOn.Click += OnTurnOnHardwareBrightness;
+            off.Children.Add(turnOn);
+
+            BacklightPanel.Children.Add(off);
             return;
         }
 
@@ -126,6 +152,21 @@ public partial class MainWindow
                 : (Brush)FindResource("TextLow"),
             TextTrimming = TextTrimming.CharacterEllipsis
         });
+
+        // A display that has refused a write but is still being tried says so on
+        // its own row, rather than only in a toast that has already scrolled away.
+        // Without this a refusal looks exactly like a display that is working.
+        int refusals = Backlight.Refusals.TryGetValue(monitor.DeviceName, out int seen) ? seen : 0;
+        if (live && refusals > 0)
+        {
+            left.Children.Add(new TextBlock
+            {
+                Style = (Style)FindResource("CardSub"),
+                Foreground = (Brush)FindResource("Amber"),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Text = "Display did not take that value. Trying again on the next move."
+            });
+        }
 
         left.Children.Add(new TextBlock
         {
@@ -215,6 +256,21 @@ public partial class MainWindow
 
 
     /// <summary>
+    /// Flips the hardware brightness option from here rather than making the
+    /// reader go and find it on another tab. The option's own handler starts the
+    /// probe, so this only has to set the switch.
+    /// </summary>
+    private void OnTurnOnHardwareBrightness(object sender, RoutedEventArgs e)
+    {
+        if (_settings.HardwareBrightnessEnabled)
+        {
+            return;
+        }
+
+        HardwareBrightnessBox.IsChecked = true;
+    }
+
+    /// <summary>
     /// Holds a drag still for a moment before it touches the bus. The engine
     /// wants at most one write every 120ms or so; sending a write per pixel of
     /// mouse movement is how a slider ends up looking broken on a slow scaler.
@@ -254,9 +310,19 @@ public partial class MainWindow
         _ = Task.Run(() =>
         {
             bool ok = Backlight.TrySet(monitor, value, out string? why);
+            bool settingsChanged = Backlight.ConsumeSettingsChanged();
 
             Dispatcher.InvokeAsync(() =>
             {
+                if (settingsChanged)
+                {
+                    // The exclusion list only means something if it survives a
+                    // restart. It used to be added in memory and then forgotten,
+                    // so a display the app had given up on came back on the next
+                    // launch with no explanation and no way to clear it.
+                    Commit();
+                }
+
                 if (!ok)
                 {
                     Flash(why ?? "The monitor refused the brightness", true);
@@ -344,3 +410,4 @@ public partial class MainWindow
         CopyDiagButton.Visibility = Visibility.Visible;
     }
 }
+

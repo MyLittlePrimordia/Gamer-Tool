@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -129,14 +129,35 @@ public sealed class ProfileManager
         File.Move(temp, target);
     }
 
+    /// <summary>
+    /// Brings a profile that came from disk, or from a backup file, into a state
+    /// the rest of the app can rely on.
+    /// <para>
+    /// This is a schema guard, not a tidy-up. Everything reaching it is data from
+    /// outside the running app: a settings file that a crash truncated, a backup
+    /// written by a different build, or a file a user edited by hand. Null lists
+    /// and a band array of the wrong length are the easy cases, and they are what
+    /// this used to handle. The values themselves were trusted, which meant a
+    /// single out-of-range number survived all the way to the gamma ramp or the
+    /// engine and produced a white screen or a dead fader with nothing on screen
+    /// to explain it. Every numeric field is therefore pulled back inside the
+    /// range the app's own controls enforce.
+    /// </para>
+    /// </summary>
     public static AppSettings Normalize(AppSettings settings)
     {
+        // A profile written before the EffectsEnabled rename still carries the old
+        // key, and restoring a backup replaces the whole profile without passing
+        // through the startup migration. Folding it in here as well means both
+        // routes keep whatever state the user saved. Harmless on a profile that has
+        // already been through Migrate, which clears the legacy value.
+        settings.AdoptLegacyBypass();
+
         if (string.IsNullOrWhiteSpace(settings.FxSoundPath))
         {
             settings.FxSoundPath = AudioService.DefaultFxSoundPath;
         }
 
-        settings.UserHotkeys ??= new List<UserHotkey>();
         settings.CustomDisplayPresets ??= new List<DisplayPreset>();
         settings.CustomAudioPresets ??= new List<AudioPreset>();
         settings.CustomCombos ??= new List<ComboPreset>();
@@ -149,6 +170,11 @@ public sealed class ProfileManager
             {
                 profile.Id = AppProfileTools.NewId("app");
             }
+        }
+
+        foreach (DisplayPreset preset in settings.CustomDisplayPresets)
+        {
+            preset.Clamp();
         }
 
         foreach (AudioPreset preset in settings.CustomAudioPresets)
@@ -173,8 +199,39 @@ public sealed class ProfileManager
 
                 preset.Bands = fixedBands;
             }
+
+            if (preset.Frequencies is null)
+            {
+                preset.Frequencies = Array.Empty<double>();
+            }
+            else if (preset.Frequencies.Length > 0)
+            {
+                // Sized to the band count first, so Clamp reads a real window for
+                // every band rather than a default one for the tail.
+                preset.Frequencies = Resized(preset.Frequencies, wanted);
+            }
+
+            preset.Clamp();
         }
 
         return settings;
     }
+
+    /// <summary>Grows or trims a stored array to length, keeping what fits.</summary>
+    private static double[] Resized(double[] source, int length)
+    {
+        if (source.Length == length)
+        {
+            return source;
+        }
+
+        double[] result = new double[length];
+        for (int i = 0; i < length; i++)
+        {
+            result[i] = i < source.Length ? source[i] : 0.0;
+        }
+
+        return result;
+    }
 }
+

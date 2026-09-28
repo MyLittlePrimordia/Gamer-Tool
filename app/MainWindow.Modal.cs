@@ -338,8 +338,16 @@ public partial class MainWindow : Window
         {
             Background = new SolidColorBrush(Color.FromArgb(0xE0, 0, 0, 0)),
             Visibility = Visibility.Collapsed,
-            Child = card
+            Child = card,
+
+            // Escape closes it. It is a hand rolled overlay rather than a real
+            // dialog, so nothing provides this for free, and a confirmation you
+            // cannot back out of with the keyboard is a confirmation some people
+            // cannot back out of at all.
+            Focusable = true
         };
+
+        _modalLayer.KeyDown += OnModalKeyDown;
 
         // Cover the whole shell so the scrim dims the page and the card centres.
         Grid.SetColumn(_modalLayer, 0);
@@ -373,7 +381,12 @@ public partial class MainWindow : Window
         _modalKeepOpen = false;
         _modalLayer.Visibility = Visibility.Visible;
         UpdateCounter();
-        Dispatcher.BeginInvoke(new Action(() => { _modalInput.Focus(); _modalInput.SelectAll(); }));
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _modalInput.Focus();
+            _modalInput.SelectAll();
+            _modalLayer.Focus();
+        }));
     }
 
 
@@ -704,7 +717,79 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>
+    /// Escape backs out of whatever the dialog is offering, and Tab stays inside.
+    /// <para>
+    /// A run in progress has no way out by design, because half an install is
+    /// worse than a slow one, so Escape does nothing while the modal owns a
+    /// progress state. Every other state is cancellable, and the cancel button is
+    /// whichever one the dialog was opened with.
+    /// </para>
+    /// <para>
+    /// This is a hand rolled overlay rather than a real dialog, so nothing keeps
+    /// the keyboard inside it for free. Without this, Tab from the name box walks
+    /// straight out of the dialog and into the controls on the page behind the
+    /// scrim, which then take focus while looking greyed out and unreachable.
+    /// </para>
+    /// </summary>
+    private void OnModalKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            CancelModal();
+            return;
+        }
+
+        if (e.Key != Key.Tab)
+        {
+            return;
+        }
+
+        bool backwards = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+        IInputElement? from = Keyboard.FocusedElement;
+
+        // The dialog is built once and has a known, fixed set of things that can
+        // take focus: the name box where there is one, and the two buttons. So
+        // "first" and "last" are answered directly rather than by walking a tree
+        // that is three elements deep. Tab from the last wraps to the first and
+        // Shift Tab from the first wraps to the last; anything in between is left
+        // alone, so ordinary tabbing inside the dialog still behaves normally.
+        IInputElement? first = _modalInput.Visibility == Visibility.Visible
+            ? _modalInput
+            : _modalSaveButton;
+
+        IInputElement? last = _modalCancelButton.Visibility == Visibility.Visible
+            ? _modalCancelButton
+            : _modalSaveButton;
+
+        if (backwards && ReferenceEquals(from, first))
+        {
+            e.Handled = true;
+            last.Focus();
+        }
+        else if (!backwards && ReferenceEquals(from, last))
+        {
+            e.Handled = true;
+            first.Focus();
+        }
+    }
+
+    private void CancelModal()
+    {
+        // A run in progress owns the dialog and cannot be dismissed.
+        if (_modalBarHost.Visibility == Visibility.Visible || _modalSaveButton.Visibility != Visibility.Visible)
+        {
+            return;
+        }
+
+        Action? secondary = _modalSecondary;
+        CloseModal();
+        secondary?.Invoke();
+    }
+
     private void CloseModal()
+
     {
         StopModalElapsed();
         _modalLayer.Visibility = Visibility.Collapsed;

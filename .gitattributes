@@ -1,0 +1,24 @@
+# Normalise line endings in the repository, check them out as the platform expects.
+#
+# This does not rewrite anything that is already committed. Adding it stops the
+# next commit from carrying a whole-file line ending change for a one line edit,
+# which is what makes a diff unreadable. Files already in the tree keep whatever
+# they have until something touches them deliberately, so this is a change to how
+# things behave from here on, not a reformat of the past.
+#
+# To actually normalise everything that is already committed, which is a separate
+# decision and a separate review, run:
+#   git add --renormalize .
+# and commit that on its own. Do not fold it into a change that does something.
+
+* text=auto
+
+# Anything FxSound or Windows wants to see byte for byte, byte for byte.
+*.ico   binary
+*.jpg   binary
+*.png   binary
+*.gif   binary
+*.mp3   binary
+*.bin   binary
+*.exe   binary
+*.fac   text eol=crlf

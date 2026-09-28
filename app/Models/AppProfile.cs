@@ -21,33 +21,6 @@ public sealed class AppProfile
 
     public string Source { get; set; } = "APP";
 
-    public string ShortPath
-    {
-        get
-        {
-            if (string.IsNullOrWhiteSpace(ExePath))
-            {
-                return ProcessName.ToUpperInvariant();
-            }
-
-            int cut = ExePath.LastIndexOf('\\');
-            return cut >= 0 ? ExePath.Substring(cut + 1).ToUpperInvariant() : ExePath.ToUpperInvariant();
-        }
-    }
-
-    public string SourceText
-    {
-        get
-        {
-            return Source switch
-            {
-                "STEAM" => "STEAM",
-                "MANUAL" => "PICKED",
-                _ => "APP"
-            };
-        }
-    }
-
     public AppProfile Copy()
     {
         return new AppProfile
@@ -97,14 +70,6 @@ public sealed class AppCandidate : System.ComponentModel.INotifyPropertyChanged
 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
-    public string Group
-    {
-        get
-        {
-            return Source == "STEAM" ? "STEAM GAMES" : "INSTALLED APPS";
-        }
-    }
-
     public override string ToString()
     {
         return Name;
@@ -134,47 +99,5 @@ public static class AppProfileTools
 
         int dot = file.LastIndexOf('.');
         return dot > 0 ? file.Substring(0, dot) : file;
-    }
-
-    public static AppProfile? Match(IReadOnlyList<AppProfile> profiles, string exePath)
-    {
-        if (string.IsNullOrWhiteSpace(exePath) || profiles.Count == 0)
-        {
-            return null;
-        }
-
-        string full = exePath.Trim();
-        string process = ProcessNameOf(full);
-
-        for (int i = 0; i < profiles.Count; i++)
-        {
-            AppProfile profile = profiles[i];
-            if (!profile.Enabled)
-            {
-                continue;
-            }
-
-            if (!string.IsNullOrWhiteSpace(profile.ExePath)
-                && string.Equals(profile.ExePath, full, StringComparison.OrdinalIgnoreCase))
-            {
-                return profile;
-            }
-        }
-
-        for (int i = 0; i < profiles.Count; i++)
-        {
-            AppProfile profile = profiles[i];
-            if (!profile.Enabled || string.IsNullOrWhiteSpace(profile.ProcessName))
-            {
-                continue;
-            }
-
-            if (string.Equals(profile.ProcessName, process, StringComparison.OrdinalIgnoreCase))
-            {
-                return profile;
-            }
-        }
-
-        return null;
     }
 }

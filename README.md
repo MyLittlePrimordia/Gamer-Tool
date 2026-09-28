@@ -12,6 +12,19 @@ A small Windows app for gamers. Set your screen and sound up once, then switch b
 
 Nothing is applied until you press **Apply** or a slot key, so you can look first and change second.
 
+## Keyboard and screen readers
+
+Every control can be reached with <kbd>Tab</kbd> and shows a focus ring, the band
+frequency dials answer the arrow keys, <kbd>Page Up</kbd>/<kbd>Page Down</kbd> and
+<kbd>Home</kbd>/<kbd>End</kbd>, and <kbd>Esc</kbd> backs out of any dialog. The
+shortcuts below work whether or not the window has focus.
+
+| Keys | Does |
+|---|---|
+| <kbd>Shift</kbd>+1,2,3 | Slot shortcuts |
+| <kbd>Alt</kbd>+1,2 | Slot shortcuts |
+| Any key you assign on the **Hotkeys** tab | Loads that slot, and again to switch it back off |
+
 ## Getting started
 
 1. Download `GamerTool.exe` from the [releases page](https://github.com/MyLittlePrimordia/Gamer-Tool/releases/latest) and run it. There is nothing to install.
@@ -21,6 +34,11 @@ Nothing is applied until you press **Apply** or a slot key, so you can look firs
 5. Press that key in a game. That is the whole app.
 
 ## Screenshots
+
+> **These are from an older build.** The Settings shot in particular predates the
+> two extra switches and the two section headings that have since changed. They
+> are here to show the general shape of each tab, not to be an exact reference.
+> Launch the app for the current layout.
 
 <table>
   <tr>
