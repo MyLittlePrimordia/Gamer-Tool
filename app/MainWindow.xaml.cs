@@ -226,6 +226,31 @@ public partial class MainWindow : Window
         _watcher.TargetExited += OnTargetExited;
 
         PreviewKeyDown += OnPreviewKeyDown;
+
+        // Keeps the caption buttons' focus ring for the keyboard only.
+        //
+        // The styles react to IsKeyboardFocusWithin, which is also true after a
+        // mouse click, so clicking minimize or close drew a plate and a border
+        // around a button that had already changed colour to say it was hovered.
+        // The obvious XAML fix is a MultiDataTrigger also requiring
+        // KeyboardNavigation.ShowKeyboardCues, which is WPF's own "did the last
+        // input come from a key" flag. Do not do that. It compiles, it passes the
+        // whole test suite, and the app then refuses to start with
+        // "Provide value on 'System.Windows.StaticResourceExtension' threw an
+        // exception" every single time. A binding on an attached property inside
+        // a ControlTemplate trigger breaks template parsing at runtime in a way
+        // nothing in the build catches.
+        //
+        // So the two are separated here instead. A button that is not focusable
+        // cannot be focused, and cannot report keyboard focus, so the ring stays
+        // away when the mouse pressed it. A key press makes them focusable again
+        // before the tab is processed, so tabbing still reaches them, which is the
+        // half that matters: close is the one control here that has to be usable
+        // without a mouse.
+        PreviewKeyDown += (_, _) => SetCaptionFocusable(true);
+        PreviewMouseDown += (_, _) => SetCaptionFocusable(false);
+        SetCaptionFocusable(true);
+
         WirePanicKeycap();
         Closing += OnClosing;
         Loaded += OnWindowLoaded;
@@ -357,6 +382,28 @@ public partial class MainWindow : Window
     /// rather than the profile, because that is where the truth lives.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Makes the caption buttons focusable, or not, depending on how the user is
+    /// driving the window.
+    /// <para>
+    /// Focusable is the lever, because it is the one thing that keeps a mouse
+    /// click from producing keyboard focus without needing a trigger that XAML
+    /// will refuse to parse. See the constructor for why this is not a
+    /// MultiDataTrigger on ShowKeyboardCues.
+    /// </para>
+    /// </summary>
+    private void SetCaptionFocusable(bool value)
+    {
+        if (CaptionMinButton.Focusable == value && CaptionCloseButton.Focusable == value)
+        {
+            return;
+        }
+
+        CaptionMinButton.Focusable = value;
+        CaptionCloseButton.Focusable = value;
+    }
+
+
     private void SyncControlsFromSettings()
     {
         GammaLockBox.IsChecked = _settings.GammaLock;

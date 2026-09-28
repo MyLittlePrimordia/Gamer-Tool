@@ -1061,12 +1061,20 @@ public partial class MainWindow : Window
                 _liveAudioName = "FLAT";
                 _activeAudioId = "flat";
 
+                // Persisted as well as set in memory, for the same reason the screen
+                // reset does it. Reached by the Reset button, the panic key, a slot
+                // being switched off, and a game exiting, and without this the sound
+                // went to Flat on screen while the profile went on remembering the
+                // preset that was applied before it.
+                _settings.ActiveAudioPresetId = "flat";
+
                 // Read here rather than before the wait, so it is the band count
                 // the panel has now rather than the one it had several seconds ago.
                 int bands = _bandSliders.Count > 0 ? _bandSliders.Count : AudioPreset.PresetBandCount;
                 LoadTune(_workDisplay, AudioPreset.Flat(bands));
                 RefreshPresetBoxes();
                 UpdateLiveLabels();
+                Commit();
             });
         }
         catch (Exception ex)

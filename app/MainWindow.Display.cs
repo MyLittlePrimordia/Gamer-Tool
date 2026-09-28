@@ -23,6 +23,18 @@ public partial class MainWindow : Window
         ShadowValue.Text = Signed(preset.ShadowBoost, "0") + "%";
         BrightValue.Text = Signed(preset.Brightness, "0") + "%";
         ContrastValue.Text = Signed(preset.Contrast, "0") + "%";
+
+        // The three channel trims, which had no readout at all and so were the one
+        // control in this panel that could only be set by eye. A gain of 1.12 against
+        // 1.00 is a real, saveable, shareable setting that you could write down but
+        // not read back off the screen, and the other four sliders above have shown
+        // their numbers the whole time. Two decimals because that is the step the
+        // faders snap to, so the text is the value rather than a rounded version of
+        // it.
+        RedValue.Text = preset.RedGain.ToString("0.00", CultureInfo.InvariantCulture);
+        GreenValue.Text = preset.GreenGain.ToString("0.00", CultureInfo.InvariantCulture);
+        BlueValue.Text = preset.BlueGain.ToString("0.00", CultureInfo.InvariantCulture);
+
         QueueDisplayPreview();
     }
 
@@ -405,6 +417,16 @@ public partial class MainWindow : Window
         _liveDisplayName = "STANDARD";
         _activeDisplayId = "flat";
 
+        // Persisted as well as set in memory. This path is reached by the Reset
+        // button, the panic key, and switching a loaded slot off, and all three of
+        // those are the user choosing a preset. Only writing the in-memory field
+        // left the remembered id pointing at whatever was applied before, so the
+        // screen went to Standard on screen, the next Commit saved the old id, and
+        // the app came back up on the previous preset. A reset that does not
+        // survive a restart is the exact behaviour the remember-last-used setting
+        // is supposed to prevent.
+        _settings.ActiveDisplayPresetId = "flat";
+
         // Taking the screen back to neutral by hand takes over from the app, so
         // the auto-apply guard is stood down here. Without this, a slot the app
         // loaded would still be remembered as ours after the user had reset it,
@@ -417,6 +439,12 @@ public partial class MainWindow : Window
         RefreshPresetBoxes();
         UpdateLiveLabels();
         UpdateScreenLabels(_workDisplay);
+
+        // The write, once the UI agrees with it. Committing before the labels are
+        // repainted would be harmless, but the point of the field above is that the
+        // remembered preset and the dropdown can never disagree, and doing it last
+        // keeps that true even if something above throws.
+        Commit();
     }
 
 
