@@ -35,11 +35,6 @@ shortcuts below work whether or not the window has focus.
 
 ## Screenshots
 
-> **These are from an older build.** The Settings shot in particular predates the
-> two extra switches and the two section headings that have since changed. They
-> are here to show the general shape of each tab, not to be an exact reference.
-> Launch the app for the current layout.
-
 <table>
   <tr>
     <td width="50%"><img src="screenshots/display.png" alt="Display tab"></td>
