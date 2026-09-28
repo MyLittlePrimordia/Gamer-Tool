@@ -84,7 +84,15 @@ jobs:
       # Keeps a single rolling "latest" release whose EXE is replaced on every
       # push, so the permanent download URL stays stable:
       #   https://github.com/<owner>/<repo>/releases/latest/download/GamerTool.exe
+      #
+      # Gated to main on purpose. Pushes are already limited to main, but
+      # workflow_dispatch is not: it can be fired from any branch or tag, and
+      # without this a dispatch from a feature branch would build that branch and
+      # publish it over the one file every existing download URL points at. The
+      # build and test steps above still run for any ref, which is what you want
+      # when dispatching to check a branch.
       - name: Add or overwrite the EXE on the latest release
+        if: github.ref == 'refs/heads/main'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

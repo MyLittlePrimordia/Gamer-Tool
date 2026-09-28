@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.ComponentModel;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using GamerTool.Services;
@@ -194,31 +195,88 @@ public class InstallerTrustTests
 
             File.WriteAllBytes(pfx, certificate.Export(X509ContentType.Pfx, Password));
 
-            // Authenticode needs a real PE to attach itself to, so use one that
-            // is definitely on a Windows box rather than synthesising a header.
-            string source = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-                "System32",
-                "notepad.exe");
+            string? failure = null;
 
-            if (!File.Exists(source))
+            foreach (string source in PeSources())
             {
-                source = Environment.ProcessPath ?? throw new InvalidOperationException("no PE to copy");
+                File.Copy(source, target, overwrite: true);
+
+                if (Sign(target, pfx, publisher) is not { } error)
+                {
+                    return new SignedExecutable(target, pfx);
+                }
+
+                failure = source + ": " + error;
             }
 
-            File.Copy(source, target, overwrite: true);
-
-            if (!Sign(target, pfx))
-            {
-                File.Delete(target);
-                File.Delete(pfx);
-                throw new InvalidOperationException("could not sign the test executable");
-            }
-
-            return new SignedExecutable(target, pfx);
+            File.Delete(target);
+            File.Delete(pfx);
+            throw new InvalidOperationException("could not sign the test executable: " + failure);
         }
 
-        private static bool Sign(string target, string pfx)
+        /// <summary>
+        /// Portable executables that can stand in for the real installer, best
+        /// first.
+        /// <para>
+        /// The choice matters much more than it looks. Windows treats a file
+        /// that has a driver catalog signature as an OS binary, and for one of
+        /// those Set-AuthenticodeSignature reports the catalog entry rather than
+        /// anything it just wrote: Status comes back Valid and SignerCertificate
+        /// reads "CN=Microsoft Windows", because that is who signed notepad.exe,
+        /// not us. Signing a copy of notepad.exe therefore went green while
+        /// proving nothing at all about the signature the test had just made,
+        /// and on a build image where notepad.exe is missing or a Store stub the
+        /// same code signed an ordinary PE instead and got a real signature,
+        /// which then failed the Valid check below. So: never start from a
+        /// system binary, and reject a Catalog result outright rather than
+        /// reading it as success.
+        /// </para>
+        /// </summary>
+        private static IEnumerable<string> PeSources()
+        {
+            // The test host, a plain .NET application, so never an OS binary.
+            if (Environment.ProcessPath is { Length: > 0 } self && File.Exists(self))
+            {
+                yield return self;
+            }
+
+            // Kept as fallbacks for the case where the test host turns out to be
+            // catalog signed too. dotnet.exe first because it is signed rather
+            // than stubbed on every image; the loop tolerates either failing.
+            foreach (string name in new[] { "dotnet.exe", "notepad.exe" })
+            {
+                string candidate = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                    "System32",
+                    name);
+
+                if (File.Exists(candidate))
+                {
+                    yield return candidate;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Signs <paramref name="target"/> with the throwaway certificate, or
+        /// returns why it could not.
+        /// <para>
+        /// Note what is deliberately NOT asserted: Status -eq 'Valid'. Status
+        /// reports whether the chain builds up to a trusted root, and a
+        /// certificate that exists only for the length of a test never can.
+        /// Demanding Valid is what made this fail on CI, with "A certificate
+        /// chain processed, but terminated in a root certificate which is not
+        /// trusted by the trust provider" from every attempt, while passing
+        /// locally purely because the catalog signature described in
+        /// <see cref="PeSources"/> was being mistaken for ours. What has to be
+        /// true is that an Authenticode signature was written and that it
+        /// carries our publisher, because that is the only thing
+        /// SetupService reads. The app does not validate the chain either, for
+        /// reasons given on IsSignedByPublisher, so demanding trust here would
+        /// be testing something the app does not do.
+        /// </para>
+        /// </summary>
+        private static string? Sign(string target, string pfx, string publisher)
         {
             var info = new ProcessStartInfo("powershell.exe")
             {
@@ -241,18 +299,79 @@ public class InstallerTrustTests
                 + "$c=Import-PfxCertificate -FilePath '" + pfx + "' -CertStoreLocation Cert:\\CurrentUser\\My -Password $sec;"
                 + "try{"
                 + "$s=Set-AuthenticodeSignature -FilePath '" + target + "' -Certificate $c;"
-                + "if($s.Status -ne 'Valid'){Write-Output ('STATUS='+$s.Status);exit 1}"
+                // Echoed rather than tested here, so the reason an attempt failed
+                // reaches the test output instead of being flattened into one
+                // opaque message. This was the reason the CI failure was not
+                // diagnosable from the log at all.
+                + "Write-Output ('Status='+$s.Status);"
+                + "Write-Output ('StatusMessage='+$s.StatusMessage);"
+                + "Write-Output ('SignatureType='+$s.SignatureType);"
+                + "Write-Output ('SignerSubject='+$s.SignerCertificate.Subject);"
+                // Windows answering about a catalog entry is not a signature we
+                // made, so tell the caller to move on to the next candidate.
+                + "if($s.SignatureType -ne 'Authenticode'){exit 2}"
+                + "if($s.SignerCertificate.Subject -notlike '*" + publisher + "*'){exit 3}"
                 + "}finally{Remove-Item -LiteralPath ('Cert:\\CurrentUser\\My\\'+$c.Thumbprint) -Force}");
 
-            using Process? process = Process.Start(info);
-            if (process is null)
+            Process? process;
+            try
             {
-                return false;
+                process = Process.Start(info);
+            }
+            catch (Win32Exception ex)
+            {
+                // powershell.exe missing, or blocked by policy. Worth a sentence
+                // in the failure rather than a bare Win32Exception from a helper.
+                return "powershell.exe could not be started: " + ex.Message;
             }
 
-            process.WaitForExit(60_000);
-            return process.ExitCode == 0;
+            if (process is null)
+            {
+                return "powershell.exe could not be started";
+            }
+
+            using (process)
+            {
+                // Both streams have to be drained, not just one. A signing attempt
+                // writes enough to stderr to fill the pipe buffer, and a process
+                // blocked on a full buffer never exits, which would turn a clear
+                // failure into a hung test run.
+                Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
+                Task<string> errorTask = process.StandardError.ReadToEndAsync();
+
+                if (!process.WaitForExit(120_000))
+                {
+                    // Reading ExitCode after a wait that timed out throws, so say what
+                    // happened instead. A signing attempt that never finishes is a
+                    // problem worth naming rather than an exception from the plumbing.
+                    // The child is killed either way: left running it would outlive
+                    // the test and could still be holding the imported certificate.
+                    try
+                    {
+                        process.Kill(entireProcessTree: true);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Already gone, which is the outcome that was wanted.
+                    }
+
+                    return "powershell.exe did not finish within 120s"
+                        + Environment.NewLine + Describe(outputTask, errorTask);
+                }
+
+                if (process.ExitCode == 0)
+                {
+                    return null;
+                }
+
+                return "exit code " + process.ExitCode + " from " + target
+                    + Environment.NewLine + Describe(outputTask, errorTask);
+            }
         }
+
+        /// <summary>Whatever the signing attempt managed to say about itself.</summary>
+        private static string Describe(Task<string> output, Task<string> error) =>
+            output.GetAwaiter().GetResult() + error.GetAwaiter().GetResult();
 
         public void Dispose()
         {

@@ -16,17 +16,117 @@ namespace GamerTool.Services;
 /// plugged in.
 /// </para>
 /// </summary>
+/// <summary>
+/// Everything <see cref="BacklightService"/> needs from the hardware, behind a
+/// seam.
+/// <para>
+/// The service otherwise talks straight to a static class that opens an I2C bus,
+/// which makes the interesting part of it untestable: the refusal counting, the
+/// exclusion list and the busy-skip handling are all pure bookkeeping over
+/// answers, and none of it can be exercised without a monitor on the desk. This
+/// exists so those rules can be pinned down in CI, and so no test has to be
+/// written that touches real hardware.
+/// </para>
+/// </summary>
+public interface IBacklightBus
+{
+    IReadOnlyList<MonitorProbe> ProbeAll(IReadOnlyCollection<string>? excludedDeviceKeys);
+
+    BusOutcome TrySetBrightness(
+        string deviceName,
+        uint value,
+        uint minimum,
+        uint maximum,
+        out string? why,
+        out int win32Error);
+}
+
+
+/// <summary>The real bus. A thin wrapper so the service has one thing to hold.</summary>
+public sealed class SystemBacklightBus : IBacklightBus
+{
+    public IReadOnlyList<MonitorProbe> ProbeAll(IReadOnlyCollection<string>? excludedDeviceKeys) =>
+        HardwareBrightness.ProbeAll(excludedDeviceKeys);
+
+    public BusOutcome TrySetBrightness(
+        string deviceName,
+        uint value,
+        uint minimum,
+        uint maximum,
+        out string? why,
+        out int win32Error) =>
+        HardwareBrightness.TrySetBrightness(deviceName, value, minimum, maximum, out why, out win32Error);
+}
+
+
+/// <summary>
+/// How many times a write is re-sent when the bus was busy rather than refused.
+/// <para>
+/// Pulled out of the window so it can be tested. The policy is small but it is
+/// the difference between a slider that lands where it was left and one that
+/// silently does nothing: a write that collided with another monitor's
+/// transaction used to be dropped on the floor, the row still showed the new
+/// value, and the panel stayed where it was with no error anywhere.
+/// </para>
+/// <para>
+/// The budget is one, deliberately. A retry once handles the ordinary case,
+/// where a probe of the next monitor was in flight for a few milliseconds. An
+/// unbounded retry would keep re-queueing against a bus that is wedged by a
+/// monitor that has stopped answering, which is the one situation where a
+/// brightness value must not be chasing the panel forever.
+/// </para>
+/// </summary>
+public sealed class BacklightWriteRetry
+{
+    /// <summary>Re-sends allowed per display before the value is given up on.</summary>
+    public const int MaxRetries = 1;
+
+    private readonly Dictionary<string, int> _attempts = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True when this display may be re-sent now. Counts as consumed when it
+    /// says yes, so a second busy answer for the same display says no and the
+    /// caller reports the failure instead of looping.
+    /// </summary>
+    public bool ShouldRetry(string deviceName)
+    {
+        int used = _attempts.TryGetValue(deviceName, out int seen) ? seen : 0;
+
+        if (used >= MaxRetries)
+        {
+            return false;
+        }
+
+        _attempts[deviceName] = used + 1;
+        return true;
+    }
+
+    /// <summary>Called on any answer that was not a skip, including a success.</summary>
+    public void Reset(string deviceName)
+    {
+        _attempts.Remove(deviceName);
+    }
+
+    /// <summary>Retries still unspent, for the log.</summary>
+    public int Remaining(string deviceName) =>
+        _attempts.TryGetValue(deviceName, out int used) ? Math.Max(0, MaxRetries - used) : MaxRetries;
+}
+
+
 public sealed class BacklightService
 {
     private AppSettings _settings;
+
+    private readonly IBacklightBus _bus;
 
     private readonly Dictionary<string, MonitorProbe> _byDevice = new(StringComparer.OrdinalIgnoreCase);
 
     private bool _probed;
 
-    public BacklightService(AppSettings settings)
+    public BacklightService(AppSettings settings, IBacklightBus? bus = null)
     {
         _settings = settings;
+        _bus = bus ?? new SystemBacklightBus();
     }
 
     /// <summary>
@@ -62,6 +162,14 @@ public sealed class BacklightService
     /// Reads every display once. Only ever called when the user has opted in, and
     /// never at startup: the first thing this app should not do is touch the I2C
     /// bus before being asked.
+    /// <para>
+    /// Single flight on purpose. The probe is started from two places, the setup
+    /// tab and the tab switch, and the old guard was only set once a probe had
+    /// finished, so two could start together. They then cleared and repopulated
+    /// the same dictionary underneath each other, and whichever finished last won:
+    /// a half filled table, or a display that had been probed and then dropped
+    /// without ever having been asked anything.
+    /// </para>
     /// </summary>
     public void Probe()
     {
@@ -70,28 +178,97 @@ public sealed class BacklightService
             return;
         }
 
-        _byDevice.Clear();
-
-        foreach (MonitorProbe monitor in HardwareBrightness.ProbeAll(_settings.ExcludedDdcMonitors))
+        lock (_probeGate)
         {
-            _byDevice[monitor.DeviceName] = monitor;
+            if (_probing)
+            {
+                // Someone else is already asking the monitors. Joining them is
+                // both cheaper and safer than starting a second pass.
+                AppLog.Info("backlight probe already running, not starting another");
+                return;
+            }
+
+            _probing = true;
         }
 
-        _probed = true;
-
-        foreach (MonitorProbe monitor in _byDevice.Values)
+        try
         {
-            // The probe result is the single most useful line in the log when
-            // someone reports that brightness will not move: it says what the
-            // driver said, per display, without anyone having to reproduce it.
-            AppLog.Info("backlight " + monitor.DeviceName + " " + monitor.FriendlyName
-                + " edid=" + monitor.Edid.Summary
-                + " capable=" + monitor.CanControlBacklight
-                + " reading=" + (monitor.Brightness?.ToString() ?? "none")
-                + " reason=" + (monitor.BlockedReason ?? monitor.NoReplyBecause ?? "none"));
+            _byDevice.Clear();
+
+            foreach (MonitorProbe monitor in _bus.ProbeAll(_settings.ExcludedDdcMonitors))
+            {
+                _byDevice[monitor.DeviceName] = monitor;
+            }
+
+            _probed = true;
+
+            foreach (MonitorProbe monitor in _byDevice.Values)
+            {
+                // The probe result is the single most useful line in the log when
+                // someone reports that brightness will not move: it says what the
+                // driver said, per display, without anyone having to reproduce it.
+                // The stage reached and the error are in there deliberately, so
+                // the difference between "no handle from the driver" and "declined
+                // the code" is readable without a debugger.
+                AppLog.Info("backlight " + monitor.DeviceName + " " + monitor.FriendlyName
+                    + " edid=" + monitor.Edid.Summary
+                    + " edidFrom=" + monitor.EdidSource
+                    + " link=" + monitor.Link
+                    + " capable=" + monitor.CanControlBacklight
+                    + " reading=" + (monitor.Brightness?.ToString() ?? "none")
+                    + " stage=" + StageOf(monitor)
+                    + " outcome=" + monitor.Outcome
+                    + " win32=" + (monitor.LastError ?? "none")
+                    + " attempts=" + monitor.Attempts.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + " probeMs=" + monitor.ProbeMs.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + " phys=" + (monitor.PhysicalMonitor ?? "none")
+                    + " excluded=" + _settings.ExcludedDdcMonitors.Contains(monitor.DeviceName)
+                    + " refusals=" + RefusalCountOf(monitor.DeviceName).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + " reason=" + (monitor.BlockedReason ?? monitor.NoReplyBecause ?? "none"));
+            }
+        }
+        finally
+        {
+            lock (_probeGate)
+            {
+                _probing = false;
+            }
         }
 
         Probed?.Invoke();
+    }
+
+
+    private readonly object _probeGate = new();
+
+    private bool _probing;
+
+    private int RefusalCountOf(string deviceName) =>
+        _refusals.TryGetValue(deviceName, out int seen) ? seen : 0;
+
+    /// <summary>
+    /// The furthest point the probe got, in words. This is the difference between
+    /// a monitor that said no and a machine that never asked, and it is the first
+    /// thing worth reading when a display is greyed out for no visible reason.
+    /// </summary>
+    public static string StageOf(MonitorProbe monitor)
+    {
+        if (monitor.BlockedReason is not null)
+        {
+            return monitor.BlockedReason.StartsWith("on your exclusion", StringComparison.Ordinal)
+                ? "excluded"
+                : "edid-preflight";
+        }
+
+        return monitor.Outcome switch
+        {
+            BusOutcome.Ok => "vcp-read-ok",
+            BusOutcome.NoDdcPathway => "no-ddc-handle",
+            BusOutcome.Refused => "vcp-declined",
+            BusOutcome.TimedOut => "timeout",
+            BusOutcome.Busy => "bus-busy",
+            _ => "failed"
+        };
     }
 
 
@@ -101,21 +278,28 @@ public sealed class BacklightService
     public MonitorProbe? Find(string deviceName) =>
         _byDevice.TryGetValue(deviceName, out MonitorProbe? probe) ? probe : null;
 
-
     /// <summary>
-    /// What a display can be told, in its own terms. Unsupported means exactly
-    /// what it says: this display, not this machine.
+    /// What the row shows the user. Deliberately short and free of anything a
+    /// person cannot act on: the row used to print the whole refusal string,
+    /// which meant a tooltip reading "declined 0x10 after 3 attempts, error
+    /// 0xC0262581" on a row whose badge says NOT SUPPORTED. The technical half
+    /// is in the log and in Copy diagnostics, where it can be pasted into a bug
+    /// report, which is the only place it was ever any use.
     /// </summary>
     public string CapabilityOf(MonitorProbe monitor)
     {
-        if (monitor.BlockedReason is not null)
+        if (monitor.CanControlBacklight)
         {
-            return "Not supported - " + monitor.BlockedReason;
+            return "Supported";
         }
 
-        return monitor.CanControlBacklight
-            ? "Supported"
-            : "Not supported - " + (monitor.NoReplyBecause ?? "the monitor did not answer");
+        if (monitor.BlockedReason is not null
+            && monitor.BlockedReason.StartsWith("on your exclusion", StringComparison.Ordinal))
+        {
+            return "Not supported - switch Hardware brightness off and on to try again";
+        }
+
+        return "This monitor doesn't support hardware brightness.";
     }
 
 
@@ -143,15 +327,22 @@ public sealed class BacklightService
     /// <summary>
     /// Writes a new brightness. The first time a display is touched its current
     /// value is remembered so it can be handed back on the way out.
+    /// <para>
+    /// Returns the outcome rather than a bool, because the caller has to tell
+    /// three things apart: it landed, the display refused, or the bus was busy
+    /// and the display was never asked. Collapsing those into a false is what
+    /// made a skipped write vanish, since the only sensible thing to do with a
+    /// bool false is to show the user that it failed.
+    /// </para>
     /// </summary>
-    public bool TrySet(MonitorProbe monitor, uint value, out string? why)
+    public BusOutcome TrySet(MonitorProbe monitor, uint value, out string? why)
     {
         why = null;
 
         if (!monitor.CanControlBacklight || monitor.Brightness is null)
         {
             why = "this display does not support hardware brightness";
-            return false;
+            return BusOutcome.Failed;
         }
 
         if (!_settings.OriginalHardwareBrightness.ContainsKey(monitor.DeviceName))
@@ -159,17 +350,35 @@ public sealed class BacklightService
             _settings.OriginalHardwareBrightness[monitor.DeviceName] = monitor.Brightness.Current;
         }
 
-        if (!HardwareBrightness.TrySetBrightness(
-                monitor.DeviceName,
-                value,
-                monitor.Brightness.Minimum,
-                monitor.Brightness.Maximum,
-                out why))
+        BusOutcome outcome = _bus.TrySetBrightness(
+            monitor.DeviceName,
+            value,
+            monitor.Brightness.Minimum,
+            monitor.Brightness.Maximum,
+            out why,
+            out int win32Error);
+
+        if (outcome == BusOutcome.Busy)
         {
-            AppLog.Warn("backlight write refused on " + monitor.DeviceName + ": " + (why ?? "unknown"));
+            // Not a refusal, and not the display's fault. Nothing is recorded and
+            // nothing is cleared: the reading stays live, and the caller is
+            // expected to send the same value again rather than leaving the row
+            // showing a brightness the panel is not actually at.
+            return BusOutcome.Busy;
+        }
+
+        if (outcome != BusOutcome.Ok)
+        {
+            string detail = win32Error == 0
+                ? why ?? "unknown"
+                : (why ?? "unknown") + " [" + DdcErrors.Describe(win32Error) + "]";
+
+            AppLog.Warn("backlight write on " + monitor.DeviceName + " ended " + outcome
+                + ": " + detail);
 
             int count = _refusals.TryGetValue(monitor.DeviceName, out int seen) ? seen + 1 : 1;
             _refusals[monitor.DeviceName] = count;
+            monitor.Outcome = outcome;
 
             if (count < RefusalsBeforeExclusion)
             {
@@ -182,34 +391,74 @@ public sealed class BacklightService
                     + " (attempt " + count.ToString(System.Globalization.CultureInfo.InvariantCulture)
                     + " of " + RefusalsBeforeExclusion.ToString(System.Globalization.CultureInfo.InvariantCulture)
                     + ", will try again)";
-                return false;
+                return outcome;
             }
 
             // A run of them. Now the display is put on the exclusion list so the
             // next launch does not probe it either, and the reading is cleared so
-            // the row greys out rather than failing every remaining drag.
+            // the row greys out rather than failing every remaining drag. The
+            // Hardware brightness switch clears this again, so it is a pause
+            // rather than a life sentence.
             if (!_settings.ExcludedDdcMonitors.Contains(monitor.DeviceName))
             {
                 _settings.ExcludedDdcMonitors.Add(monitor.DeviceName);
                 _settingsChanged = true;
+                AppLog.Warn("backlight excluding " + monitor.FriendlyOrDevice()
+                    + " after " + count.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + " refusals: " + detail
+                    + ". Turn the Hardware brightness switch off and on to clear this.");
             }
 
             monitor.NoReplyBecause = why;
             monitor.Brightness = null;
-            return false;
+            return outcome;
         }
 
         _refusals.Remove(monitor.DeviceName);
         monitor.NoReplyBecause = null;
+        monitor.Outcome = BusOutcome.Ok;
 
         monitor.Brightness = new BrightnessReading
         {
             Minimum = monitor.Brightness.Minimum,
             Current = Math.Clamp(value, monitor.Brightness.Minimum, monitor.Brightness.Maximum),
-            Maximum = monitor.Brightness.Maximum
+            Maximum = monitor.Brightness.Maximum,
+            CodeType = monitor.Brightness.CodeType
         };
 
-        return true;
+        return BusOutcome.Ok;
+    }
+
+
+    /// <summary>
+    /// Forgets every exclusion and every refusal count, and allows a fresh probe.
+    /// <para>
+    /// Wired to the Hardware brightness switch going from off to on. The
+    /// exclusion list is persisted, so before this a monitor that had been
+    /// written off once stayed written off for good with no way back short of
+    /// editing settings.json by hand, and switching the feature off and on again
+    /// did nothing at all because the probe guard was still set.
+    /// </para>
+    /// </summary>
+    public void ForgetExclusions()
+    {
+        bool hadAny = _settings.ExcludedDdcMonitors.Count > 0 || _refusals.Count > 0;
+
+        foreach (string device in _settings.ExcludedDdcMonitors.ToList())
+        {
+            AppLog.Info("backlight clearing exclusion for " + device);
+        }
+
+        _settings.ExcludedDdcMonitors.Clear();
+        _refusals.Clear();
+        _byDevice.Clear();
+        _probed = false;
+
+        if (hadAny)
+        {
+            _settingsChanged = true;
+            AppLog.Info("backlight exclusions and refusal counts cleared, will probe again");
+        }
     }
 
     /// <summary>
@@ -247,7 +496,18 @@ public sealed class BacklightService
 
             // No UI, no opt-in check, no probing: this runs while the app is
             // already on its way out and has to work with what is already known.
-            HardwareBrightness.TrySetBrightness(device, original, 0, maximum, out _);
+            // The outcome is ignored on purpose. A display that will not take its
+            // value back on the way out is a problem worth a line in the log, but
+            // not one to be shouted about while the app is closing.
+            BusOutcome outcome = _bus.TrySetBrightness(device, original, 0, maximum, out string? why, out int win32Error);
+
+            if (outcome != BusOutcome.Ok)
+            {
+                AppLog.Warn("backlight could not restore " + device + " to "
+                    + original.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + ": " + outcome + " " + (why ?? string.Empty)
+                    + (win32Error == 0 ? string.Empty : " [" + DdcErrors.Describe(win32Error) + "]"));
+            }
         }
 
         _settings.OriginalHardwareBrightness.Clear();

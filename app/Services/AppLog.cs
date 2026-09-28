@@ -228,16 +228,45 @@ public static class AppLog
     }
 
 
-    /// <summary>One line per display, for the summary.</summary>
+    /// <summary>
+    /// One block per display, for Copy diagnostics.
+    /// <para>
+    /// This is the whole point of the section. Someone with an unfamiliar monitor
+    /// should be able to paste one block and have it say what the driver said,
+    /// how the display is wired, what the EDID decoded to and how far the probe
+    /// got, without anybody having to guess which question to ask next. It
+    /// deliberately carries no serial number: this text ends up in public issues.
+    /// </para>
+    /// </summary>
     public static string BacklightLines(IEnumerable<MonitorProbe> monitors)
     {
         List<string> lines = new();
+
         foreach (MonitorProbe monitor in monitors)
         {
-            lines.Add("  " + monitor.FriendlyName + " [" + monitor.DeviceName + "] "
-                + (monitor.CanControlBacklight
-                    ? "backlight OK, " + monitor.Brightness
-                    : "backlight unavailable: " + (monitor.BlockedReason ?? monitor.NoReplyBecause)));
+            lines.Add("  " + monitor.FriendlyOrDevice());
+            lines.Add("    stage        : " + BacklightService.StageOf(monitor));
+            lines.Add("    capable      : " + monitor.CanControlBacklight);
+            lines.Add("    reading      : " + (monitor.Brightness?.ToString() ?? "none"));
+            lines.Add("    vcp type     : " + (monitor.Brightness?.CodeType.ToString() ?? "none"));
+            lines.Add("    win32        : " + (monitor.LastError ?? "none"));
+            lines.Add("    attempts     : " + monitor.Attempts.ToString(CultureInfo.InvariantCulture)
+                + "   probe " + monitor.ProbeMs.ToString(CultureInfo.InvariantCulture) + "ms");
+            lines.Add("    physical mon : " + (monitor.PhysicalMonitor ?? "none"));
+            lines.Add("    link         : " + monitor.Link);
+            lines.Add("    edid source  : " + monitor.EdidSource
+                + (HardwareBrightness.RegistryMatchBy.Length > 0 && monitor.EdidSource == "registry"
+                    ? " (" + Sanitise(HardwareBrightness.RegistryMatchBy) + ")"
+                    : string.Empty));
+            lines.Add("    edid         : " + monitor.Edid.Summary
+                + (monitor.Edid.Verdict == EdidVerdict.Plausible
+                    ? string.Empty
+                    : " [" + monitor.Edid.Verdict + "]"));
+
+            if (monitor.NoReplyBecause is not null || monitor.BlockedReason is not null)
+            {
+                lines.Add("    reason       : " + Sanitise(monitor.BlockedReason ?? monitor.NoReplyBecause ?? string.Empty));
+            }
         }
 
         return lines.Count == 0 ? "  (no displays probed)" : string.Join(Environment.NewLine, lines);

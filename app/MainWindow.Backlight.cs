@@ -34,6 +34,13 @@ public partial class MainWindow
     private readonly Dictionary<string, DispatcherTimer> _backlightDebounce = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// How many re-sends a display gets when the bus was busy rather than
+    /// refusing. See BacklightWriteRetry for why the budget is one.
+    /// </summary>
+    private readonly BacklightWriteRetry _backlightRetry = new();
+
+
+    /// <summary>
     /// The brightness each monitor's debounce is currently waiting to write, keyed
     /// by device name. The value lives here rather than in the tick handler's
     /// closure because the handler is built once per monitor and then reused for
@@ -245,7 +252,7 @@ public partial class MainWindow
         {
             uint wanted = (uint)Math.Round(slider.Value);
             value.Text = wanted + " / " + reading.Maximum;
-            QueueBacklightWrite(monitor, slider, wanted);
+            QueueBacklightWrite(monitor, wanted);
         };
 
         block.Children.Add(slider);
@@ -274,8 +281,12 @@ public partial class MainWindow
     /// Holds a drag still for a moment before it touches the bus. The engine
     /// wants at most one write every 120ms or so; sending a write per pixel of
     /// mouse movement is how a slider ends up looking broken on a slow scaler.
+    /// <para>
+    /// Also the way a re-sent value goes back out, which is why it takes only the
+    /// value and not the slider: a retry has no slider to hand.
+    /// </para>
     /// </summary>
-    private void QueueBacklightWrite(MonitorProbe monitor, Slider slider, uint value)
+    private void QueueBacklightWrite(MonitorProbe monitor, uint value)
     {
         if (!_backlightDebounce.TryGetValue(monitor.DeviceName, out DispatcherTimer? timer))
         {
@@ -309,7 +320,7 @@ public partial class MainWindow
     {
         _ = Task.Run(() =>
         {
-            bool ok = Backlight.TrySet(monitor, value, out string? why);
+            BusOutcome outcome = Backlight.TrySet(monitor, value, out string? why);
             bool settingsChanged = Backlight.ConsumeSettingsChanged();
 
             Dispatcher.InvokeAsync(() =>
@@ -323,7 +334,39 @@ public partial class MainWindow
                     Commit();
                 }
 
-                if (!ok)
+                // The bus was busy, so the display was never asked and the value
+                // is still wanted. Put it back and let the debounce carry it
+                // once the other monitor's transaction has finished. Without this
+                // the row sits at a brightness the panel is not at, and the only
+                // symptom is a slider that looks stuck.
+                //
+                // This has to happen here rather than on the worker: the re-send
+                // restarts a DispatcherTimer, which belongs to the UI thread.
+                if (outcome == BusOutcome.Busy)
+                {
+                    if (_backlightRetry.ShouldRetry(monitor.DeviceName))
+                    {
+                        AppLog.Info("backlight write to " + monitor.FriendlyOrDevice()
+                            + " was skipped because the bus was busy, re-sending "
+                            + value.ToString(CultureInfo.InvariantCulture)
+                            + " once ("
+                            + _backlightRetry.Remaining(monitor.DeviceName).ToString(CultureInfo.InvariantCulture)
+                            + " re-send left)");
+                        QueueBacklightWrite(monitor, value);
+                        return;
+                    }
+
+                    AppLog.Warn("backlight write to " + monitor.FriendlyOrDevice()
+                        + " still could not get the bus after "
+                        + BacklightWriteRetry.MaxRetries.ToString(CultureInfo.InvariantCulture)
+                        + " re-send; leaving the value alone. The row may not match the panel.");
+                }
+                else
+                {
+                    _backlightRetry.Reset(monitor.DeviceName);
+                }
+
+                if (outcome != BusOutcome.Ok)
                 {
                     Flash(why ?? "The monitor refused the brightness", true);
                 }
@@ -332,6 +375,7 @@ public partial class MainWindow
             });
         });
     }
+
 
 
     /// <summary>

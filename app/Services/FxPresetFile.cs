@@ -37,8 +37,21 @@ public static class FxPresetFile
     /// Writes the preset and returns the full path, or null when it could not be
     /// written. A failure here is not fatal: the scalar settings can still be
     /// pushed, only the curve is lost, so the caller carries on.
+    /// <para>
+    /// <paramref name="folder"/> exists so a test can write somewhere disposable.
+    /// This class is static and the presets folder is FxSound's own, so there is
+    /// no seam to inject through and a test that called this with the default
+    /// overwrote the real preset in the user profile. That is not a near miss: the
+    /// only tests exercising this were leaving a bypassed, three band curve
+    /// sitting in the developer's own FxSound presets, because the file they
+    /// wrote was never the one their cleanup looked for.
+    /// </para>
     /// </summary>
-    public static string? Write(AudioPreset preset, IReadOnlyList<double> frequencies, bool effectsEnabled)
+    public static string? Write(
+        AudioPreset preset,
+        IReadOnlyList<double> frequencies,
+        bool effectsEnabled,
+        string? folder = null)
     {
         try
         {
@@ -66,8 +79,9 @@ public static class FxPresetFile
             RewriteEq(lines, freqs, gains, effectsEnabled);
             SetName(lines, PresetName);
 
-            Directory.CreateDirectory(PresetsFolder);
-            string path = Path.Combine(PresetsFolder, PresetName + ".fac");
+            string destination = string.IsNullOrWhiteSpace(folder) ? PresetsFolder : folder;
+            Directory.CreateDirectory(destination);
+            string path = Path.Combine(destination, PresetName + ".fac");
             File.WriteAllLines(path, lines);
             return path;
         }

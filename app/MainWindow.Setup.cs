@@ -47,8 +47,21 @@ public partial class MainWindow : Window
         _settings.FxPromptDisabled = FxPromptBox.IsChecked == true;
         _settings.StartHidden = StartHiddenBox.IsChecked == true;
         _settings.CloseToTray = CloseToTrayBox.IsChecked == true;
+
+        bool wasEnabled = _settings.HardwareBrightnessEnabled;
         _settings.HardwareBrightnessEnabled = HardwareBrightnessBox.IsChecked == true;
         _display.SetLock(_settings.GammaLock);
+
+        // Off to on is the way back from a monitor that was written off. The
+        // exclusion list is persisted, so without this a single bad minute left a
+        // display permanently greyed out with no route back except editing
+        // settings.json by hand, and the HasProbed guard below meant switching
+        // off and on again did not even re-probe. This is the only control the
+        // feature has, so it is the only place the reset can live.
+        if (_settings.HardwareBrightnessEnabled && !wasEnabled)
+        {
+            Backlight.ForgetExclusions();
+        }
 
         // Switching this on is the only thing that ever starts a probe, and the
         // probe runs off the UI thread because it talks to a monitor over I2C.

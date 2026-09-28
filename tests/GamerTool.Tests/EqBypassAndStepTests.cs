@@ -39,26 +39,51 @@ public class EqBypassAndStepTests
         NumBands = bands.Length,
     };
 
+    /// <summary>
+    /// Writes the preset to a throwaway folder and hands back its text.
+    /// <para>
+    /// The folder is passed explicitly, and that is the whole point of this
+    /// helper. It used to build a temp file path, never use it, call
+    /// FxPresetFile.Write with no folder at all, and then delete
+    /// <c>GamerToolTests-*.fac</c> out of %TEMP%. The write went to FxSound's
+    /// real presets folder and the cleanup glob could never match anything, so
+    /// every run of this file silently overwrote the developer's own
+    /// GamerTool.fac with whatever curve the last test happened to use, and left
+    /// it that way. Deleting the folder it actually wrote to is what stops that.
+    /// </para>
+    /// </summary>
     private static string WriteAndRead(AudioPreset preset, bool effectsEnabled)
     {
-        string path = Path.Combine(Path.GetTempPath(), "GamerToolTests-" + System.Guid.NewGuid().ToString("N")[..8] + ".fac");
+        string folder = Path.Combine(
+            Path.GetTempPath(),
+            "GamerToolTests-" + System.Guid.NewGuid().ToString("N")[..8]);
+
         try
         {
-            string? written = FxPresetFile.Write(preset, Enumerable.Range(0, preset.NumBands).Select(i => AudioPreset.BandFrequency(preset.NumBands, i)).ToList(), effectsEnabled);
+            string? written = FxPresetFile.Write(
+                preset,
+                Enumerable.Range(0, preset.NumBands)
+                    .Select(i => AudioPreset.BandFrequency(preset.NumBands, i))
+                    .ToList(),
+                effectsEnabled,
+                folder);
+
             Assert.NotNull(written);
             return File.ReadAllText(written!);
         }
         finally
         {
-            foreach (string f in Directory.GetFiles(Path.GetTempPath(), "GamerToolTests-*.fac"))
+            // The whole folder, rather than a glob in a directory the write never
+            // went to.
+            try
             {
-                try
-                {
-                    File.Delete(f);
-                }
-                catch (IOException)
-                {
-                }
+                Directory.Delete(folder, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
             }
         }
     }
@@ -130,6 +155,54 @@ public class EqBypassAndStepTests
 
         Assert.Equal(on.Split('\n').Count(l => l.Contains("Boost/Cut", StringComparison.Ordinal)),
                      off.Split('\n').Count(l => l.Contains("Boost/Cut", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Writing_a_test_preset_leaves_the_real_ones_alone()
+    {
+        // The guard for the mistake this file used to make. FxPresetFile is static
+        // and writes into FxSound's own presets folder, so nothing stopped a test
+        // from landing a throwaway curve in the developer's real profile. This
+        // pins the invariant directly: given somewhere else to write, the real
+        // preset must come out byte for byte identical and untouched in time.
+        string real = Path.Combine(FxPresetFile.PresetsFolder, FxPresetFile.PresetName + ".fac");
+        bool existed = File.Exists(real);
+        DateTime before = existed ? File.GetLastWriteTimeUtc(real) : DateTime.MinValue;
+        string? contentBefore = existed ? File.ReadAllText(real) : null;
+
+        string folder = Path.Combine(Path.GetTempPath(), "GamerToolTests-" + System.Guid.NewGuid().ToString("N")[..8]);
+
+        try
+        {
+            string? written = FxPresetFile.Write(
+                Tune(9.0, -9.0),
+                Enumerable.Range(0, 2).Select(i => AudioPreset.BandFrequency(2, i)).ToList(),
+                effectsEnabled: true,
+                folder);
+
+            Assert.NotNull(written);
+            Assert.StartsWith(folder, written!, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(folder, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        Assert.Equal(existed, File.Exists(real));
+        if (existed)
+        {
+            Assert.Equal(before, File.GetLastWriteTimeUtc(real));
+            Assert.Equal(contentBefore, File.ReadAllText(real));
+        }
     }
 
     [Fact]
