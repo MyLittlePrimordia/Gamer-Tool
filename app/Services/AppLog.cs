@@ -52,18 +52,64 @@ public static class AppLog
     public static void Error(string tag, Exception ex)
     {
         SawError = true;
+        Write("ERROR", tag + " " + Describe(ex));
+    }
+
+
+    /// <summary>
+    /// An exception written out with its whole cause chain, not just the top.
+    /// <para>
+    /// This walks every level, one indented line each, and the deepest exception is
+    /// usually the only one worth reading. It used to unwrap exactly one level, and
+    /// that was not enough to diagnose a real failure: WPF wraps a template it
+    /// cannot parse three deep, so the log line said
+    /// "Provide value on 'System.Windows.StaticResourceExtension' threw an
+    /// exception", which names a resource and blames a lookup, while the actual
+    /// cause two levels down was "Must have non-null value for 'Binding'". Reading
+    /// the top of that chain sends you looking for a missing resource that was
+    /// never missing. The stack trace of every level is kept for the same reason,
+    /// since the frame that threw is usually not the frame that decided.
+    /// </para>
+    /// </summary>
+    public static string Describe(Exception ex)
+    {
+        ArgumentNullException.ThrowIfNull(ex);
 
         StringBuilder text = new();
-        text.Append(ex.GetType().Name).Append(": ").Append(ex.Message).Append(Environment.NewLine);
+        int depth = 0;
 
-        if (ex.InnerException is not null)
+        for (Exception? current = ex; current is not null; current = current.InnerException)
         {
-            text.Append("  caused by ").Append(ex.InnerException.GetType().Name)
-                .Append(": ").Append(ex.InnerException.Message).Append(Environment.NewLine);
+            if (depth > 0)
+            {
+                text.Append("  caused by ");
+            }
+
+            text.Append(new string(' ', depth * 2))
+                .Append(current.GetType().Name)
+                .Append(": ")
+                .Append(current.Message)
+                .Append(Environment.NewLine);
+
+            if (!string.IsNullOrEmpty(current.StackTrace))
+            {
+                text.Append(new string(' ', depth * 2 + 2))
+                    .Append(current.StackTrace)
+                    .Append(Environment.NewLine);
+            }
+
+            depth++;
+
+            // A cycle here would hang the log writer, and a malformed exception
+            // graph is exactly the sort of thing that turns up in a crash handler.
+            if (depth > 16)
+            {
+                text.Append("  ... chain truncated").Append(Environment.NewLine);
+                break;
+            }
         }
 
-        text.Append(ex.StackTrace);
-        Write("ERROR", tag + " " + text);
+        return text.ToString();
     }
 
 

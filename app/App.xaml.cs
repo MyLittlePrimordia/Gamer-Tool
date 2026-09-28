@@ -87,9 +87,49 @@ public partial class App : Application
         catch (Exception ex)
         {
             WriteLog("STARTUP", ex);
-            MessageBox.Show("GAMER TOOL COULD NOT START: " + ex.Message, "GAMER TOOL", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(StartupFailureText(ex), "GAMER TOOL", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
         }
+    }
+
+    /// <summary>
+    /// The text of the "could not start" box.
+    /// <para>
+    /// Both the top of the chain and the actual cause, because on its own either
+    /// one sends you the wrong way. A real failure this was written for was a WPF
+    /// template that would not parse: the box said "Provide value on
+    /// 'System.Windows.StaticResourceExtension' threw an exception", which says a
+    /// resource could not be found, and the cause two levels down was a null
+    /// Binding in a trigger. Somebody reading only the first line goes looking for
+    /// a missing resource, and there is no missing resource.
+    /// </para>
+    /// <para>
+    /// The cause is only added when it says something different, so the common case
+    /// of a one-level exception is not padded out, and the log path is always named
+    /// because the box is not where the stack trace lives.
+    /// </para>
+    /// </summary>
+    private static string StartupFailureText(Exception ex)
+    {
+        const string headline = "GAMER TOOL COULD NOT START";
+
+        string text = headline + Environment.NewLine + ex.Message;
+
+        Exception root = ex;
+        while (root.InnerException is not null)
+        {
+            root = root.InnerException;
+        }
+
+        if (!string.IsNullOrWhiteSpace(root.Message)
+            && !string.Equals(root.Message, ex.Message, StringComparison.Ordinal))
+        {
+            text += Environment.NewLine + Environment.NewLine
+                + "Actual cause:" + Environment.NewLine + root.Message;
+        }
+
+        return text + Environment.NewLine + Environment.NewLine
+            + "Full details, including the stack trace:" + Environment.NewLine + AppLog.Path_;
     }
 
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
