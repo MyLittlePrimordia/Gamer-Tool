@@ -26,6 +26,29 @@ public sealed class HotkeyBinding
     public string Text { get; set; } = string.Empty;
 }
 
+/// <summary>
+/// What a keystroke means while a keycap is listening for a new binding.
+/// <para>
+/// The decision lives here rather than in the key handler so it can be tested
+/// without a window. Every value except <see cref="Bind"/> keeps the keycap
+/// listening.
+/// </para>
+/// </summary>
+public enum HotkeyCapture
+{
+    /// <summary>A modifier arriving on its own, or a bare key that needs one. Keep listening.</summary>
+    NeedsModifier,
+
+    /// <summary>Escape. Abandon the attempt and put the old binding back.</summary>
+    Cancel,
+
+    /// <summary>Backspace or Delete. Drop this slot's binding.</summary>
+    Clear,
+
+    /// <summary>A complete binding. Take <see cref="HotkeyModifiers"/> and a key.</summary>
+    Bind
+}
+
 public sealed class HotkeyService : IDisposable
 {
     private const int WmHotkey = 0x0312;
@@ -186,7 +209,80 @@ public sealed class HotkeyService : IDisposable
     }
 
 
-    public static string FromInput(Key key, HotkeyModifiers mods)    {
+    /// <summary>
+    /// The key the user actually pressed, given the pair WPF reports.
+    /// <para>
+    /// Holding Alt makes WPF report <see cref="Key.System"/> and put the real key
+    /// in <paramref name="systemKey"/>. Passing the first one through blindly is
+    /// how "ALT+SYSTEM" ended up as a live binding: it looks like a chord, it
+    /// survives a save and reload, and it never fires. Every caller that turns a
+    /// key event into a binding has to go through here instead.
+    /// </para>
+    /// </summary>
+    public static Key ResolveKey(Key key, Key systemKey) =>
+        key == Key.System && systemKey != Key.System ? systemKey : key;
+
+    /// <summary>True for a key that only modifies another key, never one that binds.</summary>
+    public static bool IsModifierKey(Key key) => key
+        is Key.LeftCtrl or Key.RightCtrl
+        or Key.LeftAlt or Key.RightAlt
+        or Key.LeftShift or Key.RightShift
+        or Key.LWin or Key.RWin
+        or Key.System
+        or Key.None;
+
+    /// <summary>
+    /// F1 to F24. These are the one family that binds without a modifier, which
+    /// is what every launcher and overlay does: they are not characters, so
+    /// binding one cannot swallow anything the user was typing.
+    /// </summary>
+    public static bool IsFunctionKey(Key key) => key >= Key.F1 && key <= Key.F24;
+
+    /// <summary>
+    /// Decides what a keystroke means mid capture. Escape cancels, Backspace and
+    /// Delete clear the slot, a lone modifier or an unmodified character key is
+    /// refused politely and the keycap keeps listening, and anything else binds.
+    /// </summary>
+    public static HotkeyCapture ClassifyCapture(Key key, HotkeyModifiers mods)
+    {
+        if (IsModifierKey(key))
+        {
+            return HotkeyCapture.NeedsModifier;
+        }
+
+        if (key == Key.Escape)
+        {
+            return HotkeyCapture.Cancel;
+        }
+
+        if (key is Key.Back or Key.Delete)
+        {
+            return HotkeyCapture.Clear;
+        }
+
+        // Bare characters would eat typing everywhere, so they need a modifier.
+        // F-keys are the deliberate exception.
+        if (mods == HotkeyModifiers.None && !IsFunctionKey(key))
+        {
+            return HotkeyCapture.NeedsModifier;
+        }
+
+        return HotkeyCapture.Bind;
+    }
+
+    /// <summary>
+    /// Renders a binding, or an empty string when the key cannot be one. A
+    /// modifier or an unresolved <see cref="Key.System"/> produces nothing rather
+    /// than a plausible looking binding, so a mistake upstream cannot be written
+    /// into a slot and then persisted.
+    /// </summary>
+    public static string FromInput(Key key, HotkeyModifiers mods)
+    {
+        if (IsModifierKey(key))
+        {
+            return string.Empty;
+        }
+
         StringBuilder builder = new();
         if ((mods & HotkeyModifiers.Control) != 0)
         {
@@ -328,8 +424,21 @@ public sealed class HotkeyService : IDisposable
         }
 
         key = KeyFromToken(parts[^1]);
-        return key != Key.None;
+
+        // "SYSTEM" and the modifier names all name real members of Key, so the
+        // lookup above happily returns them. None of them can be pressed as a
+        // chord, and accepting one is how "ALT+SYSTEM" came to be a saved binding
+        // that displayed fine and never fired.
+        return key != Key.None && !IsModifierKey(key);
     }
+
+    /// <summary>
+    /// True when a stored string names a binding that can actually be pressed.
+    /// Used to drop the ones that cannot, rather than showing them as if they
+    /// worked.
+    /// </summary>
+    public static bool IsBindable(string? text) =>
+        !string.IsNullOrWhiteSpace(text) && TryParse(text, out _, out _);
 
     private static uint ToNative(HotkeyModifiers mods)
     {

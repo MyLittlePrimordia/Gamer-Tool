@@ -36,8 +36,16 @@ public sealed class FrequencyDial : Control
     /// <summary>
     /// The white the value dot is drawn in, the same near-white the effect slider
     /// handles use, so a dial and a Dynamic Boost knob are visibly the same thing.
+    /// <para>
+    /// Public, and used by the toggle switches as well. The switched on knob used
+    /// to be a near black left over from the display accent, which read as a hole
+    /// punched in the track rather than as a handle, and was the wrong hue for
+    /// every accent but that one. One value for all of them cannot drift.
+    /// </para>
     /// </summary>
-    private static readonly Brush KnobFill = Frozen(Color.FromArgb(0xFF, 0xF0, 0xF0, 0xF0));
+    public static readonly Color KnobColour = Color.FromArgb(0xFF, 0xF0, 0xF0, 0xF0);
+
+    private static readonly Brush KnobFill = Frozen(KnobColour);
     private const double StartAngle = 135.0;
 
     private const double SweepAngle = 270.0;

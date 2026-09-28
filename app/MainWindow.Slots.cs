@@ -132,6 +132,25 @@ public partial class MainWindow : Window
 
 
     /// <summary>
+    /// Puts a slot's binding on its keycap, or the empty hint when it has none.
+    /// Kept in one place so the saved binding and the caption can never drift
+    /// apart, whichever direction the keycap is being reset from.
+    /// </summary>
+    private static void ShowSlotKey(TextBox keyBox, string? hotkey)
+    {
+        if (string.IsNullOrWhiteSpace(hotkey))
+        {
+            keyBox.Text = "NOT SET";
+            keyBox.ToolTip = "Click, then press the combo you want  ·  F1 to F24 bind on their own";
+            return;
+        }
+
+        keyBox.Text = hotkey;
+        keyBox.ToolTip = hotkey + "  ·  click to change, Esc cancels, Backspace clears";
+    }
+
+
+    /// <summary>
     /// A single slot as one full width row: keycap, name, the three things it
     /// loads, which screen it touches, when it fires, and the two per slot
     /// actions on the far right.
@@ -151,16 +170,11 @@ public partial class MainWindow : Window
         TextBox keyBox = new()
         {
             Style = (Style)FindResource("KeyCap"),
-            Text = slot.Hotkey,
             Tag = slot.Id,
-            Height = 28,
-
-            // The whole instruction lives here rather than in a permanent footer.
-            // It is what the box is for, and the box already looks like a key.
-            ToolTip = string.IsNullOrWhiteSpace(slot.Hotkey)
-                ? "Click, then hold Ctrl or Alt and press the combo you want"
-                : slot.Hotkey + "  ·  click to change, press again to switch this slot off"
+            Height = 28
         };
+
+        ShowSlotKey(keyBox, slot.Hotkey);
 
         System.Windows.Automation.AutomationProperties.SetName(
             keyBox, "Key for " + (string.IsNullOrWhiteSpace(slot.Name) ? "slot" : slot.Name));
@@ -168,15 +182,26 @@ public partial class MainWindow : Window
         {
             _captureSlotId = slot.Id;
             _captureBox = keyBox;
-            keyBox.SelectAll();
+
+            // Listening state, spelled the way every launcher spells it. The
+            // keycap is read only, so this is the only way it ever says anything
+            // other than the current binding.
+            keyBox.Text = "PRESS A KEY";
+            keyBox.ToolTip = "Esc cancels  ·  Backspace clears  ·  F1 to F24 bind on their own";
         };
         keyBox.LostKeyboardFocus += (s, e) =>
         {
-            if (ReferenceEquals(_captureBox, keyBox))
+            if (!ReferenceEquals(_captureBox, keyBox))
             {
-                _captureSlotId = null;
-                _captureBox = null;
+                return;
             }
+
+            // Clicked away without choosing anything, so the slot keeps what it
+            // had. Without this the "PRESS A KEY" prompt or the modifier hint
+            // stays on screen pretending to be a binding.
+            ShowSlotKey(keyBox, slot.Hotkey);
+            _captureSlotId = null;
+            _captureBox = null;
         };
         Grid.SetColumn(keyBox, 0);
 
@@ -447,6 +472,21 @@ public partial class MainWindow : Window
 
 
     private const string SelfMarker = "\\self";
+
+
+    /// <summary>
+    /// Identifies the panic key inside the hotkey service. Slot bindings are
+    /// "slot:" plus the slot id, so this has to be a shape no slot can produce.
+    /// </summary>
+    private const string EmergencyTargetId = "emergency";
+
+
+    /// <summary>
+    /// Registration id for the panic key. Slot ids count up from one and there
+    /// are a handful of slots, so a high number keeps the two apart without
+    /// threading a counter through.
+    /// </summary>
+    private const int EmergencyHotkeyId = 1000;
 
 
     private static bool SameTarget(HotkeySlot a, HotkeySlot b)
@@ -887,6 +927,21 @@ public partial class MainWindow : Window
         List<HotkeySlot> skipped = new();
         int id = 1;
 
+        // The panic key is offered to Windows before any slot, so that if the two
+        // ever meet it is the slot that gives way. It is the one binding whose
+        // entire job is to still work when something else has gone wrong, and a
+        // slot is a shortcut. A slot that loses the combo is reported below like
+        // any other duplicate rather than silently going dead.
+        string panicKey = string.Empty;
+        if (!string.IsNullOrWhiteSpace(_settings.EmergencyHotkey))
+        {
+            panicKey = HotkeyService.Normalise(_settings.EmergencyHotkey);
+            if (taken.Add(panicKey))
+            {
+                _hotkeys.Register(EmergencyHotkeyId, EmergencyTargetId, _settings.EmergencyHotkey);
+            }
+        }
+
         foreach (HotkeySlot slot in _settings.Slots)
         {
             if (!string.IsNullOrWhiteSpace(slot.Hotkey) && slot.Enabled)
@@ -909,8 +964,15 @@ public partial class MainWindow : Window
         {
             string names = string.Join(", ", skipped.Select(s => s.Name));
             string keys = string.Join(", ", skipped.Select(s => s.Hotkey).Distinct(StringComparer.OrdinalIgnoreCase));
+            bool lostToPanic = panicKey.Length > 0
+                && skipped.Any(s => HotkeyService.Normalise(s.Hotkey) == panicKey);
+
             RailStatus.Text = "DUP KEY SKIPPED ON " + names.ToUpperInvariant();
-            Flash("Key already on another slot, skipped on " + names, true);
+            Flash(
+                lostToPanic
+                    ? "Panic key took " + keys + " from " + names
+                    : "Key already on another slot, skipped on " + names,
+                true);
             TraceLog.Write("HOTKEY duplicate " + keys + " skipped on " + names);
         }
     }
@@ -933,6 +995,19 @@ public partial class MainWindow : Window
     /// </summary>
     private async void OnHotkeyPressed(HotkeyBinding binding)
     {
+        if (string.Equals(binding.TargetId, EmergencyTargetId, StringComparison.OrdinalIgnoreCase))
+        {
+            // The same neutral path a slot takes when it is switched off, so the
+            // panic key lands in exactly the state quitting would have left, and
+            // there is only one definition of "back to normal" in the app.
+            GoScreenNeutral();
+            await GoSoundNeutralAsync();
+            RailStatus.Text = "PANIC RESET";
+            Flash("Screen and sound reset");
+            TraceLog.Write("PANIC key pressed, screen and sound reset");
+            return;
+        }
+
         if (binding.TargetId.StartsWith("slot:", StringComparison.OrdinalIgnoreCase))
         {
             string id = binding.TargetId["slot:".Length..];
@@ -988,6 +1063,83 @@ public partial class MainWindow : Window
             RegisterHotkeys();
             Flash("Slot named " + trimmed);
         });
+    }
+
+
+    /// <summary>
+    /// Points the panic key at a new combo, taking it off any slot that held it.
+    /// The steal is the same rule the slots use, the thing you are pointing at
+    /// wins, because a slot quietly keeping a chord the user has just given away
+    /// is how you end up with two things bound to one key and no way to tell.
+    /// </summary>
+    private void BindPanicHotkey(string text)
+    {
+        string wanted = HotkeyService.Normalise(text);
+        HotkeySlot? clash = _settings.Slots.FirstOrDefault(s =>
+            s.Enabled
+            && string.Equals(HotkeyService.Normalise(s.Hotkey), wanted, StringComparison.Ordinal));
+
+        if (clash is not null)
+        {
+            clash.Hotkey = string.Empty;
+            Flash("Panic key took it from " + clash.Name);
+        }
+
+        _settings.EmergencyHotkey = text;
+        EndCapture(restore: false);
+        Commit();
+        ShowSlotKey(PanicKeyBox, text);
+        BuildSlots();
+        RegisterHotkeys();
+        Flash("Panic key set to " + text);
+    }
+
+
+    /// <summary>Backspace or Delete on the panic keycap drops the binding.</summary>
+    private void ClearPanicHotkey()
+    {
+        if (!string.IsNullOrWhiteSpace(_settings.EmergencyHotkey))
+        {
+            _settings.EmergencyHotkey = string.Empty;
+            Flash("Panic key cleared");
+        }
+
+        EndCapture(restore: false);
+        Commit();
+        ShowSlotKey(PanicKeyBox, _settings.EmergencyHotkey);
+        RegisterHotkeys();
+    }
+
+
+    /// <summary>
+    /// Gives the panic keycap the same behaviour as a slot keycap: click to
+    /// listen, Esc cancels, Backspace clears, never free text. Wired once here
+    /// rather than rebuilt with the rest of the page, because the box is declared
+    /// in the page and lives as long as the window does.
+    /// </summary>
+    private void WirePanicKeycap()
+    {
+        ShowSlotKey(PanicKeyBox, _settings.EmergencyHotkey);
+
+        PanicKeyBox.GotKeyboardFocus += (s, e) =>
+        {
+            _capturingPanic = true;
+            _captureSlotId = null;
+            _captureBox = PanicKeyBox;
+            PanicKeyBox.Text = "PRESS A KEY";
+            PanicKeyBox.ToolTip = "Esc cancels  ·  Backspace clears  ·  F1 to F24 bind on their own";
+        };
+        PanicKeyBox.LostKeyboardFocus += (s, e) =>
+        {
+            if (!ReferenceEquals(_captureBox, PanicKeyBox))
+            {
+                return;
+            }
+
+            ShowSlotKey(PanicKeyBox, _settings.EmergencyHotkey);
+            _captureBox = null;
+            _capturingPanic = false;
+        };
     }
 
 

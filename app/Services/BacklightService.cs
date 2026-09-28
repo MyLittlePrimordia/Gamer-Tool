@@ -282,7 +282,7 @@ public sealed class BacklightService
     /// What the row shows the user. Deliberately short and free of anything a
     /// person cannot act on: the row used to print the whole refusal string,
     /// which meant a tooltip reading "declined 0x10 after 3 attempts, error
-    /// 0xC0262581" on a row whose badge says NOT SUPPORTED. The technical half
+    /// 0xC0262581" on a row whose badge reads Not Supported. The technical half
     /// is in the log and in Copy diagnostics, where it can be pasted into a bug
     /// report, which is the only place it was ever any use.
     /// </summary>

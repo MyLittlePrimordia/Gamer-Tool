@@ -49,6 +49,24 @@ public sealed class AppSettings
     public bool AutoRevertOnExit { get; set; } = true;
 
     /// <summary>
+    /// Global key that puts the screen and the sound straight back to neutral,
+    /// for when a boost has gone wrong and the window is not reachable.
+    /// <para>
+    /// This exists because the tray can do it but only if you can get to the tray,
+    /// and quitting only helps once you have closed the app. A game that renders
+    /// unplayable while a gamma ramp is stuck is exactly the moment you cannot
+    /// click anything.
+    /// </para>
+    /// <para>
+    /// Defaulted rather than left empty on purpose: a safety net that has to be
+    /// configured before it works is not one, and this key is deliberately
+    /// awkward to hit by accident. It is a normal bindable hotkey, so it can be
+    /// moved like any other if it lands on something.
+    /// </para>
+    /// </summary>
+    public string EmergencyHotkey { get; set; } = "CTRL+ALT+F12";
+
+    /// <summary>
     /// Auto preamp: trims master gain by the largest EQ boost so boosted bands
     /// cannot hit 0 dBFS and hard-clip.
     /// </summary>

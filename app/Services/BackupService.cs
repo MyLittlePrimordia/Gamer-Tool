@@ -195,6 +195,16 @@ public sealed class BackupService
     /// to carry at least one name this app actually writes.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Property names that mark a blob as one of this app's own profiles.
+    /// <para>
+    /// "UserHotkeys" has no property behind it any more. It is kept because
+    /// profiles written before hotkeys moved into slots still carry the key, and
+    /// dropping the marker would stop those files being recognised as something
+    /// worth offering to restore. It is a name in a file, not a live field, which
+    /// is why looking for it in the model finds nothing.
+    /// </para>
+    /// </summary>
     private static readonly string[] ProfileMarkers =
     {
         "Schema", "Slots", "UserHotkeys", "ActiveDisplayPresetId", "ActiveAudioPresetId",

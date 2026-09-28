@@ -354,7 +354,7 @@
                                                 </Grid.ColumnDefinitions>
 
                                         <StackPanel Grid.Column="0">
-                                            <TextBlock x:Name="AntiClipLabel" Style="{StaticResource Label}" Text="Anti-clip" HorizontalAlignment="Center" Margin="0,0,0,4" />
+                                            <TextBlock x:Name="RedLabel" Style="{StaticResource Label}" Text="Red" HorizontalAlignment="Center" Margin="0,0,0,4" />
                                             <Slider x:Name="RedSlider" ui:SliderSnap.Neutral="1.0" ui:SliderSnap.Threshold="0.012" Style="{StaticResource BandSliderVertical}" Foreground="#F87171"
                                                     Width="28" Height="92" Minimum="0.7" Maximum="1.3" TickFrequency="0.01"
                                                     IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged" ToolTip="Red" AutomationProperties.Name="Red channel trim" />
@@ -897,8 +897,8 @@
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Button Content="Apply" Style="{StaticResource PrimaryButton}" MinWidth="116"
-                                            Click="OnApplySoundClick" ToolTip="Apply" AutomationProperties.Name="Apply the sound preset" />
+                                <Button Content="Apply" Style="{StaticResource PrimaryButtonAudio}" MinWidth="116"
+                                    Click="OnApplySoundClick" ToolTip="Apply" AutomationProperties.Name="Apply the sound preset" />
                                     <ui:IconButton Icon="{x:Static ui:Icons.Refresh}" Style="{StaticResource IconButton}" Margin="10,0,0,0"
                                                    Click="OnResetSoundClick" ToolTip="Reset" AutomationProperties.Name="Reset the sound to normal" />
                                     <Button x:Name="SaveToFxSoundButton" Content="Save in FxSound" Style="{StaticResource GhostButton}" Margin="10,0,0,0"
@@ -925,10 +925,30 @@
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="18" />
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock x:Name="SlotCountText" Grid.Column="0" Style="{StaticResource SectionHeader}"
                                            Text="SLOTS" VerticalAlignment="Center" />
+
+                                <!-- The panic key lives here rather than in the
+                                     general settings, because it is a hotkey and
+                                     this is where hotkeys live. It was one more
+                                     row in the settings list, which is what put a
+                                     scrollbar on a list that had never needed
+                                     one. Keeping the two ideas apart is also why
+                                     it is easier to find. -->
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <ui:EmojiImage Glyph="key" Width="17" Height="17" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <TextBlock Text="Panic key" VerticalAlignment="Center" Margin="0,0,8,0"
+                                               FontFamily="{StaticResource Sans}" FontSize="12"
+                                               Foreground="{StaticResource TextMid}" />
+                                    <TextBox x:Name="PanicKeyBox" Style="{StaticResource KeyCap}"
+                                             Width="112" MinWidth="112" Height="26"
+                                             AutomationProperties.Name="Panic key" />
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
                                     <ui:IconButton x:Name="ScanGamesButton" Icon="{x:Static ui:Icons.Search}" Style="{StaticResource IconButton}" Margin="0,0,6,0"
                                                    Click="OnScanAppsClick" ToolTip="Scan" AutomationProperties.Name="Scan this PC for games" />
                                     <ui:IconButton Icon="{x:Static ui:Icons.Plus}" Style="{StaticResource IconButton}" Margin="0,0,6,0"
@@ -1145,7 +1165,7 @@
 
                                 <Border x:Name="DiagRow" Style="{StaticResource ActionRow}" Cursor="Hand"
                                         MouseLeftButtonUp="OnCopyDiagnosticsClick"
-                                        ToolTip="Copy the log to the clipboard">
+                                        ToolTip="Click to copy the log  ·  the folder opens the logs in Explorer">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto" />
@@ -1161,23 +1181,46 @@
                                                    FontFamily="{StaticResource Sans}" FontSize="12"
                                                    Foreground="{StaticResource TextHi}" TextTrimming="CharacterEllipsis" />
 
-                                        <!-- The mark and the confirmation swap rather
-                                             than sit on top of each other, and both
-                                             are pinned to the right edge, so nothing
-                                             shifts sideways when the row reports
-                                             back. -->
-                                        <Grid Grid.Column="4" MinWidth="34">
-                                            <Button x:Name="CopyDiagButton" Style="{StaticResource GhostButton}"
+                                        <!-- Two actions on one row rather than two rows.
+                                             The folder began as its own row, which
+                                             made this page one line too tall and put
+                                             a scrollbar on a list that had never
+                                             needed one. A settings list you have to
+                                             scroll to reach its own diagnostics is
+                                             worse than one that does not. Copying
+                                             stays on the row surface because that is
+                                             what the row has always done; the folder
+                                             is a second, deliberate mark. -->
+
+                                        <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <!-- The mark and the confirmation swap rather
+                                                 than sit on top of each other, and both
+                                                 are pinned to the right edge of their own
+                                                 group, so nothing shifts sideways when
+                                                 the row reports back. -->
+                                            <Grid MinWidth="34">
+                                                <Button x:Name="CopyDiagButton" Style="{StaticResource GhostButton}"
+                                                        Width="34" Height="30" MinWidth="0" Padding="0"
+                                                        HorizontalAlignment="Right"
+                                                        HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                                        Click="OnCopyDiagnosticsClick">
+                                                    <ui:EmojiImage Glyph="clipboard" Width="19" Height="19" />
+                                                </Button>
+                                                <TextBlock x:Name="DiagCopiedText" Visibility="Collapsed"
+                                                           VerticalAlignment="Center" HorizontalAlignment="Right"
+                                                           FontFamily="{StaticResource Sans}" FontSize="11" FontWeight="SemiBold" />
+                                            </Grid>
+
+                                            <Button x:Name="OpenLogFolderButton" Style="{StaticResource GhostButton}"
                                                     Width="34" Height="30" MinWidth="0" Padding="0"
-                                                    HorizontalAlignment="Right"
                                                     HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                                                    Click="OnCopyDiagnosticsClick">
-                                                <ui:EmojiImage Glyph="clipboard" Width="19" Height="19" />
+                                                    PreviewMouseLeftButtonUp="OnOpenLogFolderPreview"
+                                                    Click="OnOpenLogFolderClick"
+                                                    ToolTip="Open the log folder"
+                                                    AutomationProperties.Name="Open log folder">
+                                                <ui:EmojiImage Glyph="folder" Width="19" Height="19" />
                                             </Button>
-                                            <TextBlock x:Name="DiagCopiedText" Visibility="Collapsed"
-                                                       VerticalAlignment="Center" HorizontalAlignment="Right"
-                                                       FontFamily="{StaticResource Sans}" FontSize="11" FontWeight="SemiBold" />
-                                        </Grid>
+                                        </StackPanel>
                                     </Grid>
                                 </Border>
 

@@ -4,7 +4,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
-using GamerTool.Models;
 using GamerTool.Services;
 using Brush = System.Windows.Media.Brush;
 using Color = System.Windows.Media.Color;
@@ -14,68 +13,88 @@ using Size = System.Windows.Size;
 namespace GamerTool.UI;
 
 /// <summary>
-/// Draws a live spectrum of the preview track.
-///
-/// The magnitudes are pre-computed offline from the embedded preview track and
-/// shipped as a small table of bytes, because WPF's MediaPlayer will not hand up
-/// samples to run an FFT on and decoding the track at runtime would mean pulling
-/// in Media Foundation. Baking it once keeps the app dependency free and the
-/// frame timing exact.
-///
-/// What makes this useful rather than decorative is the second half: each bar is
-/// then weighted by the gain of the EQ band it sits in, so dragging a band fader
-/// visibly grows or shrinks that slice of the spectrum. The bars therefore show
-/// the curve the user is building, which is the thing they are trying to judge.
+/// Draws a live spectrum of whatever Windows is playing.
+/// <para>
+/// This used to replay a table of magnitudes baked offline from one preview
+/// track, and that was wrong in two ways that no test caught. The table was a
+/// slice of a 30 dB window, so anything more than 30 dB down stored as a
+/// literal zero: thirteen of the top fourteen bars were zero in every frame and
+/// could never move. And there was one table, made from game.mp3, while the
+/// player offers samples of 95, 156 and 223 seconds, so cycling to anything
+/// longer than the baked length pinned the position past the end of the table
+/// and froze the whole row.
+/// </para>
+/// <para>
+/// Now it taps the render device with a WASAPI loopback, which is how FxSound's
+/// own analyser hears system audio, and runs the numbers over whatever arrives.
+/// So it reacts to games, music and video alike, the top of the spectrum is
+/// present because the range is wide enough to show it, and there is no asset to
+/// keep in step with a track that no baker in this repository can rebuild.
+/// </para>
+/// <para>
+/// The equaliser's band gains are deliberately no longer folded into the heights.
+/// The loopback tap is downstream of FxSound, so the curve the user has built is
+/// already physically in the signal; adding it to the display a second time would
+/// draw a correction on top of a correction, and the bars would disagree with the
+/// sound they are meant to be showing.
+/// </para>
 /// </summary>
 public sealed class SpectrumView
 {
-    /// <summary>How many bars the row is divided into.</summary>
-    public const int BarCount = 48;
+    /// <summary>
+    /// How many bars the row is divided into.
+    /// <para>
+    /// Sixty seven percent more than the forty eight this started on, because
+    /// the bars were too heavy to read as a spectrum and more of them look finer
+    /// rather than blockier. At the usual host width that is a four pixel bar
+    /// and a one pixel gap, against six and two before.
+    /// </para>
+    /// <para>
+    /// Worth being straight about what the extra bars do and do not buy. The
+    /// analysis window is 2048 samples, so at 44.1 kHz one FFT bin covers about
+    /// 21 Hz. A bar below roughly 200 Hz is narrower than that no matter how many
+    /// of them there are, and the analyser already widens the very lowest bands
+    /// to two bins so they stop flickering. So the new bars are density and
+    /// visual fineness, mostly in the mid and high end. Genuinely more detail
+    /// down at the bass would need a longer window, which costs response time
+    /// that was spent getting the display quick in the first place.
+    /// </para>
+    /// </summary>
+    public const int BarCount = 80;
 
-    private const double LowHz = 40.0;
-    private const double HighHz = 16000.0;
-
-    /// <summary>The gap between bars, in whole device pixels.</summary>
-    private const double GapPixels = 2.0;
+    /// <summary>Roughly a third of a second, comfortably over one analysis window.</summary>
+    private const int SampleBuffer = 16384;
 
     private readonly Grid _host;
     private readonly SpectrumBars _bars;
-    private readonly double[] _level = new double[BarCount];
-    private readonly double[] _barCentreHz = new double[BarCount];
+    private readonly ISampleFeed _feed;
     private readonly DispatcherTimer _timer;
-    private readonly Func<TimeSpan> _position;
-    private readonly Func<bool> _playing;
 
-    private byte[] _frames = Array.Empty<byte>();
-    private int _frameCount;
-    private double _secondsPerFrame = 1.0 / 22.0;
+    /// <summary>Fresh from the analyser this frame. Never drawn directly.</summary>
+    private readonly double[] _raw = new double[BarCount];
 
-    private Func<int, double>? _bandGain;
+    private readonly SpectrumSmoother _smoother = new(BarCount);
+    private readonly float[] _samples = new float[SampleBuffer];
 
     /// <summary>Stopwatch seconds of the previous tick, for frame rate independent smoothing.</summary>
     private double _lastTick;
 
-    public SpectrumView(Grid host, Func<TimeSpan> position, Func<bool> playing)
+    /// <summary>Set once the first capture has been logged, so it is not logged on every start.</summary>
+    private bool _announced;
+
+    public SpectrumView(Grid host, ISampleFeed feed)
     {
         _host = host;
-        _position = position;
-        _playing = playing;
-
-        for (int i = 0; i < BarCount; i++)
-        {
-            double t = (i + 0.5) / BarCount;
-            _barCentreHz[i] = LowHz * Math.Pow(HighHz / LowHz, t);
-        }
+        _feed = feed;
 
         _bars = new SpectrumBars(BarBrush());
         BuildBars();
-        Load();
 
         _timer = new DispatcherTimer(DispatcherPriority.Render)
         {
-            // The baked table only has about twenty two frames a second, so a slow
-            // tick would step the bars visibly. Ticking at sixty and blending
-            // between the two nearest frames turns that staircase into motion.
+            // Sixty a second, so the smoothing reads the same whatever the machine
+            // does, and so a bass hit shows up on the frame it lands rather than
+            // on the next one.
             Interval = TimeSpan.FromMilliseconds(16)
         };
         _timer.Tick += OnTick;
@@ -87,14 +106,14 @@ public sealed class SpectrumView
         _host.SizeChanged += (_, _) => LayoutColumns();
     }
 
-    /// <summary>Supplies the gain in dB for one spectrum bar, from the live EQ.</summary>
-    public void SetBandGain(Func<int, double>? bandGain)
-    {
-        _bandGain = bandGain;
-    }
+    /// <summary>True while real audio is arriving.</summary>
+    public bool IsLive => _feed.IsLive;
 
     public void Start()
     {
+        _feed.Start();
+        _announced = false;
+
         if (!_timer.IsEnabled)
         {
             _timer.Start();
@@ -104,66 +123,15 @@ public sealed class SpectrumView
     public void Stop()
     {
         _timer.Stop();
-        Array.Clear(_level);
+        _feed.Stop();
+        _smoother.Reset();
         _bars.SetIdle(true);
     }
 
     public void Release()
     {
         _timer.Stop();
-    }
-
-    /// <summary>
-    /// Reads the pre-computed magnitudes. Header layout, kept in lockstep with the
-    /// generator that bakes Assets\spectrum.bin from the preview track:
-    /// 0 magic, 4 version, 8 bars, 12 frames, 16 rate, 20 hop, 24 fft, 28 length.
-    /// </summary>
-    private void Load()
-    {
-        try
-        {
-            byte[] raw = DisplayPreview.ReadAsset("spectrum.bin");
-            const int HeaderSize = 32;
-            if (raw.Length < HeaderSize)
-            {
-                TraceLog.Write("SPECTRUM asset too short: " + raw.Length);
-                return;
-            }
-
-            int bars = BitConverter.ToInt32(raw, 8);
-            _frameCount = BitConverter.ToInt32(raw, 12);
-            int rate = BitConverter.ToInt32(raw, 16);
-            int hop = BitConverter.ToInt32(raw, 20);
-            int length = BitConverter.ToInt32(raw, 28);
-
-            // The frame count has to agree with the byte count as well as with the
-            // length, because the tick indexes straight into the table by frame. A
-            // header claiming more frames than the table holds put an out of range
-            // read inside a sixteen millisecond timer, and an exception in a timer
-            // becomes a dialog per tick that cannot be dismissed. The asset is
-            // embedded so this needs a broken build, but the check is a comparison.
-            if (bars != BarCount
-                || hop <= 0
-                || rate <= 0
-                || length <= 0
-                || raw.Length < HeaderSize + length
-                || _frameCount <= 0
-                || (long)_frameCount * BarCount > length)
-            {
-                TraceLog.Write("SPECTRUM bad header bars=" + bars + " hop=" + hop + " len=" + length + " frames=" + _frameCount);
-                _frameCount = 0;
-                return;
-            }
-
-            _frames = new byte[length];
-            Buffer.BlockCopy(raw, HeaderSize, _frames, 0, length);
-            _secondsPerFrame = (double)hop / rate;
-            TraceLog.Write("SPECTRUM ready frames=" + _frameCount + " step=" + _secondsPerFrame.ToString("0.0000", System.Globalization.CultureInfo.InvariantCulture));
-        }
-        catch (Exception ex)
-        {
-            TraceLog.Write("SPECTRUM", ex);
-        }
+        _feed.Stop();
     }
 
     private void BuildBars()
@@ -233,105 +201,50 @@ public sealed class SpectrumView
         // version walked the bars into violet, which put a second, lighter pink
         // on the same tab as the equaliser and the dials and made the whole page
         // look like it had two accents.
-        SolidColorBrush brush = new(Color.FromRgb(0xFF, 0x2D, 0x6F));
+        //
+        // The value itself was sampled out of a live FxSound window rather than
+        // picked by eye, because eyeballing a pink is how you end up with a pink
+        // that is nearly the same and not quite.
+        SolidColorBrush brush = new(SpectrumBars.BarAxisColour);
         brush.Freeze();
         return brush;
     }
 
     private void OnTick(object? sender, EventArgs e)
     {
-        if (_frames.Length == 0 || _frameCount == 0)
-        {
-            return;
-        }
-
-        bool playing = _playing();
-        double available = Math.Max((_host.ActualHeight - 4) / 2.0, 1);
-
-        // Seconds since the last tick, so the smoothing feels the same whatever
-        // the timer ends up doing. A fixed per tick fraction would attack and
-        // release at three different speeds depending on the frame rate.
+        // Seconds since the last tick, so the display feels the same whatever the
+        // timer ends up doing.
         double now = Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
         double dt = _lastTick <= 0.0 ? 1.0 / 60.0 : Math.Clamp(now - _lastTick, 0.0, 0.1);
         _lastTick = now;
 
-        // Framerate independent exponential approach. Attack is quick so a
-        // transient shows up immediately, release is slower so the bars fall away
-        // instead of flickering.
-        double attack = 1.0 - Math.Exp(-28.0 * dt);
-        double release = 1.0 - Math.Exp(-9.0 * dt);
+        int got = _feed.Read(_samples);
 
-        // Paused or stopped decays all the way to nothing, rather than holding a
-        // dimmed frozen frame. A held frame reads as a stuck picture; FxSound's
-        // analyser falls silent and so should this one.
-        double decay = 1.0 - Math.Exp(-6.0 * dt);
+        // A full window or nothing, which is what the analyser itself requires.
+        // This check is only a cheap way of not calling it, and it is kept in step
+        // with the analyser's own rule on purpose: it used to allow half a window
+        // and disagree with it.
+        bool analysed = got >= SpectrumAnalyser.WindowSize
+            && SpectrumAnalyser.Analyse(
+                _samples.AsSpan(0, got),
+                _feed is LoopbackSampleFeed live ? live.SampleRate : 48000,
+                BarCount,
+                _raw.AsSpan());
 
-        int first = 0;
-        double blend = 0.0;
-        if (playing)
+        if (!_announced && _feed is LoopbackSampleFeed feed)
         {
-            double exact = _position().TotalSeconds / _secondsPerFrame;
-            first = (int)Math.Floor(exact);
-            blend = exact - first;
-
-            if (first < 0)
-            {
-                first = 0;
-                blend = 0.0;
-            }
-            else if (first >= _frameCount - 1)
-            {
-                first = _frameCount - 1;
-                blend = 0.0;
-            }
+            _announced = true;
+            TraceLog.Write("SPECTRUM loopback "
+                + (feed.IsLive ? "live at " + feed.SampleRate + " Hz" : "unavailable: " + (feed.LastFailure ?? "unknown")));
         }
 
-        int offset = first * BarCount;
-        int next = playing && first + 1 < _frameCount ? offset + BarCount : offset;
-
-        for (int bar = 0; bar < BarCount; bar++)
-        {
-            double target = 0.0;
-
-            if (playing)
-            {
-                double a = _frames[offset + bar] / 255.0;
-                double b = _frames[next + bar] / 255.0;
-                target = a + ((b - a) * blend);
-
-                if (_bandGain is not null)
-                {
-                    // The baked magnitudes are a linear 0..1 slice of a 30 dB window,
-                    // so a band's gain in dB maps onto the same scale as exactly
-                    // gain / 30. Using the window width here is what keeps the bars
-                    // honest: a +12 dB band really does grow them by 40 percent of
-                    // the full height, and a -12 dB band shrinks them the same way.
-                    target += _bandGain(bar) / 30.0;
-                }
-
-                target = Math.Clamp(target, 0.0, 1.0);
-            }
-
-            double k = !playing ? decay : (target > _level[bar] ? attack : release);
-            _level[bar] += (target - _level[bar]) * k;
-
-            if (!playing && _level[bar] < 0.004)
-            {
-                _level[bar] = 0.0;
-            }
-        }
-
-        // One call, one redraw. This used to be forty-eight Height assignments,
-        // which is forty-eight layout invalidations a tick, at sixty ticks a
-        // second, for a picture that only changes height.
-        _bars.Update(_level, available);
-    }
-
-    /// <summary>Centre frequency of a bar, exposed so the window can match EQ bands to bars.</summary>
-    public static double BarCentre(int bar)
-    {
-        double t = (bar + 0.5) / BarCount;
-        return LowHz * Math.Pow(HighHz / LowHz, t);
+        // The analysis lands in its own buffer and the smoother keeps a separate
+        // one for what is drawn. They used to be the same array, which quietly
+        // made the smoothing a no-op: the analyser overwrote the value the
+        // smoothing was supposed to be approaching, so the bars were drawn from
+        // raw frame to frame and looked like they were having a fight.
+        _smoother.Push(_raw.AsSpan(), analysed, dt);
+        _bars.Update(_smoother.Levels, Math.Max((_host.ActualHeight - 4) / 2.0, 1));
     }
 }
 
@@ -353,8 +266,23 @@ public sealed class SpectrumView
 /// </summary>
 public sealed class SpectrumBars : FrameworkElement
 {
-    private const int Count = SpectrumView.BarCount;
-    private const double GapPixels = 2.0;
+    private const int Count = 48;
+    /// <summary>
+    /// Share of the pitch that a bar fills. The remainder is the gap between
+    /// bars.
+    /// <para>
+    /// Just under a half, which is roughly what a well made reference does and
+    /// is the difference between a row of separate strokes and a filled block.
+    /// The earlier one pixel gap filled four fifths of the pitch.
+    /// </para>
+    /// </summary>
+    public const double BarDuty = 0.45;
+
+    /// <summary>
+    /// Below this pitch there is no room for a bar and a gap, and a sub pixel bar
+    /// would only look like noise, so the row is not drawn at all.
+    /// </summary>
+    public const double MinDrawablePitch = 3;
 
     private readonly Brush _brush;
     private readonly double[] _level = new double[Count];
@@ -363,6 +291,60 @@ public sealed class SpectrumBars : FrameworkElement
     private double _barWidth = 6;
     private double _inset;
     private double _available = 1;
+
+    /// <summary>Vertical gradient across the whole row, rebuilt only when the height moves.</summary>
+    private Brush? _fill;
+
+    private double _fillHeight = -1;
+
+    /// <summary>Deeper end of a bar, at the tips.</summary>
+    public static readonly Color BarTipColour = Color.FromRgb(0xC4, 0x27, 0x43);
+
+    /// <summary>
+    /// Brightest part of a bar, on the axis, and the flat colour everywhere else.
+    /// <para>
+    /// This is the Audio tab's accent, held here as a value so the bar fill
+    /// cannot quietly become a second pink on a tab whose every other accent is
+    /// keyed off <c>AccentAudio</c>. The spectrum tint, the equaliser curve, the
+    /// dials and the sliders are all the same colour by design.
+    /// </para>
+    /// </summary>
+    public static readonly Color BarAxisColour = Color.FromRgb(0xE8, 0x3A, 0x58);
+
+    /// <summary>
+    /// The bar fill: the same pink, very slightly lighter where the bar is
+    /// densest and a shade deeper at the tips.
+    /// <para>
+    /// The hue is deliberately held. The version that was rejected walked the
+    /// bars through violet, which on a tab that already has a pink equaliser and
+    /// pink dials put a second accent on screen. This only moves lightness, by
+    /// about a tenth, so the row reads as one colour with some depth in it.
+    /// </para>
+    /// <para>
+    /// One brush serves the whole row rather than one per bar, because every bar
+    /// is centred on the same axis. A gradient mapped to the control rather than
+    /// to each rectangle means a short bar near the axis gets the bright middle
+    /// and a tall one reaches out into the deeper ends, which is the effect
+    /// wanted, for the cost of a single object.
+    /// </para>
+    /// </summary>
+    private static Brush BarGradient(double height)
+    {
+        LinearGradientBrush brush = new()
+        {
+            MappingMode = BrushMappingMode.Absolute,
+            StartPoint = new Point(0, 0),
+            EndPoint = new Point(0, Math.Max(1.0, height)),
+            GradientStops =
+            {
+                new GradientStop(BarTipColour, 0.0),
+                new GradientStop(BarAxisColour, 0.5),
+                new GradientStop(BarTipColour, 1.0),
+            },
+        };
+        brush.Freeze();
+        return brush;
+    }
     private double _radius = 1.5;
     private bool _idle = true;
     private string _idleText = "Play a sample to hear this preset";
@@ -393,17 +375,26 @@ public sealed class SpectrumBars : FrameworkElement
     }
 
     /// <summary>Takes the current levels and asks for a single redraw.</summary>
-    public void Update(IReadOnlyList<double> levels, double available)
+    public void Update(ReadOnlySpan<double> levels, double available)
     {
         _idle = false;
 
-        int count = Math.Min(levels.Count, _level.Length);
+        int count = Math.Min(levels.Length, _level.Length);
         for (int i = 0; i < count; i++)
         {
             _level[i] = levels[i];
         }
 
         _available = Math.Max(available, 1);
+
+        // Rebuilt only when the height actually moves. A fresh brush every frame
+        // would be eighty frozen objects a tick for no visible gain.
+        if (Math.Abs(_fillHeight - (_available * 2.0)) > 0.5)
+        {
+            _fillHeight = _available * 2.0;
+            _fill = BarGradient(_fillHeight);
+        }
+
         InvalidateVisual();
     }
 
@@ -420,14 +411,36 @@ public sealed class SpectrumBars : FrameworkElement
 
         // Below about three pixels of pitch there is no room for a bar and a gap,
         // and a sub pixel bar would only look like noise.
-        if (pitch < 3)
+        if (pitch < MinDrawablePitch)
         {
             return;
         }
 
         _pitch = pitch / scale;
-        _barWidth = Math.Max(1.0, (pitch - GapPixels) / scale);
-        _radius = Math.Min(1.5, _barWidth / 2.0);
+
+        // The bar is a share of the pitch, and the rest is gap, rather than a
+        // fixed number of pixels. Two reasons.
+        //
+        // It is what makes the row read as separate bars instead of one filled
+        // shape. At a one pixel gap the bars covered four fifths of the pitch and
+        // a loud passage became a solid block, which is the opposite of the
+        // reference this was being compared against.
+        //
+        // And a fixed gap is the wrong rule anyway: it makes the density depend
+        // on how wide the window happens to be, so resizing quietly changed the
+        // character of the display. A share of the pitch looks the same at every
+        // width, and stays crisp because it is still rounded to whole device
+        // pixels.
+        int deviceBar = (int)(pitch * BarDuty);
+
+        // Always leave at least one pixel of gap, or the row fuses into a band.
+        deviceBar = Math.Clamp(deviceBar, 1, pitch - 1);
+        _barWidth = Math.Max(1.0, deviceBar / scale);
+
+        // Rounded, but only just. The cap used to be half the bar width, which on
+        // a thin bar is a lozenge rather than a bar, and a row of lozenges reads
+        // as beads on a string instead of as a spectrum.
+        _radius = Math.Min(1.25, _barWidth / 3.0);
 
         int groupWidth = pitch * Count;
         int insetLeft = (deviceWidth - groupWidth) / 2;
@@ -455,7 +468,7 @@ public sealed class SpectrumBars : FrameworkElement
             // so a loud passage reads as a thick symmetric band rather than a row
             // of spikes climbing to one side.
             double height = Math.Max(1, Math.Round(_level[i] * _available) * 2);
-            dc.DrawRoundedRectangle(_brush, null, new Rect(x, centreY - (height / 2.0), _barWidth, height), _radius, _radius);
+            dc.DrawRoundedRectangle(_fill ?? _brush, null, new Rect(x, centreY - (height / 2.0), _barWidth, height), _radius, _radius);
             x += _pitch;
         }
     }
@@ -492,11 +505,6 @@ public sealed class SpectrumBars : FrameworkElement
             new SolidColorBrush(Color.FromArgb(0x8E, 0xFF, 0xFF, 0xFF)),
             1.25);
 
-        if (RenderSize.Width < 120)
-        {
-            return;
-        }
-
         dc.DrawText(text, new Point(
             Math.Max(0, (RenderSize.Width - text.Width) / 2.0),
             centreY - (text.Height / 2.0)));
@@ -506,8 +514,8 @@ public sealed class SpectrumBars : FrameworkElement
     protected override Size MeasureOverride(Size availableSize)
     {
         return new Size(
-            double.IsInfinity(availableSize.Width) ? 0 : availableSize.Width,
-            double.IsInfinity(availableSize.Height) ? 0 : availableSize.Height);
+            System.Double.IsInfinity(availableSize.Width) ? 0 : availableSize.Width,
+            System.Double.IsInfinity(availableSize.Height) ? 0 : availableSize.Height);
     }
 
     protected override Size ArrangeOverride(Size finalSize)

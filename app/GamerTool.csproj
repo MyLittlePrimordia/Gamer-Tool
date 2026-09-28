@@ -36,6 +36,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Live system audio for the spectrum. Loopback capture is the only way an
+         app can hear what Windows is playing, the same way FxSound does. -->
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Remove="Assets\day.jpg" />
     <None Remove="Assets\night.jpg" />
     <None Remove="Assets\game.mp3" />
@@ -52,7 +59,7 @@
     <EmbeddedResource Include="Assets\footsteps.mp3" LogicalName="GamerTool.assets.footsteps.mp3" />
     <EmbeddedResource Include="Assets\icon.png" LogicalName="GamerTool.assets.icon.png" />
     <EmbeddedResource Include="Assets\GamerTool.ico" LogicalName="GamerTool.assets.GamerTool.ico" />
-    <EmbeddedResource Include="Assets\spectrum.bin" LogicalName="GamerTool.assets.spectrum.bin" />
+    <!-- spectrum.bin is gone: the spectrum is captured live now. -->
     <EmbeddedResource Include="Assets\animated.gif" LogicalName="GamerTool.assets.animated.gif" />
     <EmbeddedResource Include="Assets\fac-template.fac" LogicalName="GamerTool.assets.fac-template.fac" />
     <!-- Colour emoji. WPF cannot draw COLR/CPAL glyphs, so these are baked

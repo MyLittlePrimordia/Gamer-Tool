@@ -125,24 +125,73 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (e.Key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin)
-        {
-            e.Handled = true;
-            return;
-        }
-
+        // With Alt held, WPF reports Key.System and hides the real key in
+        // SystemKey. Reading e.Key directly is what produced "ALT+SYSTEM".
+        Key key = HotkeyService.ResolveKey(e.Key, e.SystemKey);
         HotkeyModifiers mods = HotkeyService.CurrentModifiers();
-        if (mods == HotkeyModifiers.None)
+
+        switch (HotkeyService.ClassifyCapture(key, mods))
         {
-            _captureBox.Text = "HOLD CTRL OR ALT";
+            case HotkeyCapture.NeedsModifier:
+                // A lone modifier is not a mistake, so the prompt stays put. A
+                // bare character is worth hinting about, because it will not bind.
+                if (!HotkeyService.IsModifierKey(key))
+                {
+                    _captureBox.Text = "MOD + KEY";
+                }
+
+                e.Handled = true;
+                return;
+
+            case HotkeyCapture.Cancel:
+                EndCapture(restore: true);
+                e.Handled = true;
+                return;
+
+            case HotkeyCapture.Clear:
+                if (_capturingPanic)
+                {
+                    ClearPanicHotkey();
+                }
+                else
+                {
+                    ClearCapturedHotkey();
+                }
+
+                e.Handled = true;
+                return;
+
+            case HotkeyCapture.Bind:
+                break;
+
+            default:
+                // A case nobody has thought about should not bind something.
+                EndCapture(restore: true);
+                e.Handled = true;
+                return;
+        }
+
+        string text = HotkeyService.FromInput(key, mods);
+        if (text.Length == 0)
+        {
+            EndCapture(restore: true);
             e.Handled = true;
             return;
         }
 
-        string text = HotkeyService.FromInput(e.Key, mods);
+        // Checked before the slot id, because the panic keycap deliberately has
+        // no slot behind it.
+        if (_capturingPanic)
+        {
+            BindPanicHotkey(text);
+            e.Handled = true;
+            return;
+        }
 
         if (_captureSlotId is null)
         {
+            EndCapture(restore: true);
+            e.Handled = true;
             return;
         }
 
@@ -166,13 +215,62 @@ public partial class MainWindow : Window
             slot.Hotkey = text;
         }
 
-        _captureBox.Text = text;
-        _captureSlotId = null;
+        // Leave capture before rebuilding. The list is about to be recreated, and
+        // staying armed over a box that is about to be thrown away is how a good
+        // bind used to get overwritten by the next key pressed.
+        EndCapture(restore: false);
         Commit();
         BuildSlots();
         RegisterHotkeys();
         Flash(text + " set");
         e.Handled = true;
+    }
+
+
+    /// <summary>
+    /// Leaves listening mode. With <paramref name="restore"/> the keycap gets the
+    /// slot's saved binding back, which is what cancelling means. Either way focus
+    /// is dropped, so the next keystroke is not swallowed by a stale capture.
+    /// </summary>
+    private void EndCapture(bool restore)
+    {
+        if (restore && _captureBox is not null)
+        {
+            if (_capturingPanic)
+            {
+                ShowSlotKey(_captureBox, _settings.EmergencyHotkey);
+            }
+            else if (_captureSlotId is not null)
+            {
+                HotkeySlot? slot = _settings.Slots.FirstOrDefault(s => s.Id == _captureSlotId);
+                ShowSlotKey(_captureBox, slot?.Hotkey);
+            }
+        }
+
+        _captureSlotId = null;
+        _captureBox = null;
+        _capturingPanic = false;
+        Keyboard.ClearFocus();
+    }
+
+
+    /// <summary>Backspace or Delete on a listening keycap drops the binding.</summary>
+    private void ClearCapturedHotkey()
+    {
+        if (_captureSlotId is not null)
+        {
+            HotkeySlot? slot = _settings.Slots.FirstOrDefault(s => s.Id == _captureSlotId);
+            if (slot is not null && !string.IsNullOrWhiteSpace(slot.Hotkey))
+            {
+                slot.Hotkey = string.Empty;
+                Flash("Key cleared");
+            }
+        }
+
+        EndCapture(restore: false);
+        Commit();
+        BuildSlots();
+        RegisterHotkeys();
     }
 
 

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -31,6 +31,9 @@ public partial class MainWindow : Window
 
 
     private TextBlock _modalTitle = null!;
+
+    /// <summary>Body text for a dialog that explains rather than asks.</summary>
+    private TextBlock _modalBody = null!;
 
 
     private Action<string>? _modalAction;
@@ -139,6 +142,19 @@ public partial class MainWindow : Window
             Style = (Style)FindResource("CardTitle"),
             FontSize = 15,
             TextAlignment = TextAlignment.Center
+        };
+
+        // The body of a dialog that explains rather than asks. Hidden by every
+        // other dialog, and left aligned because a numbered list read centred is
+        // noticeably harder to follow.
+        _modalBody = new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            FontSize = 11.5,
+            TextAlignment = TextAlignment.Left,
+            LineHeight = 19,
+            Margin = new Thickness(0, 12, 0, 0),
+            Visibility = Visibility.Collapsed
         };
 
         _modalWarning = new StackPanel
@@ -320,6 +336,7 @@ public partial class MainWindow : Window
                 Children =
                 {
                     _modalTitle,
+                    _modalBody,
                     _modalInput,
                     _modalCounter,
                     _modalWarning,
@@ -363,6 +380,7 @@ public partial class MainWindow : Window
         StopModalElapsed();
         _modalTitle.Text = title;
         _modalInput.Text = initial;
+        _modalBody.Visibility = Visibility.Collapsed;
         _modalInput.Visibility = Visibility.Visible;
         _modalCounter.Visibility = Visibility.Visible;
         _modalWarning.Visibility = Visibility.Collapsed;
@@ -416,10 +434,49 @@ public partial class MainWindow : Window
     /// "Cancel" for anything the user can simply back out of, and "Later" for the
     /// FxSound prompt, where declining is a normal choice rather than a cancel.
     /// </summary>
+    /// <summary>
+    /// A dialog that only explains. One button, because there is nothing here to
+    /// decide, and no input, because there is nothing to type.
+    /// <para>
+    /// The warning is shown whether or not it is wanted, because the advice has a
+    /// cost and a dialog that quietly omits it reads as free.
+    /// </para>
+    /// </summary>
+    private void ShowInfoModal(string title, string body, string warning)
+    {
+        StopModalElapsed();
+        _modalTitle.Text = title;
+        _modalBody.Text = body;
+        _modalBody.Visibility = Visibility.Visible;
+        _modalInput.Visibility = Visibility.Collapsed;
+        _modalCounter.Visibility = Visibility.Collapsed;
+        _modalWarning.Visibility = Visibility.Visible;
+        _modalWarningIcon.Visibility = Visibility.Visible;
+        _modalWarningText.Text = warning;
+        _modalStatus.Visibility = Visibility.Collapsed;
+        _modalBarHost.Visibility = Visibility.Collapsed;
+        StopModalBar();
+        _modalSaveButton.Visibility = Visibility.Visible;
+        _modalSaveButton.Content = "GOT IT";
+        _modalSaveButton.Style = (Style)FindResource("PrimaryButton");
+        _modalSaveButton.IsEnabled = true;
+
+        // One button, not two. "Cancel" beside "Got it" on a dialog that asks
+        // nothing implies the reader chose something.
+        _modalCancelButton.Visibility = Visibility.Collapsed;
+        _modalAction = null;
+        _modalConfirm = CloseModal;
+        _modalSecondary = null;
+        _modalKeepOpen = false;
+        _modalLayer.Visibility = Visibility.Visible;
+    }
+
+
     private void ShowConfirmModal(string title, string warning, string confirmText, Action action, string? declineText = null,                                                  bool keepOpen = false)
     {
         StopModalElapsed();
         _modalTitle.Text = title;
+        _modalBody.Visibility = Visibility.Collapsed;
         _modalInput.Visibility = Visibility.Collapsed;
         _modalCounter.Visibility = Visibility.Collapsed;
         _modalWarning.Visibility = Visibility.Visible;
@@ -498,6 +555,7 @@ public partial class MainWindow : Window
     {
         StopModalElapsed();
         _modalTitle.Text = title;
+        _modalBody.Visibility = Visibility.Collapsed;
         _modalInput.Visibility = Visibility.Collapsed;
         _modalCounter.Visibility = Visibility.Collapsed;
         _modalWarning.Visibility = Visibility.Visible;

@@ -113,6 +113,13 @@ public partial class MainWindow : Window
 
     private TextBox? _captureBox;
 
+    /// <summary>
+    /// True while the panic keycap on the Settings tab is the one listening.
+    /// The panic key is not a slot, so capture has to be able to say which of the
+    /// two it is talking to.
+    /// </summary>
+    private bool _capturingPanic;
+
 
     private TrayService? _tray;
 
@@ -219,6 +226,7 @@ public partial class MainWindow : Window
         _watcher.TargetExited += OnTargetExited;
 
         PreviewKeyDown += OnPreviewKeyDown;
+        WirePanicKeycap();
         Closing += OnClosing;
         Loaded += OnWindowLoaded;
 
@@ -253,8 +261,8 @@ public partial class MainWindow : Window
         _audioPreview.Prepare();
         UpdatePreviewTrackButton();
 
-        _spectrum = new SpectrumView(SpectrumHost, () => _audioPreview.Position, () => _audioPreview.IsPlaying);
-        _spectrum.SetBandGain(SpectrumBandGain);
+    _spectrum = new SpectrumView(SpectrumHost, new LoopbackSampleFeed());
+
 
         _ready = true;
 
@@ -264,37 +272,6 @@ public partial class MainWindow : Window
         {
             HideToTray();
         }
-    }
-
-
-    /// <summary>
-    /// Gain in dB that one spectrum bar should show, taken from the EQ band whose
-    /// centre frequency is nearest. This is what makes the analyser respond as the
-    /// faders move rather than just showing the untouched track.
-    /// </summary>
-    private double SpectrumBandGain(int bar)
-    {
-        int count = _bandSliders.Count;
-        if (count == 0)
-        {
-            return 0.0;
-        }
-
-        double hz = SpectrumView.BarCentre(bar);
-
-        int nearest = 0;
-        double best = double.MaxValue;
-        for (int i = 0; i < count; i++)
-        {
-            double distance = Math.Abs(Math.Log(AudioPreset.BandFrequency(count, i) / hz));
-            if (distance < best)
-            {
-                best = distance;
-                nearest = i;
-            }
-        }
-
-        return Math.Clamp(_workAudio.Band(nearest), AudioPreset.GainMin, AudioPreset.GainMax);
     }
 
 
@@ -313,12 +290,19 @@ public partial class MainWindow : Window
     }
 
 
-    private void HideToTray()
-    {
-        Hide();
-        ShowInTaskbar = false;
-        _tray?.Show();
-    }
+        private void HideToTray()
+        {
+            // The spectrum holds a WASAPI client open, and one left running for
+            // the hours an app spends in the tray shows up as audio the app is
+            // using for no visible reason. Stopped here and started again by
+            // RestoreFromTray.
+            _spectrum?.Stop();
+
+            Hide();
+            ShowInTaskbar = false;
+            _tray?.Show();
+        }
+
 
 
     private void RestoreFromTray()
@@ -333,6 +317,15 @@ public partial class MainWindow : Window
             }
 
             Activate();
+
+            // Only if the Audio tab is the one being restored to. Starting the
+            // capture on any other tab would open a WASAPI client for a picture
+            // nobody can see, which is exactly what stopping it on the way out was
+            // for.
+            if (Pages.SelectedIndex == 1)
+            {
+                _spectrum?.Start();
+            }
         });
     }
 

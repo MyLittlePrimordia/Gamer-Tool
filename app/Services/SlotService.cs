@@ -163,6 +163,17 @@ public sealed class SlotService
                 slot.Name = "SLOT";
             }
 
+            // Drop a stored binding that names a key nobody can press. Builds
+            // before the Alt fix could save "ALT+SYSTEM", which looked like a
+            // real chord on screen and never fired once. Left alone it would sit
+            // there forever looking assigned, and the user would have no way to
+            // tell which of their slots were real.
+            if (!string.IsNullOrWhiteSpace(slot.Hotkey) && !HotkeyService.IsBindable(slot.Hotkey))
+            {
+                slot.Hotkey = string.Empty;
+            }
+
+
             if (!usedIds.Add(slot.Id))
             {
                 continue;

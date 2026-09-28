@@ -158,6 +158,15 @@ public sealed class ProfileManager
             settings.FxSoundPath = AudioService.DefaultFxSoundPath;
         }
 
+        // A panic key that names a key nobody can press is worse than none, because
+        // the user believes they have one. Same rule the slot bindings get.
+        if (!string.IsNullOrWhiteSpace(settings.EmergencyHotkey)
+            && !HotkeyService.IsBindable(settings.EmergencyHotkey))
+        {
+            settings.EmergencyHotkey = string.Empty;
+        }
+
+
         settings.CustomDisplayPresets ??= new List<DisplayPreset>();
         settings.CustomAudioPresets ??= new List<AudioPreset>();
         settings.CustomCombos ??= new List<ComboPreset>();

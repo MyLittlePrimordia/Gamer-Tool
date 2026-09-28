@@ -256,4 +256,51 @@ public class SlotServiceTests
 
         Assert.False(SlotService.IsLoaded(slot, string.Empty, string.Empty));
     }
+
+    [Fact]
+    public void A_saved_binding_that_cannot_be_pressed_is_dropped_on_load()
+    {
+        // Builds before the Alt fix could persist "ALT+SYSTEM". It renders like a
+        // chord and never fires, and there is nothing in the UI that would tell
+        // the user which slots were real, so it is cleared at load instead.
+        AppSettings settings = new()
+        {
+            Slots = new List<HotkeySlot>
+            {
+                new() { Id = "slot_a", Name = "Tactical Shooter", Hotkey = "ALT+SYSTEM" },
+                new() { Id = "slot_b", Name = "Battle Royale", Hotkey = "CTRL+1" },
+                new() { Id = "slot_c", Name = "Cinematic", Hotkey = "" }
+            }
+        };
+
+        List<HotkeySlot> slots = SlotService.Migrate(settings);
+
+        Assert.Equal(string.Empty, slots[0].Hotkey);
+        Assert.Equal("CTRL+1", slots[1].Hotkey);
+        Assert.Equal(string.Empty, slots[2].Hotkey);
+    }
+
+    [Fact]
+    public void Real_bindings_survive_a_migration()
+    {
+        // The guard above must not eat anything that works, including the
+        // numpad, the Win key, and a bare F-key.
+        AppSettings settings = new()
+        {
+            Slots = new List<HotkeySlot>
+            {
+                new() { Id = "slot_a", Name = "A", Hotkey = "ALT+1" },
+                new() { Id = "slot_b", Name = "B", Hotkey = "NUM5" },
+                new() { Id = "slot_c", Name = "C", Hotkey = "WIN+Q" },
+                new() { Id = "slot_d", Name = "D", Hotkey = "F2" },
+                new() { Id = "slot_e", Name = "E", Hotkey = "CTRL+ALT+S" }
+            }
+        };
+
+        List<HotkeySlot> slots = SlotService.Migrate(settings);
+
+        Assert.Equal(
+            new[] { "ALT+1", "NUM5", "WIN+Q", "F2", "CTRL+ALT+S" },
+            slots.Select(s => s.Hotkey));
+    }
 }

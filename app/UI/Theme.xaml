@@ -72,11 +72,14 @@
          without vibrating, and each has a dim partner for tinted fills. -->
     <SolidColorBrush x:Key="AccentDisplay" Color="#22D3EE" />
     <SolidColorBrush x:Key="AccentDisplayGlow" Color="#0B1F26" />
-    <!-- Matched against the engine's own accent rather than picked by eye. It is
-         a hotter, redder rose than a pastel pink, and the difference is obvious
-         when the two sit side by side. -->
-    <SolidColorBrush x:Key="AccentAudio" Color="#FF2D6F" />
-    <SolidColorBrush x:Key="AccentAudioGlow" Color="#2E0A19" />
+    <!-- Sampled out of a running FxSound window rather than picked by eye, which
+         is how a pink ends up nearly right and not quite: the previous value,
+         #FF2D6F, is brighter and leans magenta, so the Audio tab and the app it
+         is imitating read as two different pinks.
+         The glow is the same hue at the far end of the same scale, so the pair
+         cannot drift apart. -->
+    <SolidColorBrush x:Key="AccentAudio" Color="#E33250" />
+    <SolidColorBrush x:Key="AccentAudioGlow" Color="#2E040A" />
     <SolidColorBrush x:Key="AccentHotkeys" Color="#5B8DEF" />
     <SolidColorBrush x:Key="AccentHotkeysGlow" Color="#0E1730" />
     <SolidColorBrush x:Key="AccentSettings" Color="#34D399" />
@@ -320,6 +323,38 @@
          per instance accents: a ControlTemplate trigger cannot read a custom
          property back off its own templated parent, so each accent gets its own
          copy of the ten line template. -->
+    <!--
+      The small info button beside a NOT SUPPORTED display. It borrows the nav
+      tabs' treatment exactly: a faint white wash on hover and a focus ring for
+      the keyboard, so it reads as part of the same control language rather than
+      as a stray control. It deliberately has no idle background and no border,
+      because a button that is visible before you touch it competes with the
+      verdict it is explaining.
+    -->
+    <Style x:Key="InfoHintButton" TargetType="Button">
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Focusable" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bg" Background="Transparent" BorderBrush="Transparent"
+                            BorderThickness="1" CornerRadius="{StaticResource RadiusControl}" Padding="4">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bg" Property="Background" Value="#0DFFFFFF" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+                            <Setter TargetName="Bg" Property="BorderThickness" Value="2" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <Style x:Key="NavDisplay" TargetType="ui:NavPill">
         <Setter Property="Tag" Value="0" />
         <Setter Property="Glyph" Value="desktop" />
@@ -396,7 +431,10 @@
 
     <Style x:Key="NavHotkeys" TargetType="ui:NavPill">
         <Setter Property="Tag" Value="2" />
-        <Setter Property="Glyph" Value="key" />
+        <!-- A keyboard, not a key. The panic key binding on this tab is marked
+             with the key emoji, and two things on one screen meaning the same
+             thing is how one of them stops meaning anything. -->
+        <Setter Property="Glyph" Value="keyboard" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Width" Value="86" />
         <Setter Property="Height" Value="46" />
@@ -524,6 +562,19 @@
         <Setter Property="Background" Value="#1D6F68" />
         <Setter Property="Foreground" Value="#EAFBF7" />
         <Setter Property="BorderBrush" Value="#2A9D92" />
+    </Style>
+
+    <!-- The same button in the audio accent.
+         A style cannot be parameterised, so a second style is the only way to
+         give one tab its own colour here without putting a pink button on the
+         display tab. The fills are the audio accent knocked back for a large
+         block of colour sitting on black, which is the same treatment the
+         accent itself gets further up, rather than the full accent at button
+         size, which would be far too hot. -->
+    <Style x:Key="PrimaryButtonAudio" TargetType="Button" BasedOn="{StaticResource PrimaryButton}">
+        <Setter Property="Background" Value="#6B1729" />
+        <Setter Property="Foreground" Value="#FCEFF2" />
+        <Setter Property="BorderBrush" Value="#A8223B" />
     </Style>
 
     <Style x:Key="GhostButton" TargetType="Button" BasedOn="{StaticResource BaseButton}">
@@ -1025,7 +1076,16 @@
                         <Trigger Property="IsChecked" Value="True">
                             <Setter TargetName="Track" Property="Background" Value="{Binding Accent, RelativeSource={RelativeSource TemplatedParent}}" />
                             <Setter TargetName="Track" Property="BorderBrush" Value="Transparent" />
-                            <Setter TargetName="Knob" Property="Fill" Value="#04231A" />
+
+                            <!-- The handle is the same near-white the dial knobs
+                                 and the effect slider handles use, so a switched
+                                 on toggle reads as the same control family. It
+                                 was #04231A, a near black left over from when
+                                 the accent was only ever the display's teal: on
+                                 a saturated track that looked like a hole rather
+                                 than a handle, and the hue belonged to a colour
+                                 no other tab was using. -->
+                            <Setter TargetName="Knob" Property="Fill" Value="#F0F0F0" />
                             <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right" />
                             <Setter TargetName="Knob" Property="Margin" Value="0,0,3,0" />
                         </Trigger>
@@ -1138,13 +1198,20 @@
         </Setter>
     </Style>
 
-    <!-- Hotkey capture box. Reads as a keycap so it is obvious it records keys. -->
+    <!-- Hotkey capture box. Reads as a keycap so it is obvious it records keys.
+         Read only on purpose: it shows a binding, it does not accept text. When
+         it was editable, typing into it left the box claiming something the slot
+         did not actually have, because only the key handler ever wrote through. -->
     <Style x:Key="KeyCap" TargetType="TextBox" BasedOn="{StaticResource ModernTextBox}">
         <Setter Property="FontFamily" Value="{StaticResource Mono}" />
         <Setter Property="FontSize" Value="10.5" />
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="TextAlignment" Value="Center" />
         <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="IsReadOnly" Value="True" />
+        <Setter Property="IsUndoEnabled" Value="False" />
+        <Setter Property="CaretBrush" Value="Transparent" />
+        <Setter Property="Focusable" Value="True" />
         <Setter Property="Height" Value="24" />
     </Style>
 

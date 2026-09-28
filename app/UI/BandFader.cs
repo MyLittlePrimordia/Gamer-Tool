@@ -198,9 +198,36 @@ public sealed class BandFader : Slider
     }
 
     /// <summary>
-    /// The fade down the column: near white at the top of the track, a muted pink
-    /// by the bottom. One brush for the whole column, cached, because the track
-    /// height is the only thing that changes it.
+    /// The three stops of the dash ramp, derived from the control's own accent.
+    /// <para>
+    /// This used to be three hard coded pinks, which is how the equaliser's
+    /// dashed bands ended up a different colour from the accent on the same tab:
+    /// a near white at the top, a light pink in the middle and a mid pink at the
+    /// bottom, none of which was the audio accent anything else on the page used.
+    /// Deriving them means the fader follows whatever accent it is handed, so it
+    /// cannot drift out of step with the rest of the tab again.
+    /// </para>
+    /// <para>
+    /// The lightening and darkening are towards white and black, which keeps the
+    /// hue exactly where it was. Rotating the hue instead would put a second
+    /// accent on the page, which is the mistake an earlier version of this made.
+    /// </para>
+    /// </summary>
+    public static (Color Top, Color Middle, Color Bottom) DashRamp(Color accent)
+    {
+        return (Mix(accent, Colors.White, 0.28), accent, Mix(accent, Colors.Black, 0.24));
+    }
+
+    private static Color Mix(Color from, Color towards, double amount)
+    {
+        byte Blend(byte a, byte b) => (byte)Math.Round(a + ((b - a) * amount));
+        return Color.FromRgb(Blend(from.R, towards.R), Blend(from.G, towards.G), Blend(from.B, towards.B));
+    }
+
+    /// <summary>
+    /// The fade down the column: the accent lightened towards white at the top
+    /// and deepened towards black at the bottom. One brush for the whole column,
+    /// cached, because the track height is the only thing that changes it.
     /// </summary>
     private Brush DashBrushFor(double height)
     {
@@ -209,12 +236,15 @@ public sealed class BandFader : Slider
             return _dashGradient;
         }
 
+        Color accent = Foreground is SolidColorBrush solid ? solid.Color : Color.FromRgb(0xE3, 0x32, 0x50);
+        (Color top, Color middle, Color bottom) = DashRamp(accent);
+
         var brush = new LinearGradientBrush(
             new GradientStopCollection
             {
-                new GradientStop(Color.FromArgb(0xFF, 0xF0, 0xF0, 0xF4), 0.0),
-                new GradientStop(Color.FromArgb(0xFF, 0xFF, 0x8A, 0xB4), 0.5),
-                new GradientStop(Color.FromArgb(0xFF, 0xE8, 0x5C, 0x96), 1.0),
+                new GradientStop(top, 0.0),
+                new GradientStop(middle, 0.5),
+                new GradientStop(bottom, 1.0),
             },
             new Point(0.0, 0.0),
             new Point(0.0, Math.Max(height, 1.0)))

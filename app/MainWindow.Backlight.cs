@@ -1,12 +1,18 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
+
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Automation;
+using System.Windows.Input;
 using System.Windows.Media;
+
 using System.Windows.Threading;
 using GamerTool.Models;
 using GamerTool.Services;
@@ -17,7 +23,8 @@ using Color = System.Windows.Media.Color;
 
 namespace GamerTool;
 
-/// <summary>
+
+
 /// The hardware backlight section on the Display tab: one row per display.
 /// <para>
 /// Every row carries its own state and never consults a machine wide answer,
@@ -148,6 +155,13 @@ public partial class MainWindow
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
+        // A third column, for the hint button. It was being added at index 2 into
+        // a grid that only had two, and WPF quietly puts an out of range child in
+        // the last cell that does exist, so the button landed on top of the badge
+        // and covered the verdict it was there to explain.
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+
         StackPanel left = new();
         left.Children.Add(new TextBlock
         {
@@ -175,11 +189,14 @@ public partial class MainWindow
             });
         }
 
+        // No tooltip here on purpose. It used to carry one and it carried the
+        // sentence the row already shows, so hovering a line of text produced a
+        // duplicate of itself. The only thing on this row worth explaining is
+        // the small button, and that has its own.
         left.Children.Add(new TextBlock
         {
             Style = (Style)FindResource("CardSub"),
             TextTrimming = TextTrimming.CharacterEllipsis,
-            ToolTip = Backlight.CapabilityOf(monitor),
             Text = live
                 ? "Monitor's own backlight, over DDC/CI. Your brightness slider above bends the picture instead."
                 : Backlight.CapabilityOf(monitor)
@@ -187,7 +204,10 @@ public partial class MainWindow
         Grid.SetColumn(left, 0);
         row.Children.Add(left);
 
-        // The badge states the monitor's own verdict. It is never a shared one.
+        // A working display keeps the quiet cyan pill. An unsupported one drops it
+        // and shouts in amber instead: a grey pill either side of a small grey
+        // word was easy to walk past, and this is the one row on the page that
+        // is telling the user something they can act on.
         Border badge = new()
         {
             CornerRadius = new CornerRadius(4),
@@ -196,33 +216,85 @@ public partial class MainWindow
             VerticalAlignment = VerticalAlignment.Center,
             Background = live
                 ? new SolidColorBrush(Color.FromArgb(0x1A, 0x22, 0xD3, 0xEE))
-                : new SolidColorBrush(Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF)),
-            ToolTip = Backlight.CapabilityOf(monitor)
+                : System.Windows.Media.Brushes.Transparent
         };
+
         badge.Child = new TextBlock
         {
-            Text = live ? "DDC/CI" : "NOT SUPPORTED",
-            FontSize = 8.5,
-            FontWeight = FontWeights.SemiBold,
+            Text = live ? "DDC/CI" : "Not Supported",
+            FontSize = live ? 8.5 : 10.5,
+            FontWeight = live ? FontWeights.SemiBold : FontWeights.Bold,
+            VerticalAlignment = VerticalAlignment.Center,
             Foreground = live
                 ? (Brush)FindResource("AccentDisplay")
-                : (Brush)FindResource("TextLow")
+                : (Brush)FindResource("Amber")
         };
         Grid.SetColumn(badge, 1);
         row.Children.Add(badge);
 
+        // One small way out of a dead end, and only for the one dead end a
+        // setting on the GPU can undo. It sits beside the badge rather than
+        // inside it, because inside the pill it read as part of the label rather
+        // than as something to press. A button rather than a picture, so it
+        // answers the keyboard and can be named to a screen reader, which is the
+        // whole difference between a hint and a decoration.
+        if (DdcDriverHint.ShouldOffer(monitor))
+        {
+            // Styled like a nav tab: nothing until hovered, then a faint wash, so
+            // the button is discoverable without competing with the verdict. All
+            // of the chrome lives in the style, because setting a Background here
+            // is what let it paint over the badge before the columns were fixed.
+            Button why = new()
+            {
+                Style = (Style)FindResource("InfoHintButton"),
+                Margin = new Thickness(6, 0, 0, 0),
+                ToolTip = "Why is this not working?",
+                Content = new UI.EmojiImage { Glyph = "info", Width = 15, Height = 15 }
+            };
+
+            AutomationProperties.SetName(why, "Why hardware brightness is unavailable on this display");
+
+            why.Click += (s, e) =>
+            {
+                HintContent hint = DdcDriverHint.For(DdcDriverHint.Vendor);
+
+                // The steps are numbered rather than bulleted so the order reads
+                // as an order, which is what they are: the Overrides page is not
+                // visible until the EULA has been accepted.
+                string body = string.Join(
+                    Environment.NewLine,
+                    hint.Steps.Select((step, index) => (index + 1) + ".  " + step));
+
+                ShowInfoModal(hint.Title, body, hint.Warning);
+            };
+
+            Grid.SetColumn(why, 2);
+            row.Children.Add(why);
+        }
+
         if (!live)
+
         {
             // Nothing to drag. A live looking slider over a display that cannot
             // be driven is the exact sort of lie this app has been fixing all
             // session, so there is no slider at all here.
+            //
+            // The dimming applies to the text only, not to the whole row. It used
+            // to wrap the row in a Border at 0.75, which dragged the badge and
+            // the hint button down with it and left the info glyph a flat grey
+            // outline. Opacity is composited, so a child cannot opt out of it
+            // from inside: it has to not be applied in the first place. The
+            // emoji are baked in colour precisely so they can be read, and the
+            // only thing here meant to be muted is the sentence beside them.
+            left.Opacity = 0.75;
+
             return new Border
             {
                 Child = row,
-                Margin = new Thickness(0, 0, 0, 10),
-                Opacity = 0.75
+                Margin = new Thickness(0, 0, 0, 10)
             };
         }
+
 
         StackPanel block = new();
         block.Children.Add(row);
@@ -413,6 +485,46 @@ public partial class MainWindow
             Flash("Could not copy the log", true);
         }
     }
+
+    /// <summary>
+    /// Stops the folder button's click from also reaching the row.
+    /// <para>
+    /// The diagnostics row has copied on a click anywhere on it for a long time,
+    /// which is the right behaviour for one action on a row. With a second action
+    /// sharing the row it stops being right: without this, clicking the folder
+    /// would open Explorer and copy the log at the same time. Preview, not
+    /// bubble, because the row listens for the bubbled event.
+    /// </para>
+    /// </summary>
+    private void OnOpenLogFolderPreview(object sender, MouseButtonEventArgs e) => e.Handled = true;
+
+    /// <summary>
+    /// Opens the folder the log is written into.
+    /// <para>
+    /// Copying to the clipboard answers "what did it decide", which is not what
+    /// most people asking for a log actually want. They want to read the log
+    /// themselves, and the file is rotated across several, so a folder beats a
+    /// single pasted block. Both are offered rather than one being chosen.
+    /// </para>
+    /// </summary>
+    private void OnOpenLogFolderClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            // Created on the way through, because a machine that has never hit
+            // anything worth logging has no folder yet, and a button that fails
+            // for want of a folder is worse than no button.
+            Directory.CreateDirectory(AppLog.Folder);
+            Process.Start(new ProcessStartInfo { FileName = AppLog.Folder, UseShellExecute = true });
+            Flash("Log folder opened");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("OPEN LOG FOLDER", ex);
+            Flash("Could not open the log folder", true);
+        }
+    }
+
 
 
     /// <summary>
