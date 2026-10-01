@@ -1,4 +1,4 @@
-﻿<Window x:Class="GamerTool.MainWindow"
+<Window x:Class="GamerTool.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="clr-namespace:GamerTool.UI"
@@ -203,20 +203,47 @@
                                 <!-- right: every control, grouped by what it does -->
                                 <Grid Grid.Column="2" Margin="0,18,0,18">
                                     <Grid.RowDefinitions>
+                                        <!-- Every row sizes to its own content, and the
+                                             slack goes into a trailing star row at the
+                                             bottom.
+
+                                             Row zero used to be the star, with the four
+                                             sliders top aligned inside it. That put
+                                             every spare pixel in the middle of the panel,
+                                             between the sliders and whatever came next,
+                                             which read as a hole in the layout rather
+                                             than as space. The comment that stood here
+                                             argued that the leftover height was better
+                                             off under the top row, which was the problem
+                                             restated: under the top row is still the
+                                             middle of the panel.
+
+                                             A trailing star row cannot do that. Nothing
+                                             above it absorbs anything, so the stack runs
+                                             4 sliders, colour trim, hardware backlight,
+                                             and stops. Whatever is left over falls off the
+                                             end, where space reads as space, and it is
+                                             where the backlight rows appear once the
+                                             feature is switched on.
+
+                                             Four rows, not six. The backlight section
+                                             no longer has a hairline above and below
+                                             it, so the two rows that bracketed those
+                                             rules are gone rather than left in as
+                                             empty Auto rows. -->
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
                                         <RowDefinition Height="*" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
 
-                                    <!-- Auto rows with the block centred, rather than two
-                                         star rows that push the top pair to the ceiling
-                                         and the bottom pair to the floor. The star row is
-                                         what leaves a band of dead black above and below
-                                         these four controls, so it is capped and the slack
-                                         collects underneath instead, next to the
-                                         backlight and colour sections that use it. -->
+                                    <!-- Two Auto rows with each pair centred, rather than
+                                         two star rows that would push the top pair to
+                                         the ceiling and the bottom pair to the floor.
+                                         Nothing here absorbs spare height any more, so
+                                         this block sits directly under the one above it
+                                         and the empty space lands at the foot of the
+                                         column, where the backlight rows appear. -->
                                     <Grid Grid.Row="0" VerticalAlignment="Top">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
@@ -284,30 +311,38 @@
                                                     ToolTip="Contrast" />
                                         </StackPanel>
                                     </Grid>
+                                    <!-- 22 above, which is the gap a row of labels
+                                         wants when the row above it also ends in a
+                                         label and a slider. It was flush, so the
+                                         Colour trim caption sat a few pixels under
+                                         the Brightness slider and read as part of
+                                         it. Space rather than a rule, because a
+                                         hairline between two sets of sliders in the
+                                         same panel is a division nobody asked for.
 
-                                      <!-- Hardware backlight. Built in code because it is
-                                           one row per display and each row decides for
-                                           itself whether it is live: a machine can have
-                                           one monitor that answers DDC/CI and another
-                                           with no pathway at all, and the two must not
-                                           share a single enabled state. The software
-                                           brightness above is untouched either way. -->
-                                      <StackPanel x:Name="BacklightPanel" Grid.Row="2" Margin="0,0,0,4" />
+                                         The three columns are the same star, 40, star
+                                         as the four sliders above, and that is the whole
+                                         of the alignment. The blue light filter sits
+                                         in this grid's third column and Contrast sits
+                                         in that grid's third column, and two grids of
+                                         identical proportions across the same width put
+                                         their third columns in the same place, so the
+                                         caption and the drop down line up with Contrast
+                                         by construction. It was a fixed 232, which
+                                         pinned the box to the right edge and left its
+                                         caption 120 pixels to the right of Contrast's
+                                         with nothing holding the two together.
 
-                                      <!-- The two rules that bracket the panel. Both collapse
-                                           with it, because a divider with nothing between
-                                           the two things it separates is a line drawn for
-                                           no reason: the whole point of hiding the section
-                                           when the feature is off is that the page reads as
-                                           though the feature was never here. -->
-                                      <Border x:Name="BacklightTopRule" Grid.Row="1" Style="{StaticResource Hairline}" Margin="0,18,0,16" />
-                                      <Border x:Name="BacklightBottomRule" Grid.Row="3" Style="{StaticResource Hairline}" Margin="0,14,0,16" />
-
-                                    <Grid Grid.Row="4">
+                                         The drop down is as wide as the Contrast
+                                         slider as a result, which is the point: it is
+                                         the same control in the same column doing
+                                         the same job, and a narrower box under a
+                                         wider one read as a stray. -->
+                                    <Grid Grid.Row="1" Margin="0,22,0,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="40" />
-                                            <ColumnDefinition Width="232" />
+                                            <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
 
                                         <!-- No neutral button here on purpose. The footer
@@ -321,14 +356,6 @@
                                                 <RowDefinition Height="Auto" />
                                                 <RowDefinition Height="Auto" />
                                             </Grid.RowDefinitions>
-                                            <!-- Centred across all three channels rather
-                                                 than right aligned, which put it directly
-                                                 above the blue fader and made it read as
-                                                 that fader's own label. It takes the same
-                                                 three column shape as the fader grid below
-                                                 so the block reads as one unit, and
-                                                 "COLOUR TRIM" stays left on the header
-                                                 line where a section name belongs. -->
                                             <!-- The caption is centred on the same
                                                  three column shape the faders below
                                                  sit in, rather than on a spanned
@@ -338,8 +365,13 @@
                                                  to land over the middle fader and
                                                  in the screenshot it did not. One
                                                  shape, used twice, cannot disagree.
-                                                 The label stays left on the header
-                                                 line where a section name belongs. -->
+
+                                                 It sits on the left of that line
+                                                 rather than centred, because it is
+                                                 now a Label beside Gamma and
+                                                 Shadow boost rather than a section
+                                                 heading, and a label lines up
+                                                 with the labels above it. -->
                                             <!-- Section name only. This used to carry a
                                                  "NEUTRAL IS 1.00" caption centred
                                                  over the middle fader, on a three
@@ -353,7 +385,17 @@
                                                  shows. The grid that existed only
                                                  to centre that caption went with
                                                  it. -->
-                                            <TextBlock Grid.Row="0" Style="{StaticResource SectionHeader}" Text="COLOUR TRIM" />
+                                            <!-- Same Label style as Gamma and Shadow
+                                                 boost, one row up. This was a
+                                                 SectionHeader, which is 9.5 point
+                                                 semi-bold in the dimmest text colour
+                                                 and reads as a section heading - so
+                                                 three headings in a column of slider
+                                                 labels, in a different face and a
+                                                 different colour from the six labels
+                                                 beside them. A colour trim is a
+                                                 slider group, not a chapter. -->
+                                            <TextBlock Grid.Row="0" Style="{StaticResource Label}" Text="Colour trim" />
 
                                             <!-- A letter above, a number below, both
                                                  centred on the fader between them.
@@ -418,12 +460,40 @@
                                         </Grid>
 
                                         <StackPanel Grid.Column="2" VerticalAlignment="Top">
-                                            <TextBlock Style="{StaticResource SectionHeader}" Text="BLUE LIGHT FILTER" Margin="0,0,0,10" />
+                                            <TextBlock Style="{StaticResource Label}" Text="Blue light filter" Margin="0,0,0,10" />
                                             <ComboBox x:Name="BlueLightBox" Style="{StaticResource ModernCombo}"
                                                       ItemContainerStyle="{StaticResource ModernComboItem}" SelectionChanged="OnBlueLightChanged"
                                                       ToolTip="Blue Light" />
                                         </StackPanel>
                                     </Grid>
+
+                                    <!-- Hardware backlight. Built in code because it is
+                                         one row per display and each row decides for
+                                         itself whether it is live: a machine can have
+                                         one monitor that answers DDC/CI and another
+                                         with no pathway at all, and the two must not
+                                         share a single enabled state. The software
+                                         brightness above is untouched either way.
+
+                                         Last in the column rather than tucked directly
+                                         under the four sliders, for two reasons that
+                                         point the same way. It is a different layer:
+                                         everything above it is a curve this app draws,
+                                         while this is the panel's own backlight. And it
+                                         is the only section that comes and goes, so
+                                         putting it at the bottom means switching it on
+                                         fills space that was going to be empty anyway,
+                                         instead of opening a hole in the middle of it.
+
+                                         No rules above or below. It used to have a
+                                         hairline on each side, which was there to
+                                         separate it from the colour section when it
+                                         sat in the middle. At the foot of the column
+                                         there is nothing to separate it from: every
+                                         control in this panel is a display slider,
+                                         and a rule between them divides a list that
+                                         was never in two. -->
+                                    <StackPanel x:Name="BacklightPanel" Grid.Row="2" Margin="0,26,0,0" />
                                 </Grid>
                             </Grid>
 
@@ -899,11 +969,26 @@
                                              now sit in columns and cannot collide. -->
                                         <Grid Grid.Column="4">
                                             <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*" />
+                                                <!--
+                                                  The readout takes what it needs and the
+                                                  switches take the slack, rather than the
+                                                  other way round.
+
+                                                  This used to be a star then an auto,
+                                                  so the switches grew and the readout
+                                                  shrank, and "PREAMP OFF" was the thing
+                                                  that got ellipsised. With a second
+                                                  switch joining BYPASS it would have
+                                                  been truncated more often and on more
+                                                  machines. Flipping it means the
+                                                  readout is never the one that pays
+                                                  for whatever else is added to the row.
+                                                -->
                                                 <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
                                             </Grid.ColumnDefinitions>
                                             <TextBlock x:Name="AntiClipValue" Grid.Column="0" Style="{StaticResource Value}" Text="PREAMP OFF"
-                                                       HorizontalAlignment="Left" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                                       HorizontalAlignment="Left" VerticalAlignment="Center" />
                                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"
                                                         HorizontalAlignment="Right">
                                                 <ui:SwitchToggle x:Name="BypassBox" Style="{StaticResource SwitchTrack}" Accent="{StaticResource AccentAudio}"
@@ -911,6 +996,29 @@
                                                                 Checked="OnBypassChanged" Unchecked="OnBypassChanged"
                                                                 ToolTip="Toggle all audio effects" AutomationProperties.Name="Bypass all audio effects" />
                                                 <TextBlock Style="{StaticResource Label}" Text="BYPASS" VerticalAlignment="Center" Margin="8,0,0,0" />
+                                                <!--
+                                                  Loud guard. It uses the engine's own
+                                                  volume levelling rather than moving
+                                                  the Windows output level, which is the
+                                                  difference between a guard and a
+                                                  hazard: a meter reacting to what it
+                                                  measures can run away on its own, and
+                                                  nothing would ever push the level
+                                                  back.
+
+                                                  It is off by default because it
+                                                  changes what the sound is like rather
+                                                  than correcting it, and the reset
+                                                  button and the panic key deliberately
+                                                  do not apply it - a guard that fought
+                                                  an attempt to put things back would
+                                                  be indefensible.
+                                                -->
+                                                <ui:SwitchToggle x:Name="LoudGuardBox" Style="{StaticResource SwitchTrack}" Accent="{StaticResource AccentAudio}"
+                                                                VerticalAlignment="Center" Margin="18,0,0,0"
+                                                                Checked="OnLoudGuardChanged" Unchecked="OnLoudGuardChanged"
+                                                                ToolTip="Hold loud games down" AutomationProperties.Name="Hold loud games down" />
+                                                <TextBlock Style="{StaticResource Label}" Text="GUARD" VerticalAlignment="Center" Margin="8,0,0,0" />
                                             </StackPanel>
                                         </Grid>
                                         <TextBlock Grid.Column="5" Style="{StaticResource Label}" Text="Bands" VerticalAlignment="Center" Margin="18,0,10,0" />
@@ -1070,10 +1178,10 @@
                                     </Button>
                                     <Button x:Name="FxUpgradeButton" Style="{StaticResource PrimaryButton}"
                                             MinWidth="150" Margin="0,0,8,0" Visibility="Collapsed" Click="OnUpgradeFxSoundClick"
-                                            ToolTip="Update">
+                                            ToolTip="Check whether a newer FxSound is out">
                                         <StackPanel Orientation="Horizontal">
                                             <ui:EmojiImage Glyph="refresh" Width="17" Height="17" Margin="0,0,8,0" />
-                                            <TextBlock Text="Update" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="FxUpgradeLabel" Text="Check update" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </Button>
                                     <Button x:Name="FxStartEngineButton" Style="{StaticResource GhostButton}"
@@ -1133,7 +1241,22 @@
                                  it does not. -->
                             <StackPanel MaxWidth="620" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="18,0">
 
-                                <TextBlock Style="{StaticResource SectionHeader}" Text="SETTINGS" Margin="0,0,0,8" />
+                                <!-- No "SETTINGS" header over this list any more.
+
+                                     It named the page, and the nav pill above
+                                     already names the page, in the same accent,
+                                     one row higher, with the other three names
+                                     beside it. A second copy of the same word
+                                     is the one piece of the tab that was saying
+                                     nothing, and it was saying it in the most
+                                     expensive way available: about twenty six
+                                     pixels of a list that had roughly seventy to
+                                     give and thirteen rows to spend them on.
+
+                                     That margin is what the night schedule's row
+                                     was short of. The header goes rather than the
+                                     row does, because the header was a label for
+                                     the page and the row is a setting. -->
                                 <!-- The whole list is one list now. It used to be ruled
                                      into four blocks by three hairlines, on the
                                      reasoning that a rule belongs where one kind of
@@ -1157,7 +1280,7 @@
                                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
                                                  BadgeClick="OnHardwareBrightnessWhy"
                                                  BadgeToolTip="Why was this turned off?"
-                                                 ToolTip="Controls the monitor's own backlight over DDC/CI instead of only bending gamma. Off by default: it talks to the monitor over I2C, which on a small number of displays with broken firmware has been known to crash Windows itself. The software controls are unaffected either way." />
+                                                 ToolTip="Controls the monitor's own backlight over DDC/CI instead of only bending gamma. Off by default: it talks to the monitor over I2C, which on a small number of displays with broken firmware has been known to crash Windows itself. The software controls are unaffected either way. If a display ever ends up stuck dim after a crash, or after ending Gamer Tool with End task in Task Manager, the brightness is still under the monitor's own menu controls - the app cannot put it back, because a forced kill runs none of its code." />
                                 <!--
                                   No row of prose under this switch.
 
@@ -1188,6 +1311,85 @@
                                                  Glyph="lock" Label="Keep screen locked"
                                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
                                                  ToolTip="Gamma Lock" />
+                                <!-- Night blue light.
+
+                                     One row rather than a switch and a row of times,
+                                     because the Settings list has about seventy
+                                     pixels of slack left in a 790 tall window and
+                                     two rows is about ninety six. Putting the
+                                     schedule under the blue light filter it
+                                     changes would be more discoverable, but that
+                                     dropdown sits on the Display tab beside a
+                                     tuning surface, where "what to load now" is
+                                     what everything else on the tab is about, and
+                                     a thing that fires at eight in the evening
+                                     with no game involved is a different kind of
+                                     decision from that.
+
+                                     So it lives here, next to the other screen
+                                     behaviour, and the two times are on the same
+                                     row as the switch because the schedule is
+                                     one decision with three parts rather than
+                                     three decisions.
+
+                                     The pickers are a whole hour apart and say
+                                     "8 PM" and "7 AM" rather than 20:00 and
+                                     07:00. This is read at a glance in the
+                                     evening by somebody deciding when to go to
+                                     bed, and on a twenty four hour clock the one
+                                     that matters is the larger number. It is also
+                                     twenty four entries rather than ninety six,
+                                     which fits on a screen without a scrollbar.
+                                     They grey out with the switch off, which is
+                                     the honest way to say the hours are not
+                                     being used rather than leaving them looking
+                                     live. -->
+                                <Border x:Name="NightRow" Style="{StaticResource ActionRow}"
+                                        ToolTip="Puts the blue light filter on by itself between these hours, and takes it back off at the end. It is the app's own filter, not Windows Night Light. A game that loads its own slot is unaffected: the schedule changes the filter, not the tune.">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="10" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="12" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <ui:EmojiImage Grid.Column="0" Glyph="moon" Width="19" Height="19" VerticalAlignment="Center" />
+
+                                        <TextBlock Grid.Column="2" Text="Night blue light" VerticalAlignment="Center"
+                                                   FontFamily="{StaticResource Sans}" FontSize="12"
+                                                   Foreground="{StaticResource TextHi}" TextTrimming="CharacterEllipsis" />
+
+                                        <Grid Grid.Column="4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="92" />
+                                                <ColumnDefinition Width="8" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="8" />
+                                                <ColumnDefinition Width="92" />
+                                                <ColumnDefinition Width="14" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <ComboBox x:Name="NightStartBox" Grid.Column="0" Style="{StaticResource ModernCombo}"
+                                                      ItemContainerStyle="{StaticResource ModernComboItem}" SelectionChanged="OnNightTimeChanged"
+                                                      VerticalAlignment="Center" ToolTip="From"
+                                                      AutomationProperties.Name="Night blue light from" />
+                                            <TextBlock Grid.Column="2" Text="to" VerticalAlignment="Center" Margin="0,0,0,-1"
+                                                       FontFamily="{StaticResource Sans}" FontSize="12" Foreground="{StaticResource TextMid}" />
+                                            <ComboBox x:Name="NightEndBox" Grid.Column="4" Style="{StaticResource ModernCombo}"
+                                                      ItemContainerStyle="{StaticResource ModernComboItem}" SelectionChanged="OnNightTimeChanged"
+                                                      VerticalAlignment="Center" ToolTip="Until"
+                                                      AutomationProperties.Name="Night blue light until" />
+                                            <ui:SwitchToggle x:Name="NightBox" Grid.Column="6" Style="{StaticResource SwitchTrack}"
+                                                             Accent="{StaticResource AccentSettings}" VerticalAlignment="Center"
+                                                             Checked="OnNightScheduleChanged" Unchecked="OnNightScheduleChanged"
+                                                             ToolTip="Night blue light" AutomationProperties.Name="Night blue light schedule" />
+                                        </Grid>
+                                    </Grid>
+                                </Border>
+
                                 <ui:OptionToggle x:Name="OsdBox" Style="{StaticResource OptionRow}"
                                                  Glyph="chat" Label="In-game popup"
                                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
@@ -1233,62 +1435,75 @@
 
                                 <Border x:Name="DiagRow" Style="{StaticResource ActionRow}" Cursor="Hand"
                                         MouseLeftButtonUp="OnCopyDiagnosticsClick"
-                                        ToolTip="Click to copy the log  ·  the folder opens the logs in Explorer">
+                                        ToolTip="Click to copy the log">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="10" />
                                             <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="12" />
                                             <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="12" />
+                                            <ColumnDefinition Width="34" />
                                         </Grid.ColumnDefinitions>
 
                                         <ui:EmojiImage Grid.Column="0" Glyph="bug" Width="19" Height="19" VerticalAlignment="Center" />
 
-                                        <TextBlock Grid.Column="2" Text="Diagnostics" VerticalAlignment="Center"
+                                        <TextBlock x:Name="DiagLabelText" Grid.Column="2" Text="Diagnostics" VerticalAlignment="Center"
                                                    FontFamily="{StaticResource Sans}" FontSize="12"
                                                    Foreground="{StaticResource TextHi}" TextTrimming="CharacterEllipsis" />
 
-                                        <!-- Two actions on one row rather than two rows.
-                                             The folder began as its own row, which
-                                             made this page one line too tall and put
-                                             a scrollbar on a list that had never
-                                             needed one. A settings list you have to
-                                             scroll to reach its own diagnostics is
-                                             worse than one that does not. Copying
-                                             stays on the row surface because that is
-                                             what the row has always done; the folder
-                                             is a second, deliberate mark. -->
+                                        <!-- The confirmation gets a column of its own, sitting
+                                             between the label and the mark, and the mark
+                                             stays put.
 
-                                        <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <!-- The mark and the confirmation swap rather
-                                                 than sit on top of each other, and both
-                                                 are pinned to the right edge of their own
-                                                 group, so nothing shifts sideways when
-                                                 the row reports back. -->
-                                            <Grid MinWidth="34">
-                                                <Button x:Name="CopyDiagButton" Style="{StaticResource GhostButton}"
-                                                        Width="34" Height="30" MinWidth="0" Padding="0"
-                                                        HorizontalAlignment="Right"
-                                                        HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                                                        Click="OnCopyDiagnosticsClick">
-                                                    <ui:EmojiImage Glyph="clipboard" Width="19" Height="19" />
-                                                </Button>
-                                                <TextBlock x:Name="DiagCopiedText" Visibility="Collapsed"
-                                                           VerticalAlignment="Center" HorizontalAlignment="Right"
-                                                           FontFamily="{StaticResource Sans}" FontSize="11" FontWeight="SemiBold" />
-                                            </Grid>
+                                             Both used to be in the switch's 34 pixel
+                                             slot, with the text right aligned in it and
+                                             the clipboard hidden for the two and a half
+                                             seconds the confirmation was up. "Copied to
+                                             clipboard" is about a hundred pixels of
+                                             text, so in a 34 pixel slot it was cut
+                                             off at the first few letters, and the row
+                                             had lost the thing the user had just
+                                             clicked. The mark is what identifies the
+                                             action, so hiding it to make room for
+                                             the news that the action worked was
+                                             backwards.
 
-                                            <Button x:Name="OpenLogFolderButton" Style="{StaticResource GhostButton}"
-                                                    Width="34" Height="30" MinWidth="0" Padding="0"
-                                                    HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                                                    PreviewMouseLeftButtonUp="OnOpenLogFolderPreview"
-                                                    Click="OnOpenLogFolderClick"
-                                                    ToolTip="Open the log folder"
-                                                    AutomationProperties.Name="Open log folder">
-                                                <ui:EmojiImage Glyph="folder" Width="19" Height="19" />
-                                            </Button>
-                                        </StackPanel>
+                                             The label column is the star, so this
+                                             column is taken out of it when it appears
+                                             and given back when it goes. The mark is
+                                             the last column and stays pinned to the
+                                             row's right edge either way, which is
+                                             what keeps the row lined up with the
+                                             switches above it. -->
+
+                                        <TextBlock x:Name="DiagCopiedText" Grid.Column="3"
+                                                   VerticalAlignment="Center" HorizontalAlignment="Right"
+                                                   FontFamily="{StaticResource Sans}" FontSize="11" FontWeight="SemiBold"
+                                                   Visibility="Collapsed" TextTrimming="CharacterEllipsis" />
+
+                                        <!-- A fixed 34 rather than Auto, because that is
+                                             the width of the switch track and the row
+                                             has to read as one of the toggles. Sized
+                                             to its content the row changed width every
+                                             time the confirmation appeared, shoving
+                                             the mark in and out.
+
+                                             The column is stated explicitly. Left to
+                                             default it falls into column zero, on top
+                                             of the ladybug, which is what a build
+                                             did once. -->
+
+                                        <Button x:Name="CopyDiagButton" Grid.Column="5"
+                                                Style="{StaticResource GhostButton}"
+                                                Width="34" Height="30" MinWidth="0" Padding="0"
+                                                HorizontalAlignment="Right"
+                                                HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                                Click="OnCopyDiagnosticsClick"
+                                                ToolTip="Copy the log to the clipboard"
+                                                AutomationProperties.Name="Copy diagnostics">
+                                            <ui:EmojiImage Glyph="clipboard" Width="19" Height="19" />
+                                        </Button>
                                     </Grid>
                                 </Border>
 

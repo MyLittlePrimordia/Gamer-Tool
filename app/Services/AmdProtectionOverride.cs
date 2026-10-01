@@ -155,7 +155,6 @@ public static class AmdProtectionOverride
     }
 
     /// <summary>Forgets the cached reading, so the next call walks again.</summary>
-    public static void ResetCache() => _cached = null;
 
     private static ProtectionOverrideReading Walk()
     {
@@ -386,26 +385,6 @@ public static class AmdProtectionOverride
         // That is a machine with no AMD per-display tree at all, so there is no
         // driver to have a default: Unknown, not None.
         return currentKeyPresent ? ProtectionOverrideState.None : ProtectionOverrideState.Unknown;
-    }
-
-    /// <summary>
-    /// The relative path of the legacy override value, or empty when there is not
-    /// one. Pure, so the shape of the tree can be tested without a registry.
-    /// </summary>
-    public static string LegacyValuePath(IEnumerable<string> displayPaths, IEnumerable<string> edidKeys)
-    {
-        foreach (string path in displayPaths)
-        {
-            foreach (string edid in edidKeys)
-            {
-                if (edid.StartsWith(EdidPrefix, StringComparison.OrdinalIgnoreCase))
-                {
-                    return path + "\\" + edid + "\\Option\\" + ValueName;
-                }
-            }
-        }
-
-        return string.Empty;
     }
 
     /// <summary>

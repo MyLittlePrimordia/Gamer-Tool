@@ -77,26 +77,13 @@ public sealed class AudioDeviceManager
         return devices;
     }
 
-    public string GetDefaultOutputId()
-    {
-        try
-        {
-            using MMDeviceEnumerator enumerator = new();
-            return enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia).ID;
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine(ex.Message);
-            return string.Empty;
-        }
-    }
-
     public string GetDefaultOutputName()
     {
         try
         {
             using MMDeviceEnumerator enumerator = new();
-            return enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia).FriendlyName;
+            using MMDevice device = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+            return device.FriendlyName;
         }
         catch (Exception ex)
         {

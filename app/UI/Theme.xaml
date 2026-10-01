@@ -159,6 +159,64 @@
         <Setter Property="Padding" Value="10" />
     </Style>
 
+    <!-- The name plate on a slot card, and the only part of the card that renames.
+         It started as a transparent TextBlock, so the click target was the width
+         of the word and the only thing that said it was clickable was the mouse
+         pointer changing. Everything either side of it did nothing, which reads
+         as the card being clickable and is not.
+
+         Deliberately built to the same measurements as ModernCombo - same
+         background, border colour, corner radius, padding and 28 pixel height -
+         because it is now the same kind of thing: a box on a row of boxes, and
+         one that is a different size is one that reads as a mistake rather than
+         as a name. Those five values are the style's whole purpose and there is
+         a test that checks they have not drifted apart from the combo's.
+
+         The dropdown arrow is the one thing it does not have, and leaving it off
+         is on purpose. The arrow says "there is a list under here"; the plate
+         opens a rename box. The other odd thing on the row, the keycap, is odd
+         because it is a key and not a picker, and that one is a real difference
+         rather than a styling one.
+
+         A Button rather than a Border, for the template and because a Border
+         cannot take one. Which also means the plate answers Enter and Space,
+         so renaming a slot does not require a mouse any more. -->
+    <Style x:Key="NamePlate" TargetType="Button">
+        <Setter Property="FontFamily" Value="{StaticResource Sans}" />
+        <Setter Property="FontSize" Value="11.5" />
+        <Setter Property="Foreground" Value="{StaticResource TextHi}" />
+        <Setter Property="Background" Value="{StaticResource WellBg}" />
+        <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="Padding" Value="9,0" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                            CornerRadius="{StaticResource RadiusControl}">
+                        <ContentPresenter Margin="{TemplateBinding Padding}" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource LineStrong}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.45" />
+                            <Setter Property="Cursor" Value="Arrow" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- Page sections are not boxed. Groups are separated by hairlines, a tile is
          a borderless panel used only where a repeated item needs a shape of its
          own, and the hero is the single raised surface each tab is built around. -->

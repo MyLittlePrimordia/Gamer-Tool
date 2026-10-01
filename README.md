@@ -56,6 +56,7 @@ Boost shadow brightness to spot enemies in dark games, switch to a warm night mo
 
 - **Hardware Brightness (DDC/CI):** Off by default. Some monitors support changing real backlight levels directly over the display cable. If a monitor fails to respond twice, Gamer Tool disables it safely to prevent freezing.
 - **Settings Location:** Everything is stored locally in `%APPDATA%\GamerTool`. Copy this folder if you want to move your setup to a new PC.
+- **Portable mode:** Put a `settings.json` next to `GamerTool.exe` and the whole setup moves into that folder — settings *and* the log. Handy for a USB stick. Leave the file out and nothing changes.
 - **Accessibility:** Full keyboard navigation is supported. Every dial and control can be navigated using <kbd>Tab</kbd>, arrow keys, <kbd>Page Up</kbd>/<kbd>Down</kbd>, and <kbd>Esc</kbd>.
 </details>
 

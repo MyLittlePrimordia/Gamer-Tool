@@ -105,13 +105,24 @@ public sealed class DisplayService
 
     public event Action<DisplayPreset>? Applied;
 
-    public bool IsGammaReady { get; private set; }
+
 
     public bool IsEnabled { get; private set; }
 
+    /// <summary>
+    /// Marks the service as holding a ramp on screen, for the tests.
+    /// <para>
+    /// A real <see cref="Apply"/> is the only other thing that sets
+    /// <see cref="IsEnabled"/>, and it sets it by asking Win32 to actually change
+    /// a display's gamma. A unit test cannot do that and should not, so this
+    /// stands in for the part of Apply that lands, and nothing else.
+    /// </para>
+    /// </summary>
+    internal void MarkAppliedForTest() => IsEnabled = true;
+
     public DisplayPreset Working { get; private set; } = DisplayPreset.Flat();
 
-    public string ActiveName { get; private set; } = "STANDARD";
+
 
     public string ActiveDevice { get; private set; } = string.Empty;
 
@@ -326,7 +337,6 @@ public sealed class DisplayService
     public bool Apply(DisplayPreset preset, string device)
     {
         Working = preset;
-        ActiveName = preset.Name;
         ActiveDevice = device ?? string.Empty;
         _dirty = true;
         bool ok = Push();
@@ -397,7 +407,6 @@ public sealed class DisplayService
         if (any)
         {
             _dirty = false;
-            IsGammaReady = true;
         }
 
         return any;
@@ -503,7 +512,6 @@ public sealed class DisplayService
 
         IsEnabled = false;
         Working = DisplayPreset.Flat();
-        ActiveName = "STANDARD";
         _dirty = false;
         StatusChanged?.Invoke(any ? "SCREEN RESET" : "NOTHING TO RESET");
         return any;
@@ -513,6 +521,9 @@ public sealed class DisplayService
     {
         _lockEnabled = enabled;
     }
+
+    /// <summary>Whether the user has the gamma lock switched on.</summary>
+    internal bool IsLockOn => _lockEnabled;
 
     public void StartLock()
     {
@@ -540,9 +551,29 @@ public sealed class DisplayService
         _timer = null;
     }
 
+    /// <summary>
+    /// Whether there is anything of ours on screen worth defending.
+    /// <para>
+    /// The lock re-pushes the ramp on a timer because a fullscreen game, a driver
+    /// reset or a competing gamma tool can put something else there. But there is
+    /// only a ramp to defend once one of ours has actually landed: without this,
+    /// the timer wrote a flat ramp over whatever the user, the driver or another
+    /// tool had set, from the moment the app opened.
+    /// </para>
+    /// <para>
+    /// That is not only wrong, it is the same wrong twice. It fights f.lux and a
+    /// driver's own gamma slider for no reason, and it re-flattens the ramp Reset
+    /// had just restored, so a reset was undone about three seconds later for
+    /// anyone whose original ramp was not already flat. <see cref="IsEnabled"/> is
+    /// set only by a successful <see cref="Apply"/> and cleared by
+    /// <see cref="Reset"/>, so it answers exactly the question being asked.
+    /// </para>
+    /// </summary>
+    internal bool ShouldDefend => _lockEnabled && IsEnabled;
+
     private void OnTick(object? sender, EventArgs e)
     {
-        if (!_lockEnabled)
+        if (!ShouldDefend)
         {
             return;
         }

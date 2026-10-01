@@ -121,7 +121,32 @@ public sealed class BacklightService
 
     private readonly Dictionary<string, MonitorProbe> _byDevice = new(StringComparer.OrdinalIgnoreCase);
 
-    private bool _probed;
+    /// <summary>
+    /// Guards this service's own tables.
+    /// <para>
+    /// The probe runs on a worker because it talks to monitors over I2C and takes
+    /// seconds, and a write goes to a worker for the same reason. Both of them
+    /// write to <see cref="_byDevice"/> and <see cref="_refusals"/>, and the window
+    /// reads both to paint the rows. <see cref="_probeGate"/> only kept two probes
+    /// from colliding with each other; it did nothing about probe-versus-window,
+    /// which is the collision that actually happens - opening the Display tab
+    /// starts a probe, and the rows are being repainted while it runs.
+    /// </para>
+    /// <para>
+    /// Every public accessor therefore answers from a copy taken under this lock
+    /// rather than from the live collection, so no caller can be iterating a
+    /// dictionary that a worker is rebuilding. The probe still runs unlocked
+    /// against the hardware, because holding a lock across an I2C transaction
+    /// would stall the window for the length of it, which is the failure being
+    /// fixed.
+    /// </para>
+    /// </summary>
+    private readonly object _gate = new();
+
+    private volatile bool _probed;
+
+    /// <summary>1 while a settings change is waiting to be written.</summary>
+    private int _settingsChanged;
 
     /// <summary>
     /// Set by <see cref="ForgetExclusions"/> so the probe it makes possible does
@@ -140,7 +165,26 @@ public sealed class BacklightService
     public BacklightService(AppSettings settings, IBacklightBus? bus = null)
     {
         _settings = settings;
-        _bus = bus ?? new SystemBacklightBus();
+
+        // Whatever the last session left in the remembered-brightness map is not a
+        // record of anything this one can act on. It records what a display was
+        // at while a different run of the app held it, and this session has not
+        // touched a display yet, so those numbers say nothing about now.
+        //
+        // Keeping them is worse than losing them. TrySet only captures a
+        // display's brightness when the map has no entry for it, so a leftover
+        // entry suppresses the capture entirely, and RestoreAll later puts the
+        // display back to a value from a session that has since ended. The map is
+        // never read back to recover from a crash - there is no startup restore -
+        // so an entry carried across a launch has no upside at all, only this.
+        // Started empty, the first write this session captures the value that is
+        // actually on the screen right now.
+        settings.OriginalHardwareBrightness.Clear();
+
+        // The composite rather than the DDC bus, so a laptop's own screen is
+        // reachable by the same code that drives an external monitor. On a machine
+        // with no panel the composite returns exactly what the DDC bus would.
+        _bus = bus ?? new CompositeBacklightBus();
         Availability.RestoreFrom(settings.HardwareBrightnessFailedRounds, settings.HardwareBrightnessRetired);
     }
 
@@ -176,7 +220,16 @@ public sealed class BacklightService
     public bool IsEnabled => _settings.HardwareBrightnessEnabled;
 
 
-    public IReadOnlyList<MonitorProbe> Monitors => _byDevice.Values.ToList();
+    public IReadOnlyList<MonitorProbe> Monitors
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _byDevice.Values.ToList();
+            }
+        }
+    }
 
 
     /// <summary>
@@ -214,16 +267,30 @@ public sealed class BacklightService
 
         try
         {
-            _byDevice.Clear();
-
+            // Built beside the live table and swapped in at the end, rather than
+            // cleared and refilled in place. The window can be reading the rows
+            // from this whole time, and a clear followed by a repopulate is a
+            // window in which it sees half a table; swapping means it sees the
+            // old one until the new one is whole.
+            Dictionary<string, MonitorProbe> found = new(StringComparer.OrdinalIgnoreCase);
             foreach (MonitorProbe monitor in _bus.ProbeAll(_settings.ExcludedDdcMonitors))
             {
-                _byDevice[monitor.DeviceName] = monitor;
+                found[monitor.DeviceName] = monitor;
+            }
+
+            lock (_gate)
+            {
+                _byDevice.Clear();
+                foreach (KeyValuePair<string, MonitorProbe> entry in found)
+                {
+                    _byDevice[entry.Key] = entry.Value;
+                }
             }
 
             _probed = true;
 
-            foreach (MonitorProbe monitor in _byDevice.Values)
+            IReadOnlyList<MonitorProbe> all = Monitors;
+            foreach (MonitorProbe monitor in all)
             {
                 // The probe result is the single most useful line in the log when
                 // someone reports that brightness will not move: it says what the
@@ -256,7 +323,7 @@ public sealed class BacklightService
             if (_nextRoundIsFree)
             {
                 _nextRoundIsFree = false;
-                Availability.RecordWithoutCounting(_byDevice.Values.ToList());
+                Availability.RecordWithoutCounting(all);
                 AppLog.Info(
                     "backlight round not counted, it answers the switch the user just moved; streak="
                     + Availability.ConsecutiveRounds.ToString(System.Globalization.CultureInfo.InvariantCulture)
@@ -264,19 +331,23 @@ public sealed class BacklightService
             }
             else
             {
-                Availability.Record(_byDevice.Values.ToList());
+                Availability.Record(all);
             }
 
             // Written straight back, because a round spans a launch. Without this
             // the count can only ever reach one, and a rule that retires after two
-            // is a rule that never fires.
-            (int rounds, bool retired) = Availability.Persistable();
-            if (rounds != _settings.HardwareBrightnessFailedRounds
-                || retired != _settings.HardwareBrightnessRetired)
+            // is a rule that never fires. Under the profile's gate, because a
+            // click handler on the window can be serialising it right now.
+            lock (_settings.Gate)
             {
-                _settings.HardwareBrightnessFailedRounds = rounds;
-                _settings.HardwareBrightnessRetired = retired;
-                _settingsChanged = true;
+                (int rounds, bool retired) = Availability.Persistable();
+                if (rounds != _settings.HardwareBrightnessFailedRounds
+                    || retired != _settings.HardwareBrightnessRetired)
+                {
+                    _settings.HardwareBrightnessFailedRounds = rounds;
+                    _settings.HardwareBrightnessRetired = retired;
+                    Interlocked.Exchange(ref _settingsChanged, 1);
+                }
             }
         }
         finally
@@ -311,6 +382,13 @@ public sealed class BacklightService
             + " rounds in a row across "
             + Availability.LastRoundDisplays.ToString(System.Globalization.CultureInfo.InvariantCulture)
             + " display(s). The settings tab now says so, and turning the switch back on retries");
+
+        // Taken, because the named promise is that it happens once. It did not, and
+        // the probe that raised it has stopped running by now - the feature has
+        // turned itself off, so there is nothing left to record a round - so
+        // nothing would ever have cleared the flag and every later read would have
+        // logged this again.
+        Availability.AcknowledgeRetirement();
         return true;
     }
 
@@ -319,8 +397,13 @@ public sealed class BacklightService
 
     private bool _probing;
 
-    private int RefusalCountOf(string deviceName) =>
-        _refusals.TryGetValue(deviceName, out int seen) ? seen : 0;
+private int RefusalCountOf(string deviceName)
+    {
+        lock (_gate)
+        {
+            return _refusals.TryGetValue(deviceName, out int seen) ? seen : 0;
+        }
+    }
 
     /// <summary>
     /// The furthest point the probe got, in words. This is the difference between
@@ -353,8 +436,13 @@ public sealed class BacklightService
     public bool HasProbed => _probed;
 
 
-    public MonitorProbe? Find(string deviceName) =>
-        _byDevice.TryGetValue(deviceName, out MonitorProbe? probe) ? probe : null;
+public MonitorProbe? Find(string deviceName)
+    {
+        lock (_gate)
+        {
+            return _byDevice.TryGetValue(deviceName, out MonitorProbe? probe) ? probe : null;
+        }
+    }
 
     /// <summary>
     /// How many refusals in a row before a display is put on the exclusion list.
@@ -375,7 +463,16 @@ public sealed class BacklightService
     private readonly Dictionary<string, int> _refusals = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Consecutive refusals per display, for the badge and the log.</summary>
-    public IReadOnlyDictionary<string, int> Refusals => _refusals;
+    public IReadOnlyDictionary<string, int> Refusals
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return new Dictionary<string, int>(_refusals, StringComparer.OrdinalIgnoreCase);
+            }
+        }
+    }
 
     /// <summary>
     /// Whether the feature has turned itself off, and the note the settings tab
@@ -405,9 +502,15 @@ public sealed class BacklightService
             return BusOutcome.Failed;
         }
 
-        if (!_settings.OriginalHardwareBrightness.ContainsKey(monitor.DeviceName))
+        // The remembered brightness, taken before the write and under the profile's
+        // gate. It is a dictionary the window can be serialising at this instant,
+        // and it is written on every successful write rather than rarely.
+        lock (_settings.Gate)
         {
-            _settings.OriginalHardwareBrightness[monitor.DeviceName] = monitor.Brightness.Current;
+            if (!_settings.OriginalHardwareBrightness.ContainsKey(monitor.DeviceName))
+            {
+                _settings.OriginalHardwareBrightness[monitor.DeviceName] = monitor.Brightness.Current;
+            }
         }
 
         BusOutcome outcome = _bus.TrySetBrightness(
@@ -436,8 +539,13 @@ public sealed class BacklightService
             AppLog.Warn("backlight write on " + monitor.DeviceName + " ended " + outcome
                 + ": " + detail);
 
-            int count = _refusals.TryGetValue(monitor.DeviceName, out int seen) ? seen + 1 : 1;
-            _refusals[monitor.DeviceName] = count;
+            int count;
+            lock (_gate)
+            {
+                count = _refusals.TryGetValue(monitor.DeviceName, out int seen) ? seen + 1 : 1;
+                _refusals[monitor.DeviceName] = count;
+            }
+
             monitor.Outcome = outcome;
 
             if (count < RefusalsBeforeExclusion)
@@ -459,14 +567,17 @@ public sealed class BacklightService
             // the row greys out rather than failing every remaining drag. The
             // Hardware brightness switch clears this again, so it is a pause
             // rather than a life sentence.
-            if (!_settings.ExcludedDdcMonitors.Contains(monitor.DeviceName))
+            lock (_settings.Gate)
             {
-                _settings.ExcludedDdcMonitors.Add(monitor.DeviceName);
-                _settingsChanged = true;
-                AppLog.Warn("backlight excluding " + monitor.FriendlyOrDevice()
-                    + " after " + count.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                    + " refusals: " + detail
-                    + ". Turn the Hardware brightness switch off and on to clear this.");
+                if (!_settings.ExcludedDdcMonitors.Contains(monitor.DeviceName))
+                {
+                    _settings.ExcludedDdcMonitors.Add(monitor.DeviceName);
+                    Interlocked.Exchange(ref _settingsChanged, 1);
+                    AppLog.Warn("backlight excluding " + monitor.FriendlyOrDevice()
+                        + " after " + count.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        + " refusals: " + detail
+                        + ". Turn the Hardware brightness switch off and on to clear this.");
+                }
             }
 
             monitor.NoReplyBecause = why;
@@ -474,7 +585,11 @@ public sealed class BacklightService
             return outcome;
         }
 
-        _refusals.Remove(monitor.DeviceName);
+        lock (_gate)
+        {
+            _refusals.Remove(monitor.DeviceName);
+        }
+
         monitor.NoReplyBecause = null;
         monitor.Outcome = BusOutcome.Ok;
 
@@ -508,27 +623,38 @@ public sealed class BacklightService
     /// </summary>
     public void ForgetExclusions()
     {
-        bool hadAny = _settings.ExcludedDdcMonitors.Count > 0 || _refusals.Count > 0;
+        bool hadAny;
         Availability.ResetCount();
 
-        // This call is what lets a probe run again, and that probe is the one the
-        // user just asked for by moving the switch. Spent here, once, so the
-        // launch that follows is the first round that counts towards retiring.
-        _nextRoundIsFree = true;
-
-        foreach (string device in _settings.ExcludedDdcMonitors.ToList())
+        lock (_settings.Gate)
         {
-            AppLog.Info("backlight clearing exclusion for " + device);
+            hadAny = _settings.ExcludedDdcMonitors.Count > 0;
+
+            // This call is what lets a probe run again, and that probe is the one the
+            // user just asked for by moving the switch. Spent here, once, so the
+            // launch that follows is the first round that counts towards retiring.
+            _nextRoundIsFree = true;
+
+            foreach (string device in _settings.ExcludedDdcMonitors.ToList())
+            {
+                AppLog.Info("backlight clearing exclusion for " + device);
+            }
+
+            _settings.ExcludedDdcMonitors.Clear();
         }
 
-        _settings.ExcludedDdcMonitors.Clear();
-        _refusals.Clear();
-        _byDevice.Clear();
+        lock (_gate)
+        {
+            hadAny |= _refusals.Count > 0;
+            _refusals.Clear();
+            _byDevice.Clear();
+        }
+
         _probed = false;
 
         if (hadAny)
         {
-            _settingsChanged = true;
+            Interlocked.Exchange(ref _settingsChanged, 1);
             AppLog.Info("backlight exclusions and refusal counts cleared, will probe again");
         }
     }
@@ -538,15 +664,16 @@ public sealed class BacklightService
     /// not been written yet. The window commits once this is set, rather than the
     /// exclusion being written to memory and then quietly forgotten, which is
     /// what used to happen.
+    /// <para>
+    /// An exchange rather than a read followed by a write, because the flag is
+    /// raised on a worker and read on the window. Read-then-clear loses a raise
+    /// that lands between the two, and the exclusion that raised it is then never
+    /// written to disk: a display the app has given up on comes back on the next
+    /// launch with nothing to say why.
+    /// </para>
     /// </summary>
-    public bool ConsumeSettingsChanged()
-    {
-        bool changed = _settingsChanged;
-        _settingsChanged = false;
-        return changed;
-    }
-
-    private bool _settingsChanged;
+    public bool ConsumeSettingsChanged() =>
+        Interlocked.Exchange(ref _settingsChanged, 0) == 1;
 
 
     /// <summary>
@@ -556,12 +683,25 @@ public sealed class BacklightService
     /// </summary>
     public void RestoreAll()
     {
-        if (_settings.OriginalHardwareBrightness.Count == 0)
+        // Snapshotted under the profile's gate and then emptied, both before any
+        // bus write rather than after. The writes below are the slow part and must
+        // not be inside the lock, but nothing between reading the map and clearing
+        // it may be - and a write that put the value back and then died before the
+        // clear would leave the map claiming there is still something outstanding,
+        // so the map is emptied first and the writes use the copy.
+        List<KeyValuePair<string, uint>> pending;
+        lock (_settings.Gate)
+        {
+            pending = _settings.OriginalHardwareBrightness.ToList();
+            _settings.OriginalHardwareBrightness.Clear();
+        }
+
+        if (pending.Count == 0)
         {
             return;
         }
 
-        foreach ((string device, uint original) in _settings.OriginalHardwareBrightness.ToList())
+        foreach ((string device, uint original) in pending)
         {
             MonitorProbe? monitor = Find(device);
             uint maximum = monitor?.Brightness?.Maximum ?? Math.Max(original, 100);
@@ -581,7 +721,5 @@ public sealed class BacklightService
                     + (win32Error == 0 ? string.Empty : " [" + DdcErrors.Describe(win32Error) + "]"));
             }
         }
-
-        _settings.OriginalHardwareBrightness.Clear();
     }
 }

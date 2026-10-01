@@ -100,14 +100,28 @@ public sealed class WatchedWindow
     private void OnTick(object? sender, EventArgs e)
     {
         WatchedWindow? window = Read();
-        if (window is not null)
+
+        // Inside a try, which the scan below has always been and this was not.
+        // A handler that throws from a DispatcherTimer tick escapes as an
+        // unhandled dispatcher exception, which puts a dialog on screen in the
+        // middle of a game launch and keeps the timer running, so the next tick
+        // does it again. The scan's handler raises were guarded; these were the
+        // ones that were not.
+        try
         {
-            string key = window.ExePath + "|" + window.ProcessName;
-            if (!string.Equals(key, _lastKey, StringComparison.OrdinalIgnoreCase))
+            if (window is not null)
             {
-                _lastKey = key;
-                ForegroundChanged?.Invoke(window);
+                string key = window.ExePath + "|" + window.ProcessName;
+                if (!string.Equals(key, _lastKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    _lastKey = key;
+                    ForegroundChanged?.Invoke(window);
+                }
             }
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("FOREGROUND", ex);
         }
 
         _processTick++;

@@ -71,34 +71,15 @@ public static class BacklightStatus
             ? "Left alone after repeated failures. Switch hardware brightness off and on to try again."
             : "Left alone: its details did not look right.";
 
-    /// <summary>
-    /// Whether the feature is worth leaving switched on for this machine, and if
-    /// not, why.
-    /// <para>
-    /// A machine where every display has failed twice in a row has a driver or
-    /// firmware problem, not a monitor problem, and a settings row that controls
-    /// nothing is just noise the user has to look past on every launch. Turning
-    /// the option off is a statement about the machine rather than about the app.
-    /// </para>
-    /// <para>
-    /// The threshold is two consecutive full rounds, and both matter. One round
-    /// catches a monitor that was asleep, on a bus somebody else was using, or
-    /// mid-resume, and every one of those is ordinary. Two in a row, with a probe
-    /// in between, does not happen to hardware that is working.
-    /// </para>
-    /// </summary>
-    public static bool ShouldRetireMachine(IReadOnlyList<MonitorProbe> monitors, int consecutiveRounds)
-    {
-        ArgumentNullException.ThrowIfNull(monitors);
-
-        if (monitors.Count == 0 || consecutiveRounds < BacklightAvailability.RoundsBeforeRetiring)
-        {
-            return false;
-        }
-
-        // One working display is enough to keep it on. A user with three monitors
-        // and one that answers gets a working slider, and hiding the whole
-        // feature over the other two would take away something they can use.
-        return monitors.All(m => !m.CanControlBacklight);
-    }
+    // This class used to also carry a ShouldRetireMachine predicate answering the
+    // whole retirement question in one line. Nothing in the app called it:
+    // BacklightAvailability.Record decides as it goes, because the count has to
+    // carry between rounds and across a restart and cannot be recomputed from a
+    // list of monitors on demand.
+    //
+    // Three tests called the unused predicate rather than the code that runs, so
+    // the policy they were written to protect - one working display among several
+    // keeps the feature, a machine with no displays is never retired - was being
+    // asserted against a second parallel implementation. Both cases are covered in
+    // BacklightAvailabilityTests against Record itself.
 }

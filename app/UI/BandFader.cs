@@ -102,14 +102,21 @@ public sealed class BandFader : Slider
     /// This is done in code rather than with a template trigger because the
     /// trigger was only taking effect on some of the elements it named: the fills
     /// collapsed but the groove behind the dashes stayed, which left a solid bar
-    /// showing through the gaps. Owning all four elements in one place means they
+    /// showing through the gaps. Owning all the elements in one place means they
     /// change together or not at all.
+    /// <para>
+    /// A fourth name used to be set here, "CentreTick", which the template has
+    /// never contained - <c>GetTemplateChild</c> returned null and the call
+    /// quietly did nothing. It is left out rather than left in, because a name
+    /// that looks like it is doing something here is worse than no name: the next
+    /// person to change this would reasonably believe the marker it refers to
+    /// exists.
+    /// </para>
     /// </summary>
     private void ApplyBandStyle()
     {
         bool band = Dashed;
         SetVisibility("Groove", band ? Visibility.Collapsed : Visibility.Visible);
-        SetVisibility("CentreTick", band ? Visibility.Collapsed : Visibility.Visible);
         SetVisibility("UpperFill", band ? Visibility.Collapsed : Visibility.Visible);
         SetVisibility("LowerFill", band ? Visibility.Collapsed : Visibility.Visible);
 

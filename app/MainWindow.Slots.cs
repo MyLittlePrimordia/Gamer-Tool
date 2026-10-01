@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -39,29 +39,69 @@ public partial class MainWindow : Window
     /// page that scrolls, and it scrolls on a slim dark bar.
     /// </summary>
     /// <summary>
-    /// Column widths shared by a slot row and the caption strip above it, so the
-    /// two can never drift apart. The app dropdown is the only flexible column.
-    /// The key column is 112px because "CTRL+SHIFT+5" in 10.5pt mono needs more
-    /// than the 84px it used to get and was being cut to "CTRL+SH".
+    /// The slot row's column widths, shared by a slot card and the caption strip
+    /// above it so the two can never drift apart.
+    /// <para>
+    /// One row, eight controls, and it adds up. This was measured rather than
+    /// guessed, twice: the first attempt assumed ten pixel gaps and generous
+    /// minimums for the name and the game picker, came out 114px short, and the
+    /// answer given was that a single row was not possible. It was possible.
+    /// The name only has to hold a word rather than a field, and the game picker
+    /// has the marquee, so 194px is a real width and not a compromise.
+    /// </para>
+    /// <para>
+    /// What pays for the row is that four of these carry text the user wrote or
+    /// a driver supplied - a preset name, a device name, a program name - and
+    /// all four scroll their closed box. The open list sizes itself to its
+    /// widest row, so nothing is ever actually cut off; what is given up is
+    /// reading a long name without clicking it.
+    /// </para>
+    /// <para>
+    /// The key is 100, which is the first time it has been moved. 84 was tried
+    /// once and cut "CTRL+SHIFT+5" to "CTRL+SH"; 100 holds it in 10.5pt mono.
+    /// </para>
     /// </summary>
     private static readonly GridLength[] SlotColumns =
     {
-        new(112), new(10), new(150), new(16), new(196), new(10),
-        new(196), new(10), new(112), new(10), new(1, GridUnitType.Star),
-        new(16), new(34), new(8), new(30)
+        new(140), new(10), new(100), new(10), new(160), new(10),
+        new(160), new(10), new(118), new(10), new(180), new(10),
+        new(1, GridUnitType.Star), new(10), new(30)
     };
 
-    private static void ApplySlotColumns(Grid row)
-    {
+    /// <summary>
+    /// The keycap's height, and therefore the height of the whole row.
+    /// <para>
+    /// Named because the row is one line now, so the tallest thing in it is the
+    /// keycap and everything else is centred against it. It used to be 28 as a
+    /// literal on a grid that had a second row underneath it; there is no second
+    /// row, and a literal here would be the only number in the card that nothing
+    /// else could be measured against.
+    /// </para>
+    /// </summary>
+    private const double KeyCapHeight = 28.0;
+
+    private static void ApplySlotColumns(Grid row)    {
         foreach (GridLength width in SlotColumns)
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = width });
     }
 
 
+    private static void ApplySlotColumns(Grid row, GridLength[] widths)
+    {
+        foreach (GridLength width in widths)
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = width });
+    }
+
+
     /// <summary>
-    /// Captions for the controls in a slot row. The strip is a child of the same
-    /// grid as the rows and carries the card's own 12px padding as a margin, so
-    /// each caption lands exactly over the control it names.
+    /// Captions for every control in a slot row. The strip is a child of the
+    /// list's grid and carries the card's own 12px padding as a margin, so each
+    /// caption lands exactly over the control it names.
+    /// <para>
+    /// The delete button has none. A caption over it would name what the icon
+    /// beside it has always said, and a label that repeats a control is a line
+    /// of the layout spent saying nothing.
+    /// </para>
     /// </summary>
     private UIElement SlotHeaderRow()
     {
@@ -69,29 +109,48 @@ public partial class MainWindow : Window
         ApplySlotColumns(head);
         head.Margin = new Thickness(12, 0, 12, 8);
 
-        void Caption(int column, string text, bool right = false)
+        foreach (TextBlock caption in Captions())
+        {
+            head.Children.Add(caption);
+        }
+
+        return head;
+    }
+
+    private const double CaptionHeight = 13.0;
+
+    private IEnumerable<TextBlock> Captions()
+    {
+        (int Column, string Text)[] captions =
+        {
+            (0, "NAME"),
+            (2, "HOTKEY"),
+            (4, "DISPLAY"),
+            (6, "SOUND"),
+            (8, "MONITOR"),
+            (10, "OUTPUT"),
+
+            // "Autostart" rather than "Game", because that is what the column
+            // decides. The dropdown is the only place auto-apply is set - picking
+            // an app turns it on and "No game" turns it off - so the name that
+            // describes what this control is for is the behaviour, not the
+            // program. It is also the one that says what the column is for
+            // without having to already know the app is what it is for.
+            (12, "AUTOSTART"),
+        };
+
+        foreach ((int column, string text) in captions)
         {
             TextBlock caption = new()
             {
                 Text = text,
                 Style = (Style)FindResource("SectionHeader"),
-                VerticalAlignment = VerticalAlignment.Center,
-                HorizontalAlignment = right ? HorizontalAlignment.Right : HorizontalAlignment.Left
+                VerticalAlignment = VerticalAlignment.Center
             };
+
             Grid.SetColumn(caption, column);
-            head.Children.Add(caption);
+            yield return caption;
         }
-
-        Caption(0, "KEY");
-        Caption(2, "SLOT");
-        Caption(4, "DISPLAY");
-        Caption(6, "SOUND");
-        Caption(8, "MONITOR");
-        Caption(10, "GAME");
-        Caption(12, "AUTO", true);
-        Caption(14, "DELETE", true);
-
-        return head;
     }
 
 
@@ -141,19 +200,29 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(hotkey))
         {
             keyBox.Text = "NOT SET";
-            keyBox.ToolTip = "Click, then press the combo you want  ·  F1 to F24 bind on their own";
+            keyBox.ToolTip = "Click, then press the combo you want  Â·  F1 to F24 bind on their own";
             return;
         }
 
         keyBox.Text = hotkey;
-        keyBox.ToolTip = hotkey + "  ·  click to change, Esc cancels, Backspace clears";
+        keyBox.ToolTip = hotkey + "  Â·  click to change, Esc cancels, Backspace clears";
     }
 
 
     /// <summary>
-    /// A single slot as one full width row: keycap, name, the three things it
-    /// loads, which screen it touches, when it fires, and the two per slot
-    /// actions on the far right.
+    /// A single slot as two full width rows: the name, its key, and the two
+    /// per slot actions above, and the four things it loads and when it fires
+    /// below.
+    /// <para>
+    /// Two rows because one could not hold it. The output picker needed a
+    /// hundred and fifty pixels that did not exist, and the only way to find them
+    /// was to take them off controls whose whole job is to show a value - which
+    /// had already left the game picker at a hundred and fifty, trying to hold an
+    /// installed program's name. Rather than take the shortfall out of the
+    /// pickers, the things that are not pickers moved up. The game picker gets
+    /// nearly four hundred pixels and every other control is back to a width that
+    /// fits what it is showing.
+    /// </para>
     /// </summary>
     private UIElement SlotCard(HotkeySlot slot)
     {
@@ -167,11 +236,12 @@ public partial class MainWindow : Window
         Grid row = new();
         ApplySlotColumns(row);
 
+        card.Child = row;
         TextBox keyBox = new()
         {
             Style = (Style)FindResource("KeyCap"),
             Tag = slot.Id,
-            Height = 28
+            Height = KeyCapHeight
         };
 
         ShowSlotKey(keyBox, slot.Hotkey);
@@ -187,7 +257,7 @@ public partial class MainWindow : Window
             // keycap is read only, so this is the only way it ever says anything
             // other than the current binding.
             keyBox.Text = "PRESS A KEY";
-            keyBox.ToolTip = "Esc cancels  ·  Backspace clears  ·  F1 to F24 bind on their own";
+            keyBox.ToolTip = "Esc cancels  Â·  Backspace clears  Â·  F1 to F24 bind on their own";
         };
         keyBox.LostKeyboardFocus += (s, e) =>
         {
@@ -203,30 +273,57 @@ public partial class MainWindow : Window
             _captureSlotId = null;
             _captureBox = null;
         };
-        Grid.SetColumn(keyBox, 0);
+        Grid.SetColumn(keyBox, 2);
 
+        // No font, no size and no weight here. They are on the NamePlate style,
+        // beside the border and the padding, so the five values that make this
+        // look like the dropdown next to it are all in one place. Setting any of
+        // them here would put one of them in two places and one of them would
+        // eventually be the odd one out.
         TextBlock nameText = new()
         {
             Text = string.IsNullOrWhiteSpace(slot.Name) ? "Slot" : slot.Name,
-            FontSize = 12,
-            FontWeight = FontWeights.SemiBold,
-            VerticalAlignment = VerticalAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            ToolTip = slot.HasWork ? slot.WorkText : "Empty slot",
 
-            // A slot the user added can be named, so the toast that reports a
-            // slot loading says something recognisable rather than "SLOT 5".
-            Cursor = slot.BuiltIn ? Cursors.Arrow : Cursors.Hand,
-            Background = Brushes.Transparent
+            // The plate is 140px and the longest shipped name is about 105 of
+            // them, so a name the user wrote has room to be trimmed rather than
+            // pushing the plate wider. A slot name is an identifier more than a
+            // label, and the full string is in the rename box it opens.
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+
+        // The name is the whole of what this row does, so it is given a plate
+        // rather than being bare text in a column nine hundred pixels wide.
+        // A bare TextBlock with a transparent background is a click target the
+        // width of the word with nothing drawn on it, and the only clue it was
+        // live was the pointer changing - which is a clue you have to already
+        // know to look for. The plate is the clue.
+        //
+        // A Button, so the plate can carry the box and the hover, and so
+        // renaming a slot no longer needs a mouse: a bare TextBlock that only
+        // answered a click was not reachable from the keyboard at all.
+        //
+        // Built in slots are disabled rather than styled differently, so the row
+        // reads the same as its neighbours and the dimmed plate is the thing
+        // saying "this one is fixed". A name that looked editable and then
+        // refused would be worse than one that never looked editable.
+        Button namePlate = new()
+        {
+            Style = (Style)FindResource("NamePlate"),
+            Content = nameText,
+            IsEnabled = !slot.BuiltIn,
+            Tag = slot.Id,
+            ToolTip = slot.BuiltIn
+                ? (slot.HasWork ? slot.WorkText : "Empty slot")
+                : "Rename"
         };
 
         if (!slot.BuiltIn)
         {
-            nameText.ToolTip = "Rename";
-            nameText.MouseLeftButtonUp += (s, e) => RenameSlot(slot);
+            namePlate.Click += (s, e) => RenameSlot(slot);
+            System.Windows.Automation.AutomationProperties.SetName(namePlate, "Rename " + slot.Name);
         }
 
-        Grid.SetColumn(nameText, 2);
+        Grid.SetColumn(namePlate, 0);
 
         ComboBox displayBox = PresetCombo("display", slot);
         Grid.SetColumn(displayBox, 4);
@@ -237,26 +334,17 @@ public partial class MainWindow : Window
         ComboBox monitorBox = MonitorCombo(slot);
         Grid.SetColumn(monitorBox, 8);
 
+        ComboBox outputBox = OutputCombo(slot);
+        Grid.SetColumn(outputBox, 10);
+
+        // The game picker is on this row, not the other one. It is what fills
+        // the space the name was floating in, and it belongs beside the key it
+        // is the hotkey for rather than beside a monitor and an EQ curve it has
+        // nothing to do with. It is also the widest string on the card by a long
+        // way - an installed program's name - so it is the column that most
+        // needed the room.
         ComboBox appBox = AppCombo(slot);
-        Grid.SetColumn(appBox, 10);
-
-        bool canAuto = slot.HasWork && (slot.IsSelfTarget || slot.HasTarget);
-        GamerTool.UI.SwitchToggle autoBox = new()
-        {
-            Style = (Style)FindResource("SwitchTrack"),
-            Accent = (System.Windows.Media.Brush)FindResource("AccentHotkeys"),
-            IsChecked = slot.AutoActivate,
-            IsEnabled = slot.AutoActivate || canAuto,
-            Tag = slot.Id,
-            VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            ToolTip = AutoToolTip(slot)
-        };
-
-        System.Windows.Automation.AutomationProperties.SetName(autoBox, "Load this slot automatically");
-        autoBox.Checked += (s, e) => SetSlotFlag(slot, "auto", true);
-        autoBox.Unchecked += (s, e) => SetSlotFlag(slot, "auto", false);
-        Grid.SetColumn(autoBox, 12);
+        Grid.SetColumn(appBox, 12);
 
         IconButton remove = new()
         {
@@ -277,17 +365,145 @@ public partial class MainWindow : Window
         };
         Grid.SetColumn(remove, 14);
 
+        row.Children.Add(namePlate);
         row.Children.Add(keyBox);
-        row.Children.Add(nameText);
         row.Children.Add(displayBox);
         row.Children.Add(soundBox);
         row.Children.Add(monitorBox);
+        row.Children.Add(outputBox);
         row.Children.Add(appBox);
-        row.Children.Add(autoBox);
         row.Children.Add(remove);
 
-        card.Child = row;
+        // Duplicate lives here rather than as a third button.
+        //
+        // It is the one action in here that is a convenience rather than
+        // something done often enough to earn a permanent place, and the name row
+        // has a gap at the right of the name that would look like a missing
+        // control if something were left out of it. So it is a context menu: no
+        // width at all, and nothing to line up.
+        ContextMenu menu = new();
+        MenuItem duplicate = new() { Header = "Duplicate" };
+        duplicate.Click += (s, e) => DuplicateSlot(slot);
+        menu.Items.Add(duplicate);
+        card.ContextMenu = menu;
+
         return card;
+    }
+
+
+    /// <summary>
+    /// Where this slot's sound goes, in the row rather than in a menu.
+    /// <para>
+    /// This started as an item on the card's context menu, which was the obvious
+    /// place given the row has no room for another column. It was wrong for a
+    /// reason that only showed up on a real machine: the cards are built when the
+    /// tab opens, and the device list arrives afterwards, so the menu was baked
+    /// with whatever devices existed at that moment and could be empty. A
+    /// control that shows the current value without being asked to be reopened
+    /// is not a menu item, it is a column.
+    /// </para>
+    /// <para>
+    /// "System default" is the empty value and is what every slot starts on, and
+    /// it is the same entry the Settings dropdown shows, by name and by
+    /// constant. The user has to be able to tell that the row's default is the
+    /// setting it follows, and "Follow the app" did not say that - it described
+    /// the mechanism rather than naming the choice, so the two pickers looked
+    /// like two different things.
+    /// </para>
+    /// <para>
+    /// The marquee is the same treatment the display preset column gets, and for
+    /// the same reason. Output device names come off drivers and are the longest
+    /// strings on this row - "Headset (HyperX Cloud II USB Audio)" is not a rare
+    /// one - and the closed box has a fixed two hundred pixels to show them in.
+    /// The open list sizes itself to its widest row, so nothing is cut off once
+    /// it is open.
+    /// </para>
+    /// </summary>
+    private ComboBox OutputCombo(HotkeySlot slot)
+    {
+        List<DeviceChoice> choices = new(_knownOutputDevices.Count + 1)
+        {
+            new DeviceChoice { Id = string.Empty, Name = DeviceChoice.SystemDefaultName }
+        };
+
+        foreach (string device in _knownOutputDevices)
+        {
+            choices.Add(new DeviceChoice { Id = device, Name = device });
+        }
+
+        ComboBox box = new()
+        {
+            Style = (Style)FindResource("ModernCombo"),
+            ItemContainerStyle = (Style)FindResource("ModernComboItem"),
+            ItemsSource = choices,
+            Tag = slot.Id + "|output",
+            ToolTip = "Which output this slot plays through"
+        };
+
+        MarqueeBox.SetAllowMarquee(box, true);
+
+        int index = choices.FindIndex(c =>
+            string.Equals(c.Id, slot.OutputDeviceId, StringComparison.OrdinalIgnoreCase));
+        box.SelectedIndex = index < 0 ? 0 : index;
+
+        box.SelectionChanged += OnSlotOutputChanged;
+        return box;
+    }
+
+
+    private void OnSlotOutputChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_ready || sender is not ComboBox box || box.Tag is not string tag || box.SelectedItem is not DeviceChoice choice)
+        {
+            return;
+        }
+
+        string id = tag.Split('|')[0];
+        HotkeySlot? slot = _settings.Slots.FirstOrDefault(s => s.Id == id);
+        if (slot is null)
+        {
+            return;
+        }
+
+        slot.OutputDeviceId = choice.Id;
+        Commit();
+
+        // Said here rather than left to the next apply, because the choice is
+        // about a route and the user needs to know a route changed rather than
+        // finding out when a tune lands somewhere else. Only the non default
+        // case is worth a line: every slot following the app is the ordinary
+        // state and saying so sixty times would be noise.
+        if (!string.IsNullOrWhiteSpace(choice.Id))
+        {
+            Flash(slot.Name + " plays through " + choice.Id);
+        }
+    }
+
+
+    /// <summary>
+    /// Copies a slot and puts the copy directly after it, so the pair reads as
+    /// related rather than the new one appearing at the bottom of a list the user
+    /// is looking at the top of.
+    /// </summary>
+    private void DuplicateSlot(HotkeySlot source)
+    {
+        int at = _settings.Slots.FindIndex(x => x.Id == source.Id);
+        if (at < 0)
+        {
+            return;
+        }
+
+        HotkeySlot copy = SlotService.Duplicate(source, _settings.Slots.Count + 1);
+        _settings.Slots.Insert(at + 1, copy);
+
+        Commit();
+        BuildSlots();
+        RegisterHotkeys();
+        ApplyWatchState();
+
+        // No announce: the copy has no key and does nothing, so claiming it was
+        // applied would be a lie, and the toast is the only thing saying so.
+        Flash(copy.Name + " added");
     }
 
 
@@ -302,6 +518,12 @@ public partial class MainWindow : Window
             Tag = slot.Id + "|monitor",
             ToolTip = "Screens"
         };
+
+        // A monitor name is whatever EDID says the panel is, which for a
+        // well-specified display is a model number longer than 118 pixels. The
+        // closed box scrolls rather than clipping, and the open list is sized to
+        // its widest row, so nothing is actually lost.
+        MarqueeBox.SetAllowMarquee(box, true);
 
         int index = 0;
         for (int i = 0; i < choices.Count; i++)
@@ -423,7 +645,11 @@ public partial class MainWindow : Window
             HorizontalContentAlignment = HorizontalAlignment.Left,
             ItemsSource = choices,
             Tag = slot.Id + "|app",
-            ToolTip = "Auto Switch"
+
+            // The auto-apply explanation lived on a switch that is gone. It is
+            // the game dropdown that decides whether a slot loads itself, so it
+            // is also the only place the answer can be read from.
+            ToolTip = AutoToolTip(slot)
         };
 
         // Installed programs have long names and this column is narrow, so the
@@ -554,62 +780,13 @@ public partial class MainWindow : Window
         // claim are already in the middle of a change that commits and rebuilds
         // (a key capture, a game target, the auto switch), so doing it again
         // here rebuilt the whole board twice for one click.
-    }
-
-
-    private void ReleaseClaimsOn(HotkeySlot slot)
-    {
-        List<HotkeySlot> others = AutoClaimants(slot);
-        foreach (HotkeySlot other in others)
-        {
-            other.AutoActivate = false;
-            Flash("Auto load off for " + other.Name);
-        }
-    }
-
-
-    private void SetSlotFlag(HotkeySlot slot, string flag, bool value)
-    {
-        if (!_ready)
-        {
-            return;
-        }
-
-        if (flag == "auto")
-        {
-            if (value)
-            {
-                if (!slot.HasWork)
-                {
-                    Flash("Nothing to load, pick a screen or sound", true);
-                    BuildSlots();
-                    return;
-                }
-
-                if (!slot.IsSelfTarget && !slot.HasTarget)
-                {
-                    Flash("Pick a game in the last dropdown", true);
-                    BuildSlots();
-                    return;
-                }
-
-                ReleaseAutoClaims(slot);
-            }
-
-            slot.AutoActivate = value;
-        }
-        else if (flag == "start")
-        {
-            slot.ApplyOnStart = value;
-        }
-        else if (flag == "on")
-        {
-            slot.Enabled = value;
-        }
-
-        Commit();
-        BuildSlots();
-        ApplyWatchState();
+        //
+        // This used to exist twice, as ReleaseAutoClaims and ReleaseClaimsOn, with
+        // byte-identical bodies and no behavioural difference between them. The
+        // only thing distinguishing the two was the comment above, which is a good
+        // way to find the pair and a bad reason to keep both: a reader could not
+        // tell which one a given call site was supposed to use, and a change to
+        // the claim rules had to be made twice or only in one of the two.
     }
 
 
@@ -668,7 +845,7 @@ public partial class MainWindow : Window
             slot.AutoActivate = false;
             slot.AppExePath = null;
             slot.AppName = null;
-            ReleaseClaimsOn(slot);
+            ReleaseAutoClaims(slot);
             Commit();
             BuildSlots();
             ApplyWatchState();
@@ -690,7 +867,7 @@ public partial class MainWindow : Window
                 slot.AppExePath = picked;
                 slot.AppName = System.IO.Path.GetFileNameWithoutExtension(picked);
                 slot.AutoActivate = true;
-                ReleaseClaimsOn(slot);
+                ReleaseAutoClaims(slot);
                 Flash("Target set to " + slot.AppName);
             }
 
@@ -707,7 +884,22 @@ public partial class MainWindow : Window
         if (slot.AppExePath is not null)
         {
             slot.AutoActivate = true;
-            ReleaseClaimsOn(slot);
+            ReleaseAutoClaims(slot);
+        }
+        else
+        {
+            // Cleared, because the alternative is a state the switch itself
+            // refuses to create: choosing "No game" left AutoActivate at true, so
+            // the row then showed AUTO on and enabled for a slot with nothing to
+            // auto-load on, and it was written to the profile that way. The same
+            // switch, touched by hand in that state, flashes "Pick a game in the
+            // last dropdown", so the two halves of the app disagreed.
+            //
+            // The claim goes with it. Leaving a slot holding an automatic claim on
+            // a game it no longer points at is how two slots end up competing for
+            // one target, which is what the claim resolution exists to prevent.
+            slot.AutoActivate = false;
+            ReleaseAutoClaims(slot);
         }
 
         Commit();
@@ -755,9 +947,19 @@ public partial class MainWindow : Window
     }
 
 
-    private async System.Threading.Tasks.Task EnsureAppList()
+    /// <param name="force">
+    /// Rescan even when the list already has something in it.
+    /// <para>
+    /// The scan button was calling the non-forcing version, so after the Hotkeys
+    /// tab had warmed the list once - which it does every time it is opened - the
+    /// button did nothing at all. It still said "SCANNING FOR GAMES" and still
+    /// reported a count, so it looked like a scan that had found nothing new,
+    /// which is exactly what someone who has just installed a game concludes.
+    /// </para>
+    /// </param>
+    private async System.Threading.Tasks.Task EnsureAppList(bool force = false)
     {
-        if (_appList.Count > 0)
+        if (!force && _appList.Count > 0)
         {
             return;
         }
@@ -769,7 +971,7 @@ public partial class MainWindow : Window
     private async void OnScanAppsClick(object sender, RoutedEventArgs e)
     {
         RailStatus.Text = "SCANNING FOR GAMES";
-        await EnsureAppList();
+        await EnsureAppList(force: true);
         BuildSlots();
         RailStatus.Text = "READY";
         Flash(_appList.Count.ToString(CultureInfo.InvariantCulture) + " games found");
@@ -800,9 +1002,8 @@ public partial class MainWindow : Window
 
         if (audio is not null)
         {
-            ApplyAudio(audio.Copy(), false);
+            ApplyAudioToDevice(audio.Copy(), false, slot);
         }
-
         RailStatus.Text = slot.Name.ToUpperInvariant();
         if (announce)
         {
@@ -925,6 +1126,12 @@ public partial class MainWindow : Window
         _hotkeys.Clear();
         HashSet<string> taken = new(StringComparer.Ordinal);
         List<HotkeySlot> skipped = new();
+
+        /// <summary>
+        /// Keys some other program already owns, which is a different problem from
+        /// a duplicate in here and gets its own wording.
+        /// </summary>
+        HashSet<string> refusedKeys = new(StringComparer.OrdinalIgnoreCase);
         int id = 1;
 
         // The panic key is offered to Windows before any slot, so that if the two
@@ -949,7 +1156,19 @@ public partial class MainWindow : Window
                 string key = HotkeyService.Normalise(slot.Hotkey);
                 if (taken.Add(key))
                 {
-                    _hotkeys.Register(id, "slot:" + slot.Id, slot.Hotkey);
+                    // The answer matters. RegisterHotKey fails when some other
+                    // program already owns the combo system wide, and the failure
+                    // was thrown away here: the slot counted as bound, its keycap
+                    // kept rendering the shortcut, and nothing in the list showed
+                    // that pressing it would do nothing. The only sign was one
+                    // status line naming the key rather than the slot, which the
+                    // next apply or reset overwrote.
+                    if (!_hotkeys.Register(id, "slot:" + slot.Id, slot.Hotkey))
+                    {
+                        taken.Remove(key);
+                        skipped.Add(slot);
+                        refusedKeys.Add(slot.Hotkey);
+                    }
                 }
                 else
                 {
@@ -967,13 +1186,24 @@ public partial class MainWindow : Window
             bool lostToPanic = panicKey.Length > 0
                 && skipped.Any(s => HotkeyService.Normalise(s.Hotkey) == panicKey);
 
-            RailStatus.Text = "DUP KEY SKIPPED ON " + names.ToUpperInvariant();
+            // Refused by the operating system rather than by this app. Said
+            // separately, because the user's next move is different: close the
+            // other program, rather than free up a duplicate in here.
+            bool refusedByOs = refusedKeys.Count > 0;
+
+            RailStatus.Text = (refusedByOs ? "KEY HELD BY ANOTHER PROGRAM ON " : "DUP KEY SKIPPED ON ")
+                + names.ToUpperInvariant();
+
             Flash(
-                lostToPanic
-                    ? "Panic key took " + keys + " from " + names
-                    : "Key already on another slot, skipped on " + names,
+                refusedByOs
+                    ? "Another program already owns " + string.Join(", ", refusedKeys) + ", so " + names + " will not fire"
+                    : lostToPanic
+                        ? "Panic key took " + keys + " from " + names
+                        : "Key already on another slot, skipped on " + names,
                 true);
-            TraceLog.Write("HOTKEY duplicate " + keys + " skipped on " + names);
+
+            TraceLog.Write("HOTKEY " + (refusedByOs ? "refused by the system" : "duplicate")
+                + " " + keys + " on " + names);
         }
     }
 
@@ -1017,23 +1247,47 @@ public partial class MainWindow : Window
                 return;
             }
 
-            if (!slot.HasWork)
-            {
-                RailStatus.Text = "NOTHING SET";
-                Flash("Nothing set on " + slot.Name, true);
-                return;
-            }
-
-            if (SlotService.IsLoaded(slot, _activeDisplayId, _activeAudioId))
-            {
-                GoScreenNeutral();
-                await GoSoundNeutralAsync();
-                Flash(slot.Name + " off");
-                return;
-            }
-
-            PlaySlot(slot, true);
+            await ToggleSlot(slot);
         }
+    }
+
+
+    /// <summary>
+    /// Loads a slot, or takes it back off again if it is the one that is already
+    /// loaded.
+    /// <para>
+    /// Out here so the tray and the key are the same gesture. The tray menu can
+    /// load a slot, and the first version of that wired it straight to
+    /// <see cref="PlaySlot"/>, which has no off switch: choosing the slot you
+    /// were already on would reload it and say so, where the same choice made
+    /// with the key would have put the screen and the sound back to normal. Two
+    /// ways of asking the same question with two answers, one of which looks
+    /// like a bug to anybody who tries the other one first.
+    /// </para>
+    /// <para>
+    /// Which preset is live decides which way it goes, not a remembered flag, so
+    /// this still behaves for a slot that was loaded by auto-switch or by
+    /// clicking its row on the board.
+    /// </para>
+    /// </summary>
+    private async Task ToggleSlot(HotkeySlot slot)
+    {
+        if (!slot.HasWork)
+        {
+            RailStatus.Text = "NOTHING SET";
+            Flash("Nothing set on " + slot.Name, true);
+            return;
+        }
+
+        if (SlotService.IsLoaded(slot, _activeDisplayId, _activeAudioId))
+        {
+            GoScreenNeutral();
+            await GoSoundNeutralAsync();
+            Flash(slot.Name + " off");
+            return;
+        }
+
+        PlaySlot(slot, true);
     }
 
 
@@ -1127,7 +1381,7 @@ public partial class MainWindow : Window
             _captureSlotId = null;
             _captureBox = PanicKeyBox;
             PanicKeyBox.Text = "PRESS A KEY";
-            PanicKeyBox.ToolTip = "Esc cancels  ·  Backspace clears  ·  F1 to F24 bind on their own";
+            PanicKeyBox.ToolTip = "Esc cancels  Â·  Backspace clears  Â·  F1 to F24 bind on their own";
         };
         PanicKeyBox.LostKeyboardFocus += (s, e) =>
         {
@@ -1167,3 +1421,6 @@ public partial class MainWindow : Window
     }
 
 }
+
+
+

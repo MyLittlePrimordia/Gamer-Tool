@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -35,7 +35,44 @@ public sealed class AudioService
     public string ExePath
     {
         get => _exePath;
-        set => _exePath = string.IsNullOrWhiteSpace(value) ? DefaultFxSoundPath : value;
+
+        // Validated rather than taken, because this string ends up as the
+        // FileName of a process the app launches, and it arrives from two places
+        // the user did not type: settings.json, and a backup file they may well
+        // have been sent or downloaded. Without a check, restoring a profile
+        // shared between two machines runs whatever the other machine's path
+        // names, as this user, once per engine call.
+        //
+        // The rule is the file name, not the folder. FxSound is installable
+        // anywhere, and this app already looks in four places for it, so pinning
+        // the folder would break every custom install to close a hole that a name
+        // check already closes. What must not be possible is pointing the engine
+        // at something that is not the engine.
+        set => _exePath = IsPlausibleFxSoundPath(value) ? value : DefaultFxSoundPath;
+    }
+
+    /// <summary>
+    /// Whether a path could be the audio engine: absolute, and naming the engine
+    /// itself. Pure, and static, so the schema guard and the tests can ask the
+    /// same question the setter asks.
+    /// </summary>
+    public static bool IsPlausibleFxSoundPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            return Path.IsPathFullyQualified(path)
+                && string.Equals(Path.GetFileName(path), "FxSound.exe", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (ArgumentException)
+        {
+            // A path the runtime will not even accept, which is the same answer.
+            return false;
+        }
     }
 
     public bool IsInstalled
@@ -47,13 +84,31 @@ public sealed class AudioService
     {
         get
         {
+            Process[] found;
             try
             {
-                return Process.GetProcessesByName("FxSound").Length > 0;
+                found = Process.GetProcessesByName("FxSound");
             }
             catch (Exception)
             {
                 return false;
+            }
+
+            try
+            {
+                return found.Length > 0;
+            }
+            finally
+            {
+                // Every element holds an open handle to a running process. Only
+                // the array itself is collectable, so dropping the array on the
+                // floor leaks one handle per call, and this runs on every audio
+                // apply. The watcher service disposes these for exactly this
+                // reason.
+                foreach (Process process in found)
+                {
+                    process.Dispose();
+                }
             }
         }
     }
@@ -94,11 +149,6 @@ public sealed class AudioService
         }
     }
 
-    public void SetPower(bool on)
-    {
-        Run(on ? "--power=1" : "--power=0");
-    }
-
     public void SetOutputDevice(string deviceName)
     {
         if (string.IsNullOrWhiteSpace(deviceName))
@@ -107,16 +157,6 @@ public sealed class AudioService
         }
 
         Run("--output=\"" + Clean(deviceName) + "\"");
-    }
-
-    public void SelectPreset(string presetName)
-    {
-        if (string.IsNullOrWhiteSpace(presetName))
-        {
-            return;
-        }
-
-        Run("--preset=\"" + Clean(presetName) + "\"");
     }
 
     public void SavePresetInFxSound(string presetName)
@@ -129,42 +169,20 @@ public sealed class AudioService
         Run("--save_preset=\"" + Clean(presetName) + "\"");
     }
 
-    public void OverwritePresetInFxSound()
-    {
-        Run("--overwrite_preset");
-    }
-
-    public void DeleteCurrentPreset()
-    {
-        Run("--delete_preset");
-    }
-
-    public void SetBandCount(int count)
-    {
-        Run("--num_bands=" + count.ToString(CultureInfo.InvariantCulture));
-    }
-
-    public void SetBands(IReadOnlyList<double> gains)
-    {
-        if (gains.Count == 0)
-        {
-            return;
-        }
-
-        List<string> parts = new(gains.Count);
-        for (int i = 0; i < gains.Count; i++)
-        {
-            double gain = Math.Clamp(gains[i], AudioPreset.GainMin, AudioPreset.GainMax);
-            parts.Add(i.ToString(CultureInfo.InvariantCulture) + ":" + gain.ToString("0.0", CultureInfo.InvariantCulture));
-        }
-
-        Run("--set_band_gain=\"" + string.Join(",", parts) + "\"");
-    }
-
-    public void SetEffects(AudioPreset preset)
-    {
-        Run("--set_effect=\"" + EffectString(preset) + "\"");
-    }
+    // Seven one-line command wrappers used to sit here: SetPower, SelectPreset,
+    // OverwritePresetInFxSound, DeleteCurrentPreset, SetBandCount, SetBands and
+    // SetEffects. Every one of them had a caller count of zero.
+    //
+    // They are not unused features - the same flags are all still reachable,
+    // because an apply goes out through BuildApplyCommand and a bypass through
+    // BuildBypassCommand, and EmergencyReset asks for --power=0 by calling Run
+    // directly. What they were was a second, parallel spelling of how to reach
+    // the engine, and a parallel spelling is one more thing to keep true. A
+    // reader comparing a wrapper against the command builder had no way to tell
+    // which of the two the app actually used.
+    //
+    // Where a scalar still has to be pushed on its own, the call is one line at
+    // the point of use, which is where it can be seen to be used.
 
     /// <summary>
     /// The effect list for the engine, honouring the bypass.
@@ -267,6 +285,57 @@ public sealed class AudioService
     public bool AntiClipEnabled { get; set; } = true;
 
     /// <summary>
+    /// Whether a game that is louder than the rest is to be held down.
+    /// <para>
+    /// Off by default, because it is a change to what the sound is like rather
+    /// than a correction to it, and a utility that quietly alters audio behind a
+    /// switch nobody pressed is worse than one that does not offer it at all.
+    /// </para>
+    /// <para>
+    /// It works through the engine's own volume levelling rather than by moving
+    /// the Windows output level, which is the difference between a guard and a
+    /// hazard. Touching the endpoint volume means fighting the mixer, the game's
+    /// own loudness slider and whatever else has an opinion, and a meter that
+    /// reacts to what it is measuring can run away on its own - a game at a
+    /// transient would pull the master down and nothing would ever push it back.
+    /// Levelling is the engine doing the thing it is for.
+    /// </para>
+    /// </summary>
+    public bool LoudGuardEnabled { get; set; }
+
+    /// <summary>
+    /// The levelling the guard guarantees, which is the engine's own midpoint.
+    /// <para>
+    /// The built-in presets already range from none to the maximum of four, so
+    /// this is a floor rather than a replacement: it lifts the presets that ask
+    /// for nothing and leaves alone the ones that already want more or more than
+    /// this. <see cref="AudioPreset.LevelingMax"/> is four.
+    /// </para>
+    /// </summary>
+    public const double GuardLeveling = 3.0;
+
+    /// <summary>
+    /// The tune that will actually be sent, with the guard folded in.
+    /// <para>
+    /// Applied to a copy, always. The preset handed in is the one held in the
+    /// settings, and it is what the panel is showing; if this modified it in
+    /// place then turning the guard off would leave the saved tune quietly lifted,
+    /// and the faders would disagree with the engine.
+    /// </para>
+    /// </summary>
+    internal static AudioPreset WithLoudGuard(AudioPreset preset, bool enabled)
+    {
+        if (!enabled)
+        {
+            return preset;
+        }
+
+        AudioPreset guarded = preset.Copy();
+        guarded.VolumeLeveling = Math.Max(guarded.VolumeLeveling, GuardLeveling);
+        return guarded;
+    }
+
+    /// <summary>
     /// Whether the app's processing reaches the output at all: the equaliser bands
     /// and every effect, or none of them. <c>true</c> is the normal, live state.
     /// </summary>
@@ -331,6 +400,34 @@ public sealed class AudioService
         return new double[wanted.Length];
     }
 
+    /// <summary>
+    /// The master gain the engine is expected to be on, which while the bypass is
+    /// thrown is not the one the preset asks for.
+    /// <para>
+    /// Zero rather than the preset's, for the same reason the bands and the
+    /// effects flatten: a bypass that leaves a track six decibels hot is not a
+    /// bypass, and the loudness trim is as much a part of the tune as the curve
+    /// is. Round tripped through the switch it comes back exactly as it was,
+    /// because this is the same function the release path goes through.
+    /// </para>
+    /// </summary>
+    public double ExpectedMasterGain(AudioPreset preset) =>
+        EffectsEnabled ? EffectiveMasterGain(preset, AntiClipEnabled) : 0.0;
+
+    /// <summary>
+    /// The balance the engine is expected to be on, which while the bypass is
+    /// thrown is centred rather than the preset's.
+    /// <para>
+    /// Zero is the engine's own default, so this is the setting going back to
+    /// where it was found rather than a new value being invented. Balance is
+    /// where a user is most likely to have drifted off centre without noticing,
+    /// which is exactly the sort of thing a "let me hear it straight" switch is
+    /// for.
+    /// </para>
+    /// </summary>
+    public double ExpectedBalance(AudioPreset preset) =>
+        EffectsEnabled ? Math.Clamp(preset.Balance, -20.0, 20.0) : 0.0;
+
     public string BuildApplyCommand(AudioPreset preset, string deviceName)
     {
         int count = preset.NumBands;
@@ -347,10 +444,10 @@ public sealed class AudioService
         StringBuilderHelper helper = new();
         helper.Add("--power=1");
         helper.Add("--num_bands=" + count.ToString(CultureInfo.InvariantCulture));
-        helper.Add("--master_gain=" + Round(EffectiveMasterGain(preset, AntiClipEnabled), 1.0));
+        helper.Add("--master_gain=" + Round(ExpectedMasterGain(preset), 1.0));
         helper.Add("--volume_leveling=" + Round(Math.Clamp(preset.VolumeLeveling, AudioPreset.LevelingMin, AudioPreset.LevelingMax), 0.5));
         helper.Add("--filter_q=" + Round(Math.Clamp(preset.FilterQ, AudioPreset.FilterQMin, AudioPreset.FilterQMax), 0.5));
-        helper.Add("--balance=" + Round(Math.Clamp(preset.Balance, -20.0, 20.0), 1.0));
+        helper.Add("--balance=" + Round(ExpectedBalance(preset), 1.0));
 
         // Centre frequencies travel as a documented running instance command, the
         // same as the gains below. Verified against FxSound 1.2.15: the values
@@ -409,10 +506,23 @@ public sealed class AudioService
             return;
         }
 
-        // The curve cannot go across as a command.
-        FxPresetFile.Write(preset, BandFrequencies(preset), EffectsEnabled);
+        // The guard is folded in here rather than at each caller because this is
+        // the one place every push goes through: the Apply button, a slot hotkey,
+        // a game launching, saving into FxSound, and the reset. It is deliberately
+        // not in BuildApplyCommand, because that is what the reset and the exit
+        // path use, and a guard that fought an attempt to put things back would be
+        // indefensible.
+        //
+        // Both the curve written to the preset file and the values verified
+        // afterwards come from the guarded copy, so the read-back compares what
+        // was sent against what the engine reports rather than reporting a drift
+        // that is really just the guard.
+        AudioPreset sent = WithLoudGuard(preset, LoudGuardEnabled);
 
-        IReadOnlyList<string> commands = BuildApplyCommands(preset, deviceName);
+        // The curve cannot go across as a command.
+        FxPresetFile.Write(sent, BandFrequencies(sent), EffectsEnabled);
+
+        IReadOnlyList<string> commands = BuildApplyCommands(sent, deviceName);
         for (int i = 0; i < commands.Count; i++)
         {
             string command = commands[i];
@@ -505,7 +615,6 @@ public sealed class AudioService
         /// <summary>One line per value the engine did not take, phrased for a tooltip.</summary>
         public IReadOnlyList<string> Mismatches { get; init; } = Array.Empty<string>();
 
-        public bool IsClean => Outcome == ApplyOutcome.Applied;
     }
 
 
@@ -532,18 +641,35 @@ public sealed class AudioService
     }
 
     /// <summary>
-    /// The whole bypass in one command: every band flat and every effect at zero,
-    /// or the lot back again.
+    /// The whole bypass in one command: the bands flat, the effects at zero, the
+    /// master gain and the balance back to where the engine found them, or the
+    /// lot back again.
+    /// <para>
+    /// Master gain and balance were missing from here, and the switch flattened
+    /// the curve while leaving a track running six decibels hot and swung eight
+    /// to one side. It read as a curve switch, so that is what everybody expected
+    /// it to be, but everything the preset did to the signal was fair game and
+    /// the two loudest parts of it were quietly not.
+    /// </para>
+    /// <para>
+    /// They belong here rather than being left to the apply because this command
+    /// carries no <c>--preset</c>, and that is the only arrangement the engine
+    /// honours: it applies a selected preset's state after it finishes parsing,
+    /// which is why the band gains are already a command of their own.
+    /// </para>
+    /// <para>
+    /// Loud guard, deliberately, is not in the list. It is a safety control
+    /// rather than part of the tune, and a switch that quietly turned off the
+    /// thing holding a loud game down is not one anybody wants to find out about
+    /// afterwards. The same reason the panic key does not re-arm it.
+    /// </para>
+    /// <para>
+    /// Still not a full apply. The switch is meant to feel like a switch, so it
+    /// must not drag the preset file, the band count, the filter shape or the
+    /// output device along with it - a user who has a fader moved but not applied
+    /// would find that move committed by an unrelated click.
+    /// </para>
     /// </summary>
-    /// <remarks>
-    /// One invocation, because it is one idea, and because the engine applies a
-    /// selected preset after parsing the whole line - so anything bundled with
-    /// <c>--preset</c> is discarded. Deliberately not a full apply, though: the
-    /// switch is meant to feel like a switch, so it must not drag the preset file,
-    /// the master gain or the output device along with it. A user who has a fader
-    /// moved but not applied would find that move silently committed by an
-    /// unrelated click.
-    /// </remarks>
     public string BuildBypassCommand(AudioPreset preset)
     {
         int count = preset.NumBands <= 0 || !AudioPreset.BandCounts.Contains(preset.NumBands)
@@ -556,7 +682,9 @@ public sealed class AudioService
             gains.Add(ExpectedBandGain(preset, i));
         }
 
-        return "--set_band_gain=\"" + BandString(gains) + "\""
+        return "--master_gain=" + Round(ExpectedMasterGain(preset), 1.0)
+            + " --balance=" + Round(ExpectedBalance(preset), 1.0)
+            + " --set_band_gain=\"" + BandString(gains) + "\""
             + " --set_effect=\"" + EffectString(preset) + "\"";
     }
 
@@ -567,15 +695,24 @@ public sealed class AudioService
     }
 
     /// <summary>
-    /// Checks the bands and the effects, and nothing else.
+    /// Checks the bands, the effects, the master gain and the balance, and
+    /// nothing else.
+    /// <para>
+    /// The full <see cref="Verify"/> cannot be used, because it also reports on
+    /// the loud guard and the output device. The guard is a safety control the
+    /// bypass deliberately leaves alone, so checking it here would grade the
+    /// engine against a value the switch never asked to change. The output
+    /// device is frequently mid-edit and unapplied when someone is fiddling with
+    /// the switch, so a full check would answer a question nobody asked and turn
+    /// a normal state into a spurious warning.
+    /// </para>
+    /// <para>
+    /// Master gain and balance are the other way round from that: the switch
+    /// *does* set them now, so a bypass that flattened the curve and left the
+    /// track six decibels hot is exactly the drift this is here to catch, and it
+    /// was not being caught because nothing compared them.
+    /// </para>
     /// </summary>
-    /// <remarks>
-    /// The full <see cref="Verify"/> cannot be used to confirm a bypass, because it
-    /// also reports on the master gain and the output device. Those are frequently
-    /// mid-edit and unapplied when someone is fiddling with the switch, so a full
-    /// check would answer a question nobody asked and turn a normal state into a
-    /// spurious warning.
-    /// </remarks>
     public ApplyReport VerifyBypass(AudioPreset preset)
     {
         if (!IsInstalled)
@@ -590,7 +727,18 @@ public sealed class AudioService
         }
 
         List<string> off = new();
-        int count = preset.NumBands <= 0 ? AudioPreset.PresetBandCount : preset.NumBands;
+
+        // The same band count the command used, resolved the same way.
+        // <c>BuildBypassCommand</c> falls back to the shipped default when the
+        // count is not one of the layouts the engine has a table for, and this
+        // used to fall back to a different default for anything at or below zero.
+        // So a profile that named a count of, say, thirteen was sent ten bands
+        // and then checked against thirteen, and the switch reported a drift on
+        // bands that had never been asked for - which is the one thing a bypass
+        // that is meant to be verifiable cannot afford.
+        int count = preset.NumBands <= 0 || !AudioPreset.BandCounts.Contains(preset.NumBands)
+            ? AudioPreset.PresetBandCount
+            : preset.NumBands;
         for (int i = 0; i < count; i++)
         {
             if (i >= state.Equalizer.Bands.Count)
@@ -611,6 +759,12 @@ public sealed class AudioService
         {
             Near(off, EffectNames[i], EffectValue(state, EffectNames[i]), wantedEffects[i], 0.2);
         }
+
+        // The two the command also sets, and the two a bypass used to leave
+        // alone. Both come from the same Expected methods the command does, so
+        // the read-back and the wire cannot disagree about what bypassed means.
+        Near(off, "master gain", state.Equalizer.MasterGain, ExpectedMasterGain(preset), 0.1);
+        Near(off, "balance", state.Equalizer.Balance, ExpectedBalance(preset), 0.1);
 
         return off.Count == 0
             ? new ApplyReport { Outcome = ApplyOutcome.Applied, Mismatches = Array.Empty<string>() }
@@ -648,6 +802,11 @@ public sealed class AudioService
         {
             return new ApplyReport { Outcome = ApplyOutcome.Failed, Mismatches = new[] { "FxSound is not installed" } };
         }
+
+        // Graded against the same tune that was actually sent, so a guard that is
+        // switched on is not then reported as the engine failing to take the tune.
+        // Applying it twice is harmless: it only ever raises a value.
+        preset = WithLoudGuard(preset, LoudGuardEnabled);
 
         FxSoundState? state = ReadState(true);
         if (state is null)

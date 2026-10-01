@@ -27,12 +27,47 @@ public class SpectrumBarLayoutTests
 
     private static int Bars => SpectrumView.BarCount;
 
-    [Fact]
+[Fact]
     public void TheBarCountIsFinerThanItUsedToBe()
     {
         // The point of the change, stated so it cannot be quietly reverted.
         Assert.True(Bars > 48, "bar count is " + Bars);
     }
+
+    [Fact]
+    public void TheRowDrawsEveryBandTheAnalyserProduces()
+    {
+        // This is the one that was missing, and it is why nothing else here
+        // caught the problem. Every other test in this class reads the count off
+        // SpectrumView and checks the arithmetic that follows from it, so they
+        // were all happily verifying a row of eighty bars in a renderer that
+        // drew forty eight: the analyser produced eighty, Update copied
+        // Math.Min(80, 48) of them, and everything above roughly 1.4 kHz was
+        // dropped on the floor and then described on screen as covering the
+        // range up to 16 kHz.
+        Assert.Equal(
+            SpectrumView.BarCount,
+            SpectrumBars.BarCount);
+    }
+
+    [Theory]
+    [InlineData(320.0)]
+    [InlineData(423.0)]
+    [InlineData(1024.0)]
+    [InlineData(3840.0)]
+    public void NothingIsDroppedAtAWidthThePanelActuallyOccupies(double width)
+    {
+        // The row drops bars from the end when a width cannot give every one of
+        // them a pitch and a gap. That is a deliberate fallback, not something to
+        // rely on: at every width the audio panel really is this wide, the full
+        // count has to fit.
+        int drawable = Math.Max(1, (int)(width / SpectrumBars.MinDrawablePitch));
+        Assert.True(
+            Math.Min(SpectrumBars.BarCount, drawable) == SpectrumBars.BarCount,
+            "at " + width + "px only " + Math.Min(SpectrumBars.BarCount, drawable) + " of "
+                + SpectrumBars.BarCount + " bars would be drawn");
+    }
+
 
     [Fact]
     public void BarsAreThinnerThanTheyWere()

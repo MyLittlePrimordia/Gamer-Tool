@@ -212,17 +212,16 @@ public static class TargetHealthProbe
         return new TargetHealthReading(TargetHealth.Complete, Array.Empty<string>());
     }
 
-    /// <summary>
-    /// Whether the AMD HDCP hint should be offered for a display whose target is
-    /// in this state.
-    /// <para>
-    /// False for a stub, and that is the whole point of the type. Telling somebody
-    /// whose display target was never initialised to go and change a content
-    /// protection setting is worse than saying nothing: the setting is real, the
-    /// instruction is clickable, and following it changes nothing while making it
-    /// look as though the diagnosis was checked.
-    /// </para>
-    /// </summary>
-    public static bool HdcpHintIsPlausible(TargetHealthReading reading) =>
-        reading.Health is TargetHealth.Complete or TargetHealth.Withheld;
+    // HdcpHintIsPlausible used to sit here, answering whether the AMD HDCP hint
+    // should be offered for a target in a given state. It went with the hint
+    // dialog, which was removed as confidently wrong on real hardware - the
+    // setting it told people to change was already correct, so following its own
+    // advice cost restarts and changed nothing.
+    //
+    // Its reasoning was sound and is worth keeping: never tell somebody whose
+    // display target was never initialised to go and change a content protection
+    // setting. The instruction is clickable, the setting is real, and obeying it
+    // changes nothing while making the diagnosis look as though it was checked.
+    // Classify already refuses a stub target, which is where that has to be
+    // enforced now.
 }

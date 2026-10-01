@@ -41,7 +41,7 @@ public partial class MainWindow : Window
     /// </summary>
     private List<DeviceChoice> BuildDeviceChoices()
     {
-        List<DeviceChoice> choices = new() { new DeviceChoice { Id = string.Empty, Name = "System default" } };
+        List<DeviceChoice> choices = new() { new DeviceChoice { Id = string.Empty, Name = DeviceChoice.SystemDefaultName } };
 
         IReadOnlyList<string> fxDevices = _audio.IsInstalled ? _audio.GetOutputDevices() : Array.Empty<string>();
         if (fxDevices.Count > 0)
@@ -62,22 +62,55 @@ public partial class MainWindow : Window
         return choices;
     }
 
-    private void LoadDevices()
+    /// <summary>
+    /// Fills the device picker, with the engine read moved off the dispatcher.
+    /// <para>
+    /// Working out the output list means asking the engine, which starts a
+    /// process and waits on it and then polls its state file - hundreds of
+    /// milliseconds at best. That is not something to do on the thread that
+    /// paints the window, and this used to: a rescan did it inline, right after
+    /// invalidating the cache that guarantees the slow path is the one taken, and
+    /// a backup restore did the same. Both froze the window mid-click.
+    /// </para>
+    /// <para>
+    /// Same shape as the startup path, which was already doing this correctly.
+    /// </para>
+    /// </summary>
+    private async Task LoadDevicesAsync()
     {
-        _suppressDeviceEvents = true;
         try
         {
-            LoadDevicesFrom(BuildDeviceChoices());
+            List<DeviceChoice> choices = await Task.Run(BuildDeviceChoices);
+            LoadDevicesFrom(choices);
         }
-        finally
+        catch (Exception ex)
         {
-            _suppressDeviceEvents = false;
+            // Includes the window closing underneath the read.
+            TraceLog.Write("DEVICE LIST", ex);
         }
     }
 
     /// <summary>Fills the picker from a list that was worked out elsewhere.</summary>
+    /// <summary>
+    /// The output devices the app found, kept rather than handed straight to the
+    /// dropdown.
+    /// <para>
+    /// Held because working them out means reading the engine's device list,
+    /// which is the slowest read in the app, and because the slot menu needs to
+    /// offer the same list. Building a second one for the slot menu would either
+    /// be slow on every right click or be a second copy that can disagree with
+    /// the first.
+    /// </para>
+    /// </summary>
+    private IReadOnlyList<string> _knownOutputDevices = Array.Empty<string>();
+
     private void LoadDevicesFrom(List<DeviceChoice> choices)
     {
+        _knownOutputDevices = choices
+            .Select(c => c.Id)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToArray();
+
         _suppressDeviceEvents = true;
         try
         {
@@ -88,6 +121,20 @@ public partial class MainWindow : Window
         finally
         {
             _suppressDeviceEvents = false;
+        }
+
+        // The slot rows carry a copy of this list, and they are built when the
+        // tab opens - which is before this read has necessarily finished, since
+        // it starts at launch and answers slowly. So a row built first would
+        // have shown whatever devices existed at that moment and could have
+        // shown none at all.
+        //
+        // Rebuilt only while the tab is actually showing, because rebuilding
+        // otherwise would be work nobody can see, and the tab is about to
+        // rebuild itself anyway when they switch to it.
+        if (IsVisible && WindowState != WindowState.Minimized && Pages.SelectedIndex == 2)
+        {
+            BuildSlots();
         }
     }
 
@@ -164,11 +211,12 @@ public partial class MainWindow : Window
 
     /// <param name="known">
     /// The device list the caller already enumerated and already put in the
-    /// picker, or null when the list has to be built here. Passing it matters on
-    /// the startup path: the repair only changes which entry is selected, not what
-    /// the list contains, so enumerating again would repeat work already done.
+    /// picker. Required rather than optional because every caller has it, and the
+    /// optional form had a branch that re-enumerated - putting the slow engine
+    /// read back on the dispatcher - which no caller could reach, so the
+    /// parameter only advertised a mistake nobody was making.
     /// </param>
-    private void EnsureUsableAudioOutput(OutputRepair repair, List<DeviceChoice>? known)
+    private void EnsureUsableAudioOutput(OutputRepair repair, List<DeviceChoice> known)
     {
         if (repair.Choice is null && repair.Message is null)
         {
@@ -183,22 +231,15 @@ public partial class MainWindow : Window
             _settings.OutputDeviceName = choice.Name;
             _profiles.Save(_settings);
 
-            if (known is null)
+            // Only added if the two enumerations disagreed, which would mean a
+            // device appeared in between. The comparison has to match the one
+            // LoadDevicesFrom makes or the selection will not land.
+            if (!known.Any(c => string.Equals(c.Id, choice.Id, StringComparison.OrdinalIgnoreCase)))
             {
-                LoadDevices();
+                known.Add(choice);
             }
-            else
-            {
-                // Only add it if the two enumerations disagreed, which would mean a
-                // device appeared in between. The comparison has to match the one
-                // LoadDevicesFrom makes or the selection will not land.
-                if (!known.Any(c => string.Equals(c.Id, choice.Id, StringComparison.OrdinalIgnoreCase)))
-                {
-                    known.Add(choice);
-                }
 
-                LoadDevicesFrom(known);
-            }
+            LoadDevicesFrom(known);
 
             Flash("Output set to " + choice.Name);
             return;
@@ -276,18 +317,42 @@ public partial class MainWindow : Window
             FxStateText.Text = "Ready";
             FxStateText.Foreground = (Brush)FindResource("Green");
             FxPathText.Text = _audio.ExePath;
+
+            // Only claims to be up to date once something has actually checked.
+            // It used to say "Up to date" on a launch where nothing had looked,
+            // which is a claim about the world made without having checked it.
             FxVersionText.Text = _fxUpdateAvailable
                 ? "Version " + _fxUpdateVersion + " is out"
-                : "Up to date";
+                : _fxUpdateChecked
+                    ? "Up to date"
+                    : "Installed  ·  update not checked";
+
             FxInstallButton.Visibility = Visibility.Collapsed;
             FxStartEngineButton.Visibility = Visibility.Visible;
         }
 
-        FxUpgradeButton.Visibility = !missing && _fxUpdateAvailable ? Visibility.Visible : Visibility.Collapsed;
-        if (_fxUpdateAvailable && _fxUpdateVersion.Length > 0)
-        {
-            FxUpgradeButton.Content = "\U0001F504  Update to " + _fxUpdateVersion;
-        }
+        // The button does two jobs rather than appearing and disappearing. Until
+        // the user asks, it offers to check; once it knows, it offers the update
+        // itself, and then the status line reports the answer.
+        //
+        // It used to be hidden until an update had already been found, and the
+        // finding happened on every launch. Removing the automatic check without
+        // changing this would have left a button that could never appear - a
+        // control that exists in the markup and is unreachable in the app, which
+        // is the exact thing this project is trying not to ship.
+        FxUpgradeButton.Visibility = missing ? Visibility.Collapsed : Visibility.Visible;
+        FxUpgradeLabel.Text = _fxUpdateAvailable && _fxUpdateVersion.Length > 0
+            ? "Update to " + _fxUpdateVersion
+            : _fxUpdateChecked ? "Up to date" : "Check update";
+
+        // Labelled by its label rather than its content. Setting Content to a
+        // string replaces the styled panel inside the button, so the emoji and the
+        // button's own padding went with it the moment an update was found.
+        FxUpgradeButton.ToolTip = _fxUpdateAvailable
+            ? "Install FxSound " + _fxUpdateVersion
+            : _fxUpdateChecked
+                ? "Already looked; winget reported nothing newer"
+                : "Ask winget whether a newer FxSound exists. This is the only thing in the app that uses the network.";
 
         UpdatePresetChrome();
     }
@@ -884,8 +949,29 @@ public partial class MainWindow : Window
     }
 
 
-    private void ApplyAudio(AudioPreset preset, bool announce)
+    private void ApplyAudio(AudioPreset preset, bool announce) =>
+        ApplyAudioCore(preset, announce, null);
+
+    /// <summary>
+    /// Applies a tune on behalf of a slot, which may route it somewhere other
+    /// than the app's own output.
+    /// <para>
+    /// A slot is passed rather than a device name because the two have to be
+    /// read together: the slot names a device, and whether that name is still
+    /// usable is a question about what the app currently knows about. Resolving
+    /// it in one place next to the push is what keeps the resolver and the code
+    /// that depends on it from drifting apart.
+    /// </para>
+    /// </summary>
+    private void ApplyAudioToDevice(AudioPreset preset, bool announce, HotkeySlot slot) =>
+        ApplyAudioCore(preset, announce, slot);
+
+    private void ApplyAudioCore(AudioPreset preset, bool announce, HotkeySlot? routeFrom)
     {
+        string device = routeFrom is null
+            ? SelectedDeviceName()
+            : SlotService.ResolveOutputDevice(routeFrom, _knownOutputDevices, SelectedDeviceName());
+
         // The window half, and it is deliberately the whole of the synchronous
         // part. Applying audio starts the engine and runs a child process it then
         // waits on, which costs seconds when the engine is slow to answer, and
@@ -902,7 +988,7 @@ public partial class MainWindow : Window
         {
             _liveAudioName = preset.Name.ToUpperInvariant();
             SessionState.Current.AudioTouched = true;
-            QueueAudioPush(preset.Copy(), SelectedDeviceName());
+            QueueAudioPush(preset.Copy(), device);
         }
         else
         {
@@ -921,84 +1007,122 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>The newest tune waiting to be pushed to the engine.</summary>
-    private AudioPreset? _pendingAudio;
-
-    private string _pendingAudioDevice = string.Empty;
-
-    /// <summary>1 while a push is in flight, so two of them never overlap.</summary>
-    private int _audioPushBusy;
-
     /// <summary>
-    /// Hands a tune to the engine off the dispatcher, and reads the result back.
+    /// What the queue has been asked to do next.
     /// <para>
-    /// Only the newest request is kept. Holding a queue would push every tune
-    /// ever asked for in order, which is exactly wrong: a user dragging through
-    /// presets wants the one they stopped on, not all six they passed. So a
-    /// request arriving while a push is running replaces whatever was waiting,
-    /// and the worker picks it up on its next turn.
+    /// A reset is a request like any other, and that is the whole fix. It used
+    /// to run outside the queue, which meant a panic key and a slot key a moment
+    /// apart could interleave: the reset's three engine calls take about half a
+    /// second, and the writes it made afterwards - the active preset id, the
+    /// profile on disk, the panel - landed after the newer tune had been applied
+    /// and overwrote it. The app came back remembering Flat while the engine was
+    /// playing something else, and the next launch loaded the wrong preset.
     /// </para>
     /// <para>
-    /// The verify runs on the same worker rather than as its own task so the two
-    /// cannot interleave: the read has to see the state the push produced, not
-    /// one an interleaved push has since changed.
+    /// Sharing the queue also means sharing its "newest wins" rule for free,
+    /// which is the behaviour a reset wants anyway. Somebody who hits panic
+    /// twice wants one reset, not two, and somebody who hits panic and then a
+    /// slot key wants the slot key - a queue that ran every request in order
+    /// would take them back to silence after they had asked for a tune.
     /// </para>
     /// </summary>
-    private void QueueAudioPush(AudioPreset preset, string device)
+    private sealed class AudioPushRequest
     {
-        _pendingAudio = preset;
-        _pendingAudioDevice = device;
-
-        if (Interlocked.Exchange(ref _audioPushBusy, 1) == 1)
+        private AudioPushRequest(AudioPreset? preset, string device, Action<AudioService>? action)
         {
+            Preset = preset;
+            Device = device;
+            Action = action;
+        }
+
+        /// <summary>The tune to apply, or null when this is not a preset push.</summary>
+        public AudioPreset? Preset { get; }
+
+        public string Device { get; }
+
+        /// <summary>
+        /// An engine action that has to run in the queue's turn but is not a tune
+        /// push: writing a preset into FxSound, or moving the output.
+        /// </summary>
+        public Action<AudioService>? Action { get; }
+
+        public bool IsReset => Preset is null && Action is null;
+
+        public static AudioPushRequest ForPreset(AudioPreset preset, string device) => new(preset, device, null);
+
+        public static AudioPushRequest ForReset() => new(null, string.Empty, null);
+
+        public static AudioPushRequest ForExclusive(Action<AudioService> action) => new(null, string.Empty, action);
+    }
+
+    /// <summary>
+    /// Every call into the engine goes through this, in one at a time.
+    /// <para>
+    /// Built here rather than as a field so the run delegate can reach the
+    /// instance methods it dispatches to. Nothing about the queue is specific to
+    /// this window, which is why the ordering itself lives in
+    /// <see cref="LatestWinsQueue{T}"/> and can be tested without one.
+    /// </para>
+    /// </summary>
+    private LatestWinsQueue<AudioPushRequest> AudioQueue => _audioQueue ??= new LatestWinsQueue<AudioPushRequest>(
+        RunAudioRequestAsync,
+        ex => TraceLog.Write("AUDIO QUEUE", ex));
+
+    private LatestWinsQueue<AudioPushRequest>? _audioQueue;
+
+    private void QueueAudioPush(AudioPreset preset, string device) =>
+        AudioQueue.Enqueue(AudioPushRequest.ForPreset(preset, device));
+
+    private void EnqueueAudio(AudioPushRequest request) => AudioQueue.Enqueue(request);
+
+    private Task WaitForAudioQueueAsync() => AudioQueue.WhenIdle();
+
+    /// <summary>
+    /// Carries out one queued request.
+    /// <para>
+    /// Every branch ends up off the dispatcher and comes back on it, so the
+    /// engine is only ever touched from one place at a time and the state
+    /// writes all land on the thread that owns them.
+    /// </para>
+    /// </summary>
+    private async Task RunAudioRequestAsync(AudioPushRequest request)
+    {
+        if (request.IsReset)
+        {
+            await RunSoundResetAsync();
             return;
         }
 
-        _ = PumpAudioPushAsync();
-    }
+        if (request.Action is { } action)
+        {
+            // An engine action that is a command sequence of its own but is not a
+            // tune push. It waits its turn for the same reason a reset does.
+            await Task.Run(() => action(_audio));
+            return;
+        }
 
-    private async Task PumpAudioPushAsync()
-    {
+        AudioService.ApplyReport report;
         try
         {
-            while (_pendingAudio is not null)
+            AudioPreset preset = request.Preset!;
+            string device = request.Device;
+
+            report = await Task.Run(() =>
             {
-                AudioPreset preset = _pendingAudio;
-                string device = _pendingAudioDevice;
-                _pendingAudio = null;
-                _pendingAudioDevice = string.Empty;
-
-                AudioService.ApplyReport report;
-                try
-                {
-                    report = await Task.Run(() =>
-                    {
-                        _audio.StartEngine();
-                        _audio.Apply(preset, device);
-                        return _audio.Verify(preset, device);
-                    });
-                }
-                catch (Exception ex)
-                {
-                    TraceLog.Write("AUDIO PUSH", ex);
-                    continue;
-                }
-
-                await Dispatcher.InvokeAsync(() => ReportApply(report));
-            }
+                _audio.StartEngine();
+                _audio.Apply(preset, device);
+                return _audio.Verify(preset, device);
+            });
         }
-        finally
+        catch (Exception ex)
         {
-            Interlocked.Exchange(ref _audioPushBusy, 0);
-
-            // A request that landed between the last null check and the flag
-            // coming down would otherwise sit with nobody to pick it up.
-            if (_pendingAudio is not null && Interlocked.Exchange(ref _audioPushBusy, 1) == 0)
-            {
-                _ = PumpAudioPushAsync();
-            }
+            TraceLog.Write("AUDIO PUSH", ex);
+            return;
         }
+
+        await Dispatcher.InvokeAsync(() => ReportApply(report));
     }
+
 
 
     private void OnApplySoundClick(object sender, RoutedEventArgs e)
@@ -1039,6 +1163,22 @@ public partial class MainWindow : Window
     /// </summary>
     public async System.Threading.Tasks.Task GoSoundNeutralAsync()
     {
+        EnqueueAudio(AudioPushRequest.ForReset());
+        await WaitForAudioQueueAsync();
+    }
+
+
+    /// <summary>
+    /// The engine half of a reset, plus the state that has to follow it.
+    /// <para>
+    /// Both halves together, and both inside the queue's turn, which is what
+    /// makes the clobber impossible rather than merely unlikely. There is no
+    /// longer a version of this where the writes happen after an await that
+    /// something else could have overtaken.
+    /// </para>
+    /// </summary>
+    private async System.Threading.Tasks.Task RunSoundResetAsync()
+    {
         // Off the dispatcher first. ResetSoundAsync is three engine calls that
         // each wait on a child process, and this is reached from paths where the
         // user is waiting on the result: a hotkey, the reset button, and now a
@@ -1046,7 +1186,7 @@ public partial class MainWindow : Window
         // the only thing that moves off the UI thread is the blocking part.
         try
         {
-            await Task.Run(() => _audio.ResetSoundAsync());
+            await System.Threading.Tasks.Task.Run(() => _audio.ResetSoundAsync());
         }
         catch (Exception ex)
         {
@@ -1092,7 +1232,7 @@ public partial class MainWindow : Window
     }
 
 
-    private void OnSaveInFxSoundClick(object sender, RoutedEventArgs e)
+    private async void OnSaveInFxSoundClick(object sender, RoutedEventArgs e)
     {
         if (!_audio.IsInstalled)
         {
@@ -1101,16 +1241,32 @@ public partial class MainWindow : Window
             return;
         }
 
-        _audio.Apply(_workAudio, SelectedDeviceName());
-        _audio.SavePresetInFxSound("Gamer Tool");
+        // Queued, because this is an apply followed by a save, and it used to
+        // run both immediately. Landing in the middle of a push meant the curve
+        // written into FxSound's own preset list was whichever one the engine
+        // happened to be holding, not the one on the panel.
+        AudioPreset wanted = _workAudio.Copy();
+        string device = SelectedDeviceName();
+
+        EnqueueAudio(AudioPushRequest.ForExclusive(audio =>
+        {
+            audio.Apply(wanted, device);
+            audio.SavePresetInFxSound("Gamer Tool");
+        }));
+
+        await WaitForAudioQueueAsync();
         Flash("Saved in FxSound as Gamer Tool");
     }
 
 
-    private void OnRescanDevicesClick(object sender, RoutedEventArgs e)
+    private async void OnRescanDevicesClick(object sender, RoutedEventArgs e)
     {
+        // Invalidated first so the list is genuinely re-read rather than served
+        // from a three second cache, which is what makes this the slowest read in
+        // the app. That used to be the argument for doing it inline; it is
+        // actually the argument for doing it on a worker.
         _audio.InvalidateCache();
-        LoadDevices();
+        await LoadDevicesAsync();
         _ = RefreshFxStateAsync(true);
     }
 
@@ -1124,9 +1280,17 @@ public partial class MainWindow : Window
 
         _settings.OutputDeviceId = choice.Id;
         _settings.OutputDeviceName = choice.Name;
+
+        // Queued, for the same reason the save is. This is a --output command
+        // sequence, and one of those landing in the middle of somebody else's
+        // apply either loses the move or, worse, re-points the output after the
+        // apply already set it. The setting is written first either way, so the
+        // profile is the record of the choice even if the engine has not caught
+        // up yet.
         if (_audio.IsInstalled)
         {
-            _audio.SetOutputDevice(choice.Id);
+            string id = choice.Id;
+            EnqueueAudio(AudioPushRequest.ForExclusive(audio => audio.SetOutputDevice(id)));
         }
 
         Commit();
@@ -1283,6 +1447,46 @@ public partial class MainWindow : Window
         _audio.AntiClipEnabled = _settings.AntiClip;
         UpdateAntiClipReadout();
         Commit();
+    }
+
+
+    /// <summary>
+    /// The loud guard: how far the engine's volume levelling is lifted before a
+    /// tune goes out.
+    /// <para>
+    /// Acts on its own, like the bypass and for the same reason. It is a state
+    /// rather than a parameter, it is not part of any saved tune, and someone who
+    /// wants their games held down wants that to hold for whatever they load next.
+    /// Making it wait for Apply would mean switching it on and hearing nothing
+    /// happen, which is what made the original bypass read as decoration.
+    /// </para>
+    /// <para>
+    /// The re-apply goes through the ordinary path, so it coalesces with anything
+    /// else already in flight rather than racing it, and the panel reports the
+    /// result the same way it does for any other apply.
+    /// </para>
+    /// </summary>
+    private void OnLoudGuardChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_ready)
+        {
+            return;
+        }
+
+        _settings.LoudGuard = LoudGuardBox.IsChecked == true;
+        _audio.LoudGuardEnabled = _settings.LoudGuard;
+        Commit();
+
+        if (_audio.IsInstalled)
+        {
+            // The copy, because the working tune is what the panel is showing and
+            // the guard is folded in further down, on the way to the engine.
+            QueueAudioPush(_workAudio.Copy(), SelectedDeviceName());
+        }
+        else
+        {
+            UpdateFxBanner();
+        }
     }
 
 

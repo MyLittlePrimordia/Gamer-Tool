@@ -91,41 +91,59 @@ public sealed class FxSoundState
                 return null;
             }
 
-            string json = File.ReadAllText(path);
-            if (string.IsNullOrWhiteSpace(json))
-            {
-                return null;
-            }
+            return Parse(ReadShared(path), File.GetLastWriteTimeUtc(path));
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("STATE", ex);
+            return null;
+        }
+    }
 
+    /// <summary>
+    /// Turns the engine's snapshot into a state object, or nothing if it is not
+    /// usable at all.
+    /// <para>
+    /// Split from the reading so the part that is actually fragile - mapping
+    /// somebody else's JSON onto this app's idea of the engine's state - can be
+    /// tested directly. Reading the live file would mean writing to the real
+    /// engine's status path, which is not a thing a test should be doing.
+    /// </para>
+    /// </summary>
+    internal static FxSoundState? Parse(string json, DateTime fileWrittenUtc)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
             using JsonDocument document = JsonDocument.Parse(json);
             JsonElement root = document.RootElement;
-            FxSoundState state = new() { FileWrittenUtc = File.GetLastWriteTimeUtc(path) };
+            FxSoundState state = new() { FileWrittenUtc = fileWrittenUtc };
 
-            if (root.TryGetProperty("version", out JsonElement version))
-            {
-                state.Version = version.GetString() ?? string.Empty;
-            }
+            state.Version = ReadString(root, "version");
 
             if (root.TryGetProperty("power", out JsonElement power) && power.ValueKind == JsonValueKind.True)
             {
                 state.Power = true;
             }
 
-            if (root.TryGetProperty("selected_preset", out JsonElement selected))
-            {
-                state.SelectedPreset = selected.GetString() ?? string.Empty;
-            }
-
-            if (root.TryGetProperty("selected_output", out JsonElement output))
-            {
-                state.SelectedOutput = output.GetString() ?? string.Empty;
-            }
+            state.SelectedPreset = ReadString(root, "selected_preset");
+            state.SelectedOutput = ReadString(root, "selected_output");
 
             if (root.TryGetProperty("output_devices", out JsonElement devices) && devices.ValueKind == JsonValueKind.Array)
             {
                 foreach (JsonElement device in devices.EnumerateArray())
                 {
-                    string? name = device.GetString();
+                    // An entry that is not a string is skipped rather than thrown
+                    // on. Every one of these helpers was written individually at
+                    // some point, and three of them were left calling GetString
+                    // without checking what they had, so one odd entry anywhere in
+                    // the file discarded the whole snapshot - including the band
+                    // frequencies the panel spends its time drawing.
+                    string name = AsString(device);
                     if (!string.IsNullOrWhiteSpace(name))
                     {
                         state.OutputDevices.Add(name);
@@ -188,45 +206,97 @@ public sealed class FxSoundState
 
         foreach (JsonElement entry in list.EnumerateArray())
         {
-            if (entry.ValueKind == JsonValueKind.String)
-            {
-                string? text = entry.GetString();
-                if (!string.IsNullOrWhiteSpace(text))
-                {
-                    target.Add(text);
-                }
+            // Two shapes, because FxSound writes both: a bare name for some and
+            // an object carrying a name for others.
+            string text = entry.ValueKind == JsonValueKind.String
+                ? AsString(entry)
+                : ReadString(entry, "name");
 
-                continue;
-            }
-
-            if (entry.TryGetProperty("name", out JsonElement entryName))
+            if (!string.IsNullOrWhiteSpace(text))
             {
-                string? text = entryName.GetString();
-                if (!string.IsNullOrWhiteSpace(text))
-                {
-                    target.Add(text);
-                }
+                target.Add(text);
             }
         }
     }
 
+    /// <summary>
+    /// Reads the file with a sharing mode that tolerates another reader.
+    /// <para>
+    /// This file belongs to another process which rewrites it whenever anything
+    /// about the audio changes, so it is genuinely being read and written at the
+    /// same time. The default share mode of <c>File.ReadAllText</c> is
+    /// <see cref="FileShare.Read"/>, which fails the moment the engine has it open
+    /// for writing - and the timing of that is not ours to choose.
+    /// </para>
+    /// </summary>
+    private static string ReadShared(string path)
+    {
+        using FileStream stream = new(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using StreamReader reader = new(stream);
+        return reader.ReadToEnd();
+    }
+
+    /// <summary>
+    /// A string property, or empty when it is absent or is not a string.
+    /// <para>
+    /// The "is not a string" half is the point. <c>GetString()</c> throws on
+    /// anything else, and this whole file is read in one try, so a field that
+    /// arrived as a number or an object used to throw away the entire snapshot -
+    /// every band, every effect and the output list - over one value. The engine
+    /// is another program's output and its shape is not this app's to assume.
+    /// </para>
+    /// </summary>
+    private static string ReadString(JsonElement element, string name)
+    {
+        return element.TryGetProperty(name, out JsonElement value)
+            ? AsString(value)
+            : string.Empty;
+    }
+
+    /// <summary>The element itself as a string, or empty when it is not one.</summary>
+    private static string AsString(JsonElement element)
+    {
+        return element.ValueKind == JsonValueKind.String
+            ? element.GetString() ?? string.Empty
+            : string.Empty;
+    }
+
+    /// <summary>
+    /// An integer property, or the fallback when it is absent, is not a number, or
+    /// does not fit.
+    /// <para>
+    /// Two ways to fall over that both read as plausible input: <c>GetInt32</c>
+    /// throws on <c>10.0</c> because JSON numbers are not typed the way a command
+    /// line argument is, and on anything outside the range of an <see cref="int"/>.
+    /// Neither is a reason to discard a snapshot over one field.
+    /// </para>
+    /// </summary>
     private static int ReadInt(JsonElement element, string name, int fallback)
     {
-        if (element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.Number)
-        {
-            return value.GetInt32();
-        }
+        return element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.Number
+            ? ReadIntValue(value, fallback)
+            : fallback;
+    }
 
-        return fallback;
+    private static int ReadIntValue(JsonElement value, int fallback)
+    {
+        return value.TryGetDouble(out double number)
+            && number >= int.MinValue
+            && number <= int.MaxValue
+            ? (int)Math.Round(number)
+            : fallback;
     }
 
     private static double ReadDouble(JsonElement element, string name, double fallback = 0.0)
     {
-        if (element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.Number)
-        {
-            return value.GetDouble();
-        }
-
-        return fallback;
+        return element.TryGetProperty(name, out JsonElement value)
+            && value.ValueKind == JsonValueKind.Number
+            && value.TryGetDouble(out double number)
+                ? number
+                : fallback;
     }
 }

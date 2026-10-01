@@ -270,10 +270,13 @@ public sealed class AppLibraryService
         {
             try
             {
-                Dictionary<string, Dictionary<string, string>> sections = Vdf.ParseSections(File.ReadAllText(vdf));
-                foreach (Dictionary<string, string> entry in sections.Values)
+                // Every "path" at any depth, not just the top level. Steam wraps
+                // each library in a numbered object, so a top-level read returns
+                // an empty section and every game on a drive other than the
+                // Steam root quietly stops existing.
+                foreach (string path in Vdf.ParseAllValues(File.ReadAllText(vdf), "path"))
                 {
-                    if (entry.TryGetValue("path", out string? path) && !string.IsNullOrWhiteSpace(path))
+                    if (!string.IsNullOrWhiteSpace(path))
                     {
                         AddLibrary(libraries, path);
                     }
@@ -462,6 +465,87 @@ public sealed class AppLibraryService
 
 public static class Vdf
 {
+    /// <summary>
+    /// Every value filed under a name, at any depth.
+    /// <para>
+    /// Steam writes two different shapes and they need different parsers. An
+    /// <c>appmanifest_*.acf</c> puts everything at the top level, which is what
+    /// <see cref="ParseSections"/> reads. A <c>libraryfolders.vdf</c> wraps each
+    /// entry in a numbered object - <c>"libraryfolders" { "0" { "path" "D:\\..." } }</c>
+    /// - so the paths this app needs most are exactly the ones a top-level reader
+    /// steps over.
+    /// </para>
+    /// <para>
+    /// That was not visible, because the manifest parse still succeeded. The scan
+    /// simply came back with every game outside the Steam root missing, which
+    /// looks like "you do not have those games installed" rather than a parser
+    /// that cannot see them.
+    /// </para>
+    /// <para>
+    /// Deliberately not a tree. Nothing here wants one, and building a nested
+    /// dictionary for a file read once at startup is the kind of thing that makes
+    /// the next reader believe the shape is more complicated than it is.
+    /// </para>
+    /// </summary>
+    public static List<string> ParseAllValues(string text, string name)
+    {
+        List<string> found = new();
+        List<string> tokens = Tokenize(text);
+        int index = 0;
+        CollectValues(tokens, ref index, name, found, 0);
+        return found;
+    }
+
+    /// <summary>Walks every token pair, descending into objects rather than over them.</summary>
+    private static void CollectValues(List<string> tokens, ref int index, string name, List<string> found, int depth)
+    {
+        // The same cap the other walk uses, for the same reason: a runaway nest
+        // must be a refused parse and not a stack overflow, which cannot be caught
+        // and takes the process down with no log line and no emergency reset.
+        if (depth > MaxVdfDepth)
+        {
+            index = tokens.Count;
+            return;
+        }
+
+        while (index < tokens.Count)
+        {
+            string token = tokens[index];
+
+            if (token.Equals("}", StringComparison.Ordinal))
+            {
+                index++;
+                return;
+            }
+
+            if (token.Equals("{", StringComparison.Ordinal))
+            {
+                index++;
+                continue;
+            }
+
+            if (index + 1 >= tokens.Count)
+            {
+                return;
+            }
+
+            string next = tokens[index + 1];
+            if (next.Equals("{", StringComparison.Ordinal))
+            {
+                index += 2;
+                CollectValues(tokens, ref index, name, found, depth + 1);
+                continue;
+            }
+
+            if (string.Equals(token, name, StringComparison.OrdinalIgnoreCase))
+            {
+                found.Add(Unescape(next));
+            }
+
+            index += 2;
+        }
+    }
+
     public static Dictionary<string, Dictionary<string, string>> Parse(string text)
     {
         List<string> tokens = Tokenize(text);
@@ -503,8 +587,7 @@ public static class Vdf
             }
         }
 
-        return sections;
-    }
+        return sections;    }
 
     /// <summary>
     /// How deep a VDF object may nest before the parse gives up.

@@ -54,46 +54,10 @@ public class XamlTemplateLoadTests
     // One Application per AppDomain, and one STA thread for the whole run, because
     // Application.Current is a singleton and WPF objects have thread affinity. All
     // the work below is marshalled onto that thread, so xUnit running this class
-    // alongside others cannot tear the theme out from under it.
-    private static readonly object Gate = new();
-
-    private static Dispatcher? _dispatcher;
-
-    private static void EnsureStaThread()
-    {
-        lock (Gate)
-        {
-            if (_dispatcher is not null)
-            {
-                return;
-            }
-
-            using var ready = new ManualResetEventSlim(false);
-
-            var thread = new Thread(() =>
-            {
-                _dispatcher = Dispatcher.CurrentDispatcher;
-                _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-                ready.Set();
-                Dispatcher.Run();
-            })
-            {
-                IsBackground = true,
-                Name = "wpf xaml tests"
-            };
-
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
-            ready.Wait();
-        }
-    }
-
-
-    private static T OnSta<T>(Func<T> body)
-    {
-        EnsureStaThread();
-        return _dispatcher!.Invoke(body);
-    }
+    // alongside others cannot tear the theme out from under it. Shared through
+    // WpfTestHost rather than kept private, because a second class needing real
+    // WPF objects would otherwise build a second Application and abort the run.
+    private static T OnSta<T>(Func<T> body) => WpfTestHost.Invoke(body);
 
 
     /// <summary>

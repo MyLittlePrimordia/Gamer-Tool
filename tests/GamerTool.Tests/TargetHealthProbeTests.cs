@@ -254,26 +254,13 @@ public class TargetHealthProbeTests
         Assert.Equal("driver described the target fully", TargetHealthProbe.Classify(Healthy()).Summary);
     }
 
-    [Theory]
-    [InlineData(TargetHealth.Complete, true)]
-    [InlineData(TargetHealth.Withheld, true)]
-    [InlineData(TargetHealth.Stub, false)]
-    [InlineData(TargetHealth.Unknown, false)]
-    public void The_hdcp_hint_is_only_offered_where_it_could_work(TargetHealth health, bool expected)
-    {
-        // The user-facing consequence. No content protection setting brings up a
-        // target that was never initialised, so on a stub the advice is several
-        // clicks and a restart that change nothing.
-        TargetHealthReading reading = new(health, Array.Empty<string>());
-
-        Assert.Equal(expected, TargetHealthProbe.HdcpHintIsPlausible(reading));
-    }
-
-    [Fact]
-    public void The_real_measurement_does_not_get_the_hdcp_hint()
-    {
-        // Spelled out as a test rather than left to the theory tests, because this
-        // is the exact input that produced the wrong advice in the first place.
-        Assert.False(TargetHealthProbe.HdcpHintIsPlausible(TargetHealthProbe.Classify(Stub())));
-    }
+    // A theory and a fact that used to sit here asked HdcpHintIsPlausible whether
+    // the AMD HDCP hint should be offered. They went with the hint dialog, which
+    // was removed as confidently wrong on real hardware.
+    //
+    // What they were really protecting - a stub target must never be described in
+    // a way that sends somebody to a content protection setting - is already
+    // pinned by the stub classification tests above, which drive Classify
+    // directly. Asserting it a second time through a predicate the app no longer
+    // calls would only give the impression of more coverage than there is.
 }

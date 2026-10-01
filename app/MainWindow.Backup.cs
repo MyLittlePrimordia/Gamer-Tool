@@ -145,7 +145,14 @@ public partial class MainWindow : Window
         _activeDisplayId = _workDisplay.Id;
         _activeAudioId = _workAudio.Id;
 
-        LoadDevices();
+        // The picker is refilled from a worker. Enumerating the output devices
+        // means asking the engine, which is the slowest thing in the app, and this
+        // used to do it inline - so confirming a restore froze the window on the
+        // button that was supposed to be the confirmation. Fire and forget: the
+        // rest of the restore does not depend on it, and the picker is already
+        // showing the old list until it lands.
+        _ = LoadDevicesAsync();
+
         LoadTune(_workDisplay, _workAudio);
         RefreshPresetBoxes();
         BuildSlots();

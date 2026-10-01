@@ -101,6 +101,50 @@ public static class FxPresetFile
     }
 
 
+    /// <summary>
+    /// Deletes the preset this app wrote, on the way out.
+    /// <para>
+    /// The file has to exist for as long as the app is running - it is the only
+    /// documented route for getting an equaliser curve into the engine, so it is
+    /// rewritten on every apply. But it lives in FxSound's own preset folder,
+    /// which means an app that writes there and then leaves the file behind has
+    /// put something in another program's data directory that the user never
+    /// asked for and cannot see. On exit it has served its purpose: the app is no
+    /// longer applying anything, and it is rewritten from scratch the moment it
+    /// starts again.
+    /// </para>
+    /// <para>
+    /// Only the one name this class ever writes is removed, by full path, and
+    /// never the folder. Removing a whole presets directory to tidy up after
+    /// ourselves would be a spectacular way to delete somebody's equaliser.
+    /// </para>
+    /// <para>
+    /// Best effort throughout: a failure here is a stale file, which is the state
+    /// the app has always been in, so it is logged and nothing more. Nothing on
+    /// the exit path may throw, because this runs while the process is already on
+    /// its way out.
+    /// </para>
+    /// </summary>
+    public static void RemoveWrittenPreset(string? folder = null)
+    {
+        try
+        {
+            string destination = string.IsNullOrWhiteSpace(folder) ? PresetsFolder : folder;
+            string path = Path.Combine(destination, PresetName + ".fac");
+
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+                TraceLog.Write("FAC removed " + path);
+            }
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("FAC REMOVE", ex);
+        }
+    }
+
+
     private static void SetName(List<string> lines, string name)
     {
         // Line 0 is the class marker and line 1 the version, so the name is the

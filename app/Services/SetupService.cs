@@ -179,6 +179,24 @@ public sealed class SetupService
         {
             if (!IsWingetAvailable())
             {
+                // No badge without winget, and that is deliberate rather than a
+                // gap still to be filled.
+                //
+                // The obvious fallback is to ask the download host what the newest
+                // build is, so it is worth recording that this was tried and why
+                // it cannot work. download.fxsound.com/fxsoundlatest redirects to
+                // a file named fxsound_setup.exe on a branch literally called
+                // "latest". There is no version in the path, no Content-Disposition
+                // to carry one, and the ETag is a SHA-256 of the bytes. The
+                // current version is genuinely not published as anything a client
+                // can read.
+                //
+                // Guessing at it - parsing the installer, or assuming the year is
+                // in there - would either be wrong or would mean running the file
+                // to find out. So a machine with no winget gets no update badge,
+                // and still gets the update button, which takes the direct
+                // download. A missing badge is a much smaller problem than an
+                // update prompt that lies about there being an update.
                 return null;
             }
 
@@ -225,8 +243,16 @@ public sealed class SetupService
         {
             if (!IsWingetAvailable())
             {
-                progress.Report(new SetupStage { Percent = 0, Text = "NO WINGET" });
-                return false;
+                // Winget is the preferred route and the one with a hash check
+                // against it, but a machine without it has no other way to update,
+                // and "NO WINGET" on an upgrade button is not an answer. The
+                // direct download verifies the Authenticode publisher before
+                // running anything, which is a weaker check than winget's hash
+                // but is a real one - and on this machine it is the only check
+                // there is.
+                TraceLog.Write("UPGRADE winget is not on this machine, using the direct download");
+                StatusChanged?.Invoke("GETTING FXSOUND");
+                return await DownloadAndInstallAsync(audio, progress, token, force: true).ConfigureAwait(false);
             }
 
             progress.Report(new SetupStage { Percent = 10, Text = "CHECKING", Indeterminate = true });
@@ -507,11 +533,26 @@ public sealed class SetupService
         return audio.IsInstalled;
     }
 
-    public async Task<bool> DownloadAndInstallAsync(AudioService audio, IProgress<SetupStage> progress, CancellationToken token)
+    /// <summary>
+    /// Installs FxSound, or upgrades it.
+    /// </summary>
+    /// <param name="force">
+    /// Skip the "already installed, nothing to do" shortcut and run the installer
+    /// anyway. This exists because the shortcut made the direct download unable
+    /// to do the one job it was the only route for on a machine with no winget:
+    /// an existing install returned READY before a byte was fetched, so the
+    /// "update FxSound" button on such a machine reported success while doing
+    /// nothing at all.
+    /// </param>
+    public async Task<bool> DownloadAndInstallAsync(
+        AudioService audio,
+        IProgress<SetupStage> progress,
+        CancellationToken token,
+        bool force = false)
     {
         try
         {
-            if (IsInstalled(audio))
+            if (!force && IsInstalled(audio))
             {
                 progress.Report(new SetupStage { Percent = 100, Text = "READY" });
                 StartEngine(audio);

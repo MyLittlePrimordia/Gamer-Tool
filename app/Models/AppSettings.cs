@@ -8,6 +8,32 @@ namespace GamerTool.Models;
 public sealed class AppSettings
 {
     /// <summary>
+    /// Guards this profile against being read while something is writing to it.
+    /// <para>
+    /// The profile is not only touched by the window. The backlight worker runs on
+    /// a pool thread and writes to it - the exclusion list when a display refuses,
+    /// and the remembered brightness on every successful write - while the window
+    /// can be serialising the whole thing from a click handler at the same moment.
+    /// <c>Dictionary</c> and <c>List</c> are not safe against that: one throws or
+    /// silently produces half a file, and the symptom is a settings file that has
+    /// lost a slot or a preset.
+    /// </para>
+    /// <para>
+    /// It lives on the profile rather than in any one service because the profile
+    /// is the thing being protected, and because the two ends are in different
+    /// files: the backlight service holds this reference to write, and
+    /// <see cref="Services.ProfileManager"/> holds it to serialise. A lock in
+    /// either one alone would only cover half the problem.
+    /// </para>
+    /// <para>
+    /// It is never held across I/O. A bus write or a disk write inside this lock
+    /// would turn every other reader into a stall, which is the failure this is
+    /// here to prevent.
+    /// </para>
+    /// </summary>
+    internal object Gate { get; } = new();
+
+    /// <summary>
     /// A fresh install opens on the two neutral presets, not on one of the
     /// game tunes. Starting on a preset that boosts shadows and lifts the low end
     /// would quietly alter the screen and the sound before the user has touched
@@ -31,8 +57,24 @@ public sealed class AppSettings
 
     public bool CloseToTray { get; set; } = false;
 
-    public bool StartWithWindows { get; set; } = false;
-
+    /// <summary>
+    /// Not stored here on purpose.
+    /// <para>
+    /// This used to be a settings field, and it was a lie. The switch that starts
+    /// the app with Windows writes an entry under the current user's Run key, and
+    /// that registry entry is the only thing that decides whether it happens - the
+    /// field was written from the registry's answer and then never read back.
+    /// So it appeared in settings.json, it looked like editing the file by hand
+    /// would turn the feature on, and doing exactly that did nothing.
+    /// </para>
+    /// <para>
+    /// The registry is the right place for this one. It is per-user rather than
+    /// per-install, so a copy of the executable on a second drive does not claim
+    /// the same start-up entry, and the user can turn it off in Task Manager's
+    /// Startup tab without knowing this app exists. <see cref="StartupService"/>
+    /// is the single reader.
+    /// </para>
+    /// </summary>
     public bool AutoSwitch { get; set; } = false;
 
     /// <summary>
@@ -71,6 +113,14 @@ public sealed class AppSettings
     /// cannot hit 0 dBFS and hard-clip.
     /// </summary>
     public bool AntiClip { get; set; } = true;
+
+    /// <summary>
+    /// Whether a loud game is to be held down through the engine's own volume
+    /// levelling. Off by default, and global rather than part of a saved tune for
+    /// the same reason the bypass is: someone who wants their games quieter wants
+    /// that to hold for whatever they load next.
+    /// </summary>
+    public bool LoudGuard { get; set; }
 
     /// <summary>
     /// Whether the equaliser bands and the effects reach the output at all.
@@ -158,6 +208,22 @@ public sealed class AppSettings
 
     /// <summary>0 = off, 1 = warm, 2 = extra warm.</summary>
     public int BlueLightFilter { get; set; }
+
+    /// <summary>
+    /// Whether the blue light filter should come on by itself between two hours
+    /// of the day.
+    /// <para>
+    /// Times are stored as minutes since midnight rather than as "8 PM", because
+    /// they are arithmetic: the question every tick asks is "is the current time
+    /// inside this window", and midnight is the seam that question is usually
+    /// wrong about. The pickers say "8 PM" and convert on the way in and out.
+    /// </para>
+    /// </summary>
+    public bool NightBlueLight { get; set; }
+
+    public int NightStartMinutes { get; set; } = NightSchedule.DefaultStartMinutes;
+
+    public int NightEndMinutes { get; set; } = NightSchedule.DefaultEndMinutes;
 
     /// <summary>
     /// Set once the user has been offered the FxSound install on launch. Stops a

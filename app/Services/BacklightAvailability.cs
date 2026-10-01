@@ -125,7 +125,18 @@ public sealed class BacklightAvailability
 
 
     /// <summary>
-    /// Records a round without counting it towards the streak.
+    /// Takes the retirement notice, so it is acted on once.
+    /// <para>
+    /// Without this the notice is a flag nobody clears. The probe sets it and
+    /// stops running - the feature has turned itself off, so there is nothing
+    /// left for a probe to record - which means nothing would ever clear it, and
+    /// every later read would re-announce a retirement that had already been
+    /// dealt with.
+    /// </para>
+    /// </summary>
+    public void AcknowledgeRetirement() => JustRetired = false;
+
+
     /// <para>
     /// For the probe that fires the instant the user turns the feature back on.
     /// That round is the app answering its own switch, not a second opinion from

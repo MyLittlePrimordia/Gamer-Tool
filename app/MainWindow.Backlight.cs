@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -77,9 +77,9 @@ public partial class MainWindow
 
         if (!Backlight.IsEnabled)
         {
-            // Nothing at all, and the two rules that bracket the section go with it.
+            // Nothing at all.
             //
-            // There used to be a "HARDWARE BRIGHTNESS OFF" heading here with a Turn
+            // There used to be a "Hardware brightness off" heading here with a Turn
             // on button beside it, on the reasoning that naming the feature was
             // helpful. It is the same reasoning that produced the diagnostic advice
             // this app no longer gives: the switch is on the Settings tab, is
@@ -88,11 +88,8 @@ public partial class MainWindow
             // is an advertisement for it on the one screen the user is not using,
             // and a sign that the store is opening soon is worse than no sign at
             // all.
-            SetBacklightRulesVisible(false);
             return;
         }
-
-        SetBacklightRulesVisible(true);
 
         if (!Backlight.HasProbed)
         {
@@ -117,8 +114,14 @@ public partial class MainWindow
 
         TextBlock heading = new()
         {
-            Style = (Style)FindResource("SectionHeader"),
-            Text = monitors.Count == 1 ? "HARDWARE BRIGHTNESS" : "HARDWARE BRIGHTNESS PER DISPLAY",
+            // The Label style, not SectionHeader, so this matches Gamma, Shadow
+            // boost, Colour trim and Blue light filter. It was a SectionHeader, which
+            // is 9.5 point semi-bold in the dimmest text colour, so the one heading
+            // among the slider labels was smaller, dimmer and a different weight
+            // from the six labels sitting beside it. Every control on this panel is
+            // a display slider; nothing here is a section of its own.
+            Style = (Style)FindResource("Label"),
+            Text = monitors.Count == 1 ? "Hardware brightness" : "Hardware brightness per display",
             Margin = new Thickness(0, 0, 0, 8)
         };
         BacklightPanel.Children.Add(heading);
@@ -126,32 +129,6 @@ public partial class MainWindow
         foreach (MonitorProbe monitor in monitors)
         {
             BacklightPanel.Children.Add(BacklightRow(monitor));
-        }
-    }
-
-
-    /// <summary>
-    /// Shows or hides the two rules that bracket the hardware brightness section.
-    /// <para>
-    /// Collapsed rather than merely cleared, because a border with no height is
-    /// still occupying the gap it was given margins for, which leaves a pair of
-    /// blank bands in the middle of the page. The margins are 18/16 and 14/16, so
-    /// that is most of half an inch of nothing, on the one screen where the user
-    /// is trying to decide what to do next.
-    /// </para>
-    /// </summary>
-    private void SetBacklightRulesVisible(bool visible)
-    {
-        Visibility state = visible ? Visibility.Visible : Visibility.Collapsed;
-
-        if (BacklightTopRule is not null)
-        {
-            BacklightTopRule.Visibility = state;
-        }
-
-        if (BacklightBottomRule is not null)
-        {
-            BacklightBottomRule.Visibility = state;
         }
     }
 
@@ -301,30 +278,7 @@ public partial class MainWindow
 
 
     /// <summary>
-    /// Flips the hardware brightness option from here rather than making the
-    /// reader go and find it on another tab. The option's own handler starts the
-    /// probe, so this only has to set the switch.
-    /// </summary>
-    /// <summary>
-    /// Kept only so the XAML and the diagnostics can still refer to a way in.
-    /// <para>
-    /// The Display tab no longer carries a Turn on button, because a heading and a
-    /// button for a feature that is switched off is an advertisement for it on the
-    /// one screen the user is not using. The switch on the Settings tab is the only
-    /// control for it, which is also the only place the feature is configured.
-    /// </para>
-    /// </summary>
-    private void OnTurnOnHardwareBrightness(object sender, RoutedEventArgs e)
-    {
-        if (_settings.HardwareBrightnessEnabled)
-        {
-            return;
-        }
 
-        HardwareBrightnessBox.IsChecked = true;
-    }
-
-    /// <summary>
     /// Holds a drag still for a moment before it touches the bus. The engine
     /// wants at most one write every 120ms or so; sending a write per pixel of
     /// mouse movement is how a slider ends up looking broken on a slow scaler.
@@ -439,11 +393,23 @@ public partial class MainWindow
                 StringBuilder extra = new();
                 extra.AppendLine("displays:");
                 extra.AppendLine(AppLog.BacklightLines(Backlight.Monitors));
-                extra.AppendLine("hardware brightness: " + (Backlight.IsEnabled ? "on" : "off"));
+extra.AppendLine("hardware brightness: " + (Backlight.IsEnabled ? "on" : "off"));
+
+                // Read under the profile's own gate, like every other reader of
+                // that list. It is the one the backlight worker appends to from a
+                // pool thread, and the whole reason the gate exists is that
+                // enumerating a List while something adds to it is not safe. A
+                // torn read here cannot throw on a string list, so it would not
+                // have shown up as a crash - only as a blank or stale line in
+                // the one artefact a user is asked to paste into a bug report.
+                List<string> excluded;
+                lock (_settings.Gate)
+                {
+                    excluded = _settings.ExcludedDdcMonitors.ToList();
+                }
+
                 extra.AppendLine("excluded from probing: "
-                    + (_settings.ExcludedDdcMonitors.Count == 0
-                        ? "none"
-                        : string.Join(", ", _settings.ExcludedDdcMonitors)));
+                    + (excluded.Count == 0 ? "none" : string.Join(", ", excluded)));
                 return extra.ToString();
             });
 
@@ -462,54 +428,19 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Stops the folder button's click from also reaching the row.
+    /// Shows the confirmation beside the mark, then takes it away again.
     /// <para>
-    /// The diagnostics row has copied on a click anywhere on it for a long time,
-    /// which is the right behaviour for one action on a row. With a second action
-    /// sharing the row it stops being right: without this, clicking the folder
-    /// would open Explorer and copy the log at the same time. Preview, not
-    /// bubble, because the row listens for the bubbled event.
+    /// The mark is left alone. It used to be hidden for as long as the
+    /// confirmation was up, on the reasoning that the row is one line and one
+    /// piece of text is all that fits. But the mark is the only thing on the row
+    /// that says which action was taken, so hiding it to announce that the action
+    /// had worked removed the answer at the moment it was wanted. They sit side
+    /// by side now, which the row has the width for, and the text has its own
+    /// column to do it in.
     /// </para>
-    /// </summary>
-    private void OnOpenLogFolderPreview(object sender, MouseButtonEventArgs e) => e.Handled = true;
-
-    /// <summary>
-    /// Opens the folder the log is written into.
     /// <para>
-    /// Copying to the clipboard answers "what did it decide", which is not what
-    /// most people asking for a log actually want. They want to read the log
-    /// themselves, and the file is rotated across several, so a folder beats a
-    /// single pasted block. Both are offered rather than one being chosen.
-    /// </para>
-    /// </summary>
-    private void OnOpenLogFolderClick(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            // Created on the way through, because a machine that has never hit
-            // anything worth logging has no folder yet, and a button that fails
-            // for want of a folder is worse than no button.
-            Directory.CreateDirectory(AppLog.Folder);
-            Process.Start(new ProcessStartInfo { FileName = AppLog.Folder, UseShellExecute = true });
-            Flash("Log folder opened");
-        }
-        catch (Exception ex)
-        {
-            AppLog.Error("OPEN LOG FOLDER", ex);
-            Flash("Could not open the log folder", true);
-        }
-    }
-
-
-
-    /// <summary>
-    /// Swaps the clipboard mark for a short confirmation, then puts the mark back.
-    /// <para>
-    /// The row is one line of list, so the mark's own space is the only place a
-    /// confirmation fits without putting the row back to a heading and a line of
-    /// explanation and needing a divider of its own again. Anything longer than a
-    /// few words still goes to the status line through <see cref="Flash"/>, which
-    /// is where the full text of a failure belongs.
+    /// Anything longer than a few words still goes to the status line through
+    /// <see cref="Flash"/>, which is where the full text of a failure belongs.
     /// </para>
     /// </summary>
     private void ShowDiagFeedback(string message, bool ok)
@@ -518,7 +449,6 @@ public partial class MainWindow
         DiagCopiedText.Foreground = (System.Windows.Media.Brush)FindResource(
             ok ? "AccentSettings" : "Red");
         DiagCopiedText.Visibility = Visibility.Visible;
-        CopyDiagButton.Visibility = Visibility.Collapsed;
 
         if (_diagFeedbackTimer is null)
         {
@@ -538,7 +468,6 @@ public partial class MainWindow
     {
         _diagFeedbackTimer?.Stop();
         DiagCopiedText.Visibility = Visibility.Collapsed;
-        CopyDiagButton.Visibility = Visibility.Visible;
     }
 }
 

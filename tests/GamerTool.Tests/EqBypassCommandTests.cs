@@ -160,25 +160,141 @@ public class EqBypassCommandTests
     }
 
     [Fact]
-    public void A_bypass_leaves_the_rest_of_the_chain_alone()
+    public void A_bypass_takes_the_master_gain_and_the_balance_with_it()
     {
-        // The other effects are not the equaliser and must not be dragged off
-        // with it. A user bypassing a curve still wants their level and balance.
-        // Values sit on each control's own step: master gain and balance move a
-        // whole decibel at a time, leveling in halves.
+        // The correction. The switch read as a curve switch, so everybody
+        // expected a curve and nothing else, but the preset was also trimming
+        // the track six decibels hot and swinging it eight to one side - and
+        // those two were left running while the curve flattened, which is the
+        // half of a bypass you notice last and complain about first.
         AudioPreset preset = Tuned();
-        preset.MasterGain = -4.0;
-        preset.Balance = 3.0;
-        preset.VolumeLeveling = 1.5;
+        preset.MasterGain = -6.0;
+        preset.Balance = 8.0;
 
-        string off = Service(effectsEnabled: false).BuildApplyCommands(preset, "Speakers")[0];
-        string on = Service(effectsEnabled: true).BuildApplyCommands(preset, "Speakers")[0];
+        string off = Service(effectsEnabled: false).BuildBypassCommand(preset);
 
-        foreach (string flag in new[] { "--master_gain=-4", "--balance=3", "--volume_leveling=1.5" })
+        Assert.Contains("--master_gain=0", off);
+        Assert.Contains("--balance=0", off);
+        Assert.DoesNotContain("--master_gain=-6", off);
+        Assert.DoesNotContain("--balance=8", off);
+    }
+
+    [Fact]
+    public void Releasing_the_bypass_puts_the_master_gain_and_the_balance_back()
+    {
+        // Round tripped through the switch, what the user built survives. The
+        // same Expected methods serve both directions, so this cannot come back
+        // as silence and call that a feature.
+        AudioPreset preset = Tuned();
+        preset.MasterGain = -6.0;
+        preset.Balance = 8.0;
+
+        Assert.Equal(-6.0, Service(effectsEnabled: true).ExpectedMasterGain(preset), 3);
+        Assert.Equal(8.0, Service(effectsEnabled: true).ExpectedBalance(preset), 3);
+        Assert.Equal(0.0, Service(effectsEnabled: false).ExpectedMasterGain(preset));
+        Assert.Equal(0.0, Service(effectsEnabled: false).ExpectedBalance(preset));
+    }
+
+    [Fact]
+    public void The_bypass_leaves_the_loud_guard_alone()
+    {
+        // The one thing it must not take. It is a safety control rather than part
+        // of the tune, so a switch that quietly switched off the thing holding a
+        // loud game down is not one anybody wants to find out about afterwards.
+        // The same reason the panic key does not re-arm it.
+        AudioPreset preset = Tuned();
+        preset.VolumeLeveling = 2.0;
+
+        string off = Service(effectsEnabled: false).BuildBypassCommand(preset);
+        string apply = Service(effectsEnabled: false).BuildApplyCommands(preset, "Speakers")[0];
+
+        // Never sent by the switch, and the apply leaves the guard where the
+        // preset put it even though everything else about the apply is
+        // neutralised.
+        Assert.DoesNotContain("--volume_leveling", off);
+        Assert.Contains("--volume_leveling=2", apply);
+    }
+
+    [Fact]
+    public void What_the_gain_and_the_balance_are_expected_to_read_as_is_what_gets_sent()
+    {
+        // One source of truth, as for the bands and the effects. If the command
+        // and the read-back could drift apart the engine would be graded against
+        // values nobody asked it to play.
+        AudioPreset preset = Tuned();
+        preset.MasterGain = -6.0;
+        preset.Balance = 8.0;
+
+        foreach (bool enabled in new[] { true, false })
         {
-            Assert.Contains(flag, off);
-            Assert.Contains(flag, on);
+            AudioService service = Service(enabled);
+            string sent = service.BuildBypassCommand(preset);
+
+            Assert.Contains(
+                "--master_gain=" + service.ExpectedMasterGain(preset).ToString("0.0", CultureInfo.InvariantCulture),
+                sent);
+            Assert.Contains(
+                "--balance=" + service.ExpectedBalance(preset).ToString("0.0", CultureInfo.InvariantCulture),
+                sent);
         }
+    }
+
+    [Fact]
+    public void The_bypass_push_still_touches_nothing_but_the_tune()
+    {
+        // It is meant to feel like a switch, so it must not be a small apply. A
+        // full apply would commit the preset file, the band count, the filter
+        // shape and the output device, and a fader the user had moved but not
+        // applied would be committed by an unrelated click. The bands, the
+        // effects, the master gain and the balance are the whole of what it is
+        // allowed to touch.
+        string push = Service(effectsEnabled: false).BuildBypassCommand(Tuned());
+
+        Assert.Contains("--set_band_gain=", push);
+        Assert.Contains("--set_effect=", push);
+        Assert.Contains("--master_gain=", push);
+        Assert.Contains("--balance=", push);
+
+        foreach (string forbidden in new[]
+        {
+            "--power", "--preset", "--set_band_freq",
+            "--volume_leveling", "--filter_q", "--output", "--num_bands",
+        })
+        {
+            Assert.DoesNotContain(forbidden, push);
+        }
+    }
+
+    [Fact]
+    public void An_apply_while_bypassed_does_not_bring_the_gain_or_the_balance_back()
+    {
+        // The same correction as the effects got, for the same reason. Applying
+        // a preset with the bypass thrown flattened the curve and left the
+        // effects at zero, but sent the master gain and the balance straight
+        // back - so selecting a tune was a way to un-bypass two thirds of
+        // itself.
+        AudioPreset preset = Tuned();
+        preset.MasterGain = -6.0;
+        preset.Balance = 8.0;
+
+        foreach (string command in Service(effectsEnabled: false).BuildApplyCommands(preset, "Speakers"))
+        {
+            Assert.Contains("--master_gain=0", command);
+            Assert.Contains("--balance=0", command);
+        }
+    }
+
+    [Fact]
+    public void An_enabled_apply_still_sends_the_preset_s_own_gain_and_balance()
+    {
+        AudioPreset preset = Tuned();
+        preset.MasterGain = -6.0;
+        preset.Balance = 8.0;
+
+        string apply = Service(effectsEnabled: true).BuildApplyCommands(preset, "Speakers")[0];
+
+        Assert.Contains("--master_gain=-6", apply);
+        Assert.Contains("--balance=8", apply);
     }
 
     [Fact]
@@ -254,24 +370,14 @@ public class EqBypassCommandTests
     [Fact]
     public void The_bypass_push_carries_the_bands_and_the_effects_and_nothing_else()
     {
-        // It is meant to feel like a switch, so it must not be a small apply. A
-        // full apply would commit the preset file, the master gain and the output
-        // device, and a fader the user had moved but not applied would be
-        // committed by an unrelated click. The bands and the effects are the whole
-        // of what it is allowed to touch.
+        // Superseded by The_bypass_push_still_touches_nothing_but_the_tune,
+        // which is the same rule with master gain and balance moved across from
+        // forbidden to required. Kept here so the change is one edit rather than
+        // a deletion, and because the flag list is the thing worth re-reading.
         string push = Service(effectsEnabled: false).BuildBypassCommand(Tuned());
 
-        Assert.StartsWith("--set_band_gain=", push);
+        Assert.Contains("--set_band_gain=", push);
         Assert.Contains("--set_effect=", push);
-
-        foreach (string forbidden in new[]
-        {
-            "--power", "--preset", "--set_band_freq",
-            "--master_gain", "--volume_leveling", "--filter_q", "--balance", "--output", "--num_bands",
-        })
-        {
-            Assert.DoesNotContain(forbidden, push);
-        }
     }
 
     [Fact]

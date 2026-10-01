@@ -16,6 +16,20 @@ namespace GamerTool;
 
 public partial class MainWindow : Window
 {
+    /// <summary>
+    /// The screen the last applied tune went to, so something that has to push
+    /// the same tune again - the night schedule putting the blue light filter on,
+    /// or taking it off - lands on the monitor the user was actually looking at.
+    /// <para>
+    /// Without it, the only value available is "no particular monitor", which
+    /// applies the tune to every screen. For the schedule that is the wrong
+    /// answer twice over: a two screen user with a night filter has the trim
+    /// appear on the display they were not using, and turning it off at seven in
+    /// the morning silently overwrites whatever the other monitor is showing.
+    /// </para>
+    /// </summary>
+    private string _appliedMonitor = string.Empty;
+
     private void UpdateScreenLabels(DisplayPreset preset)
     {
         _workDisplay = preset;
@@ -170,13 +184,20 @@ public partial class MainWindow : Window
     /// </summary>
     private DisplayPreset EffectiveDisplay()
     {
-        return DisplayPreset.WithBlueLight(_workDisplay, _settings.BlueLightFilter);
+        return DisplayPreset.WithBlueLight(_workDisplay, ActiveBlueLightLevel);
     }
 
 
     private void OnBlueLightChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!_ready || BlueLightBox.SelectedItem is not string name)
+        // _updating, because this is the one selection in the app that the app
+        // itself moves. The night schedule writes the level it is applying into
+        // this box so the dropdown and the screen agree, and without the guard
+        // that write came straight back down here and was saved as the user's
+        // own choice. The filter would then be stuck on EXTRA WARM for good the
+        // first time the schedule ever fired, because the value the user picked
+        // would have been overwritten by the value the schedule happened to want.
+        if (!_ready || _updating || BlueLightBox.SelectedItem is not string name)
         {
             return;
         }
@@ -188,7 +209,20 @@ public partial class MainWindow : Window
         }
 
         _settings.BlueLightFilter = level;
-        QueueDisplayPreview();
+
+        if (_nightApplied)
+        {
+            // A level picked by hand while the schedule is running is the user
+            // overriding it, and it goes to the screen now. At every other time
+            // this dropdown only previews, and the apply button is what pushes
+            // it, which is the contract the whole Display tab has.
+            StandNightFilterDown();
+        }
+        else
+        {
+            QueueDisplayPreview();
+        }
+
         Commit();
     }
 
@@ -348,8 +382,9 @@ public partial class MainWindow : Window
 
     private void ApplyDisplay(DisplayPreset preset, string monitorDevice, bool announce)
     {
-        DisplayPreset effective = DisplayPreset.WithBlueLight(preset, _settings.BlueLightFilter);
+        DisplayPreset effective = DisplayPreset.WithBlueLight(preset, ActiveBlueLightLevel);
         _display.Apply(effective, monitorDevice);
+        _appliedMonitor = monitorDevice;
         _liveDisplayName = preset.Name.ToUpperInvariant();
         _settings.ActiveDisplayPresetId = preset.Id;
         _activeDisplayId = preset.Id;
@@ -413,6 +448,21 @@ public partial class MainWindow : Window
     /// </summary>
     public void GoScreenNeutral()
     {
+        // The monitor's own brightness is part of the screen going back to
+        // normal, and this used to leave it alone. The ramp above is only half
+        // of what this app can change: with hardware brightness switched on, the
+        // display is left sitting at whatever the last slot asked for. That is
+        // worst exactly where it hurts most - the panic key is the one control
+        // a user reaches for when the picture is already wrong, and it restored
+        // the gamma and left the panel dim.
+        //
+        // RestoreAll is a no-op when nothing was ever applied, because the map
+        // it walks is only populated by a write this app made, and it empties
+        // that map before writing so calling it twice cannot double-restore. So
+        // this is safe on the paths where hardware brightness was never used,
+        // which is every machine that has the feature switched off.
+        Backlight.RestoreAll();
+
         _display.Reset();
         _liveDisplayName = "STANDARD";
         _activeDisplayId = "flat";

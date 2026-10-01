@@ -32,6 +32,23 @@ public sealed class HotkeySlot
 
     public string MonitorDevice { get; set; } = string.Empty;
 
+    /// <summary>
+    /// The output device this slot plays through, or empty for whatever the app
+    /// is set to.
+    /// <para>
+    /// Empty rather than a copied default, so a slot made before a device was
+    /// chosen, or made while the app was on the system default, keeps following
+    /// the app's own setting instead of pinning itself to whatever it happened
+    /// to be looking at when the slot was created. A slot that pins itself
+    /// silently is a slot that surprises somebody months later.
+    /// </para>
+    /// <para>
+    /// There is no default value, which is the point. It is a route, not a sound
+    /// setting, and it belongs to the slot for the same reason the monitor does.
+    /// </para>
+    /// </summary>
+    public string OutputDeviceId { get; set; } = string.Empty;
+
     public bool IsSelfTarget { get; set; }
 
     public bool Enabled { get; set; } = true;
@@ -111,6 +128,7 @@ public sealed class HotkeySlot
             ApplyOnStart = ApplyOnStart,
             IsSelfTarget = IsSelfTarget,
             MonitorDevice = MonitorDevice,
+            OutputDeviceId = OutputDeviceId,
             Enabled = Enabled
         };
     }

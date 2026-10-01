@@ -227,8 +227,21 @@ public class InstallerTrustTests
             .FirstOrDefault(File.Exists);
 
         Assert.NotNull(real);
-        bool answer = SetupService.HasEmbeddedSignature(real!);
-        Assert.Equal(answer, SetupService.HasEmbeddedSignature(real!));
+
+        // A real signed binary, so this exercises the actual Authenticode reader
+        // rather than a fixture.
+        //
+        // It used to assert that the call equalled itself - `Assert.Equal(answer,
+        // HasEmbeddedSignature(real))` - which cannot fail whatever the function
+        // did, so the one test that was supposed to prove the reader works on real
+        // files proved nothing at all. What it means to say is that reading a
+        // signed system binary twice gives the same answer, and that it gives a
+        // definite one.
+        bool first = SetupService.HasEmbeddedSignature(real!);
+        bool second = SetupService.HasEmbeddedSignature(real!);
+
+        Assert.True(first, "a signed binary in System32 was reported as carrying no signature");
+        Assert.Equal(first, second);
     }
 
     /// <summary>

@@ -106,6 +106,38 @@ public sealed class SlotService
         };
     }
 
+    /// <summary>
+    /// A new slot that carries over everything worth keeping from another one.
+    /// <para>
+    /// Setting up a second slot for a game that is already there means pointing
+    /// at the same screen, the same sound, the same monitor and the same game
+    /// four times. Copying is the whole point of the operation.
+    /// </para>
+    /// <para>
+    /// Three things are deliberately not carried over, and each for its own
+    /// reason. The key has to be unique or <c>RegisterHotKey</c> fails and the
+    /// slot is silently dead, so the copy starts unbound and the user presses a
+    /// key for it. The target is not copied because two slots auto claiming one
+    /// game is the ambiguity <see cref="MatchForeground"/> and the auto-claim
+    /// resolver already have to unpick; a duplicate would double it on every
+    /// launch. And the built-in flag goes, because a copy is the user's own slot
+    /// and should be renameable and deletable like one.
+    /// </para>
+    /// </summary>
+    public static HotkeySlot Duplicate(HotkeySlot source, int index)
+    {
+        HotkeySlot copy = NewSlot(index);
+
+        copy.Name = string.IsNullOrWhiteSpace(source.Name) ? "SLOT" : source.Name + " copy";
+        copy.DisplayPresetId = source.DisplayPresetId;
+        copy.AudioPresetId = source.AudioPresetId;
+        copy.MonitorDevice = source.MonitorDevice;
+        copy.ApplyOnStart = source.ApplyOnStart;
+        copy.Enabled = source.Enabled;
+
+        return copy;
+    }
+
     public static List<HotkeySlot> DefaultSlots()
     {
         List<HotkeySlot> slots = new();
@@ -339,6 +371,52 @@ public sealed class SlotService
             || string.Equals(slot.AudioPresetId, activeAudioId, StringComparison.OrdinalIgnoreCase);
 
         return screen && sound;
+    }
+
+    /// <summary>
+    /// The output device a slot should actually send sound to.
+    /// <para>
+    /// The slot's own device when it names one the app currently knows about,
+    /// and the app's own setting otherwise. That fallback is the whole reason
+    /// this is a function and not a property read: a device that was unplugged,
+    /// renamed by a driver update, or removed since the slot named it has to
+    /// resolve to something real.
+    /// </para>
+    /// <para>
+    /// Falling back rather than sending the stale name is what keeps this from
+    /// reaching the output repair. The repair exists because the engine
+    /// sometimes does not take a device, and it works by noticing a
+    /// disagreement and putting a usable one back. Handing it a name that is
+    /// already gone would be asking it to recover from something the app could
+    /// have answered before the engine ever saw it, and the app's own
+    /// configuration is a perfectly good answer.
+    /// </para>
+    /// <para>
+    /// Matched case insensitively, and the match comes back rather than the slot's
+    /// own spelling. These names come from a driver and the engine looks the
+    /// device up by name, so sending back a hand edited lower case version of one
+    /// that is present would be a device the engine does not recognise - which is
+    /// the same failure as sending a device that is genuinely gone, arrived at by
+    /// a different route.
+    /// </para>
+    /// </summary>
+    public static string ResolveOutputDevice(
+        HotkeySlot slot,
+        IReadOnlyList<string> knownDevices,
+        string appDevice)
+    {
+        if (!string.IsNullOrWhiteSpace(slot.OutputDeviceId))
+        {
+            foreach (string known in knownDevices)
+            {
+                if (string.Equals(known, slot.OutputDeviceId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return known;
+                }
+            }
+        }
+
+        return appDevice;
     }
 
     public static HashSet<string> TargetProcessNames(IEnumerable<HotkeySlot> slots)

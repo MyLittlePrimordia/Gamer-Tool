@@ -148,35 +148,16 @@ public class BacklightStatusTests
         Assert.Throws<ArgumentNullException>(() => BacklightStatus.For(null!));
     }
 
-    [Fact]
-    public void A_machine_with_one_working_display_keeps_the_feature()
-    {
-        // Three monitors, two of which cannot be reached. The user has a working
-        // slider on the third, and hiding the whole feature would take away
-        // something they can actually use.
-        List<MonitorProbe> monitors = new()
-        {
-            Live(),
-            Probe(),
-            Probe()
-        };
-
-        Assert.False(BacklightStatus.ShouldRetireMachine(monitors, 99));
-    }
-
-    [Fact]
-    public void A_machine_where_nothing_works_retires_the_feature()
-    {
-        List<MonitorProbe> monitors = new() { Probe(), Probe() };
-
-        Assert.True(BacklightStatus.ShouldRetireMachine(monitors, 2));
-    }
-
-    [Fact]
-    public void A_machine_with_no_displays_at_all_is_never_retired()
-    {
-        // Nothing was asked, so nothing was learned. Retiring here would hide the
-        // feature on a laptop with the lid closed, and put it back when opened.
-        Assert.False(BacklightStatus.ShouldRetireMachine(new List<MonitorProbe>(), 99));
-    }
+    // The three tests that used to sit here asked BacklightStatus whether a
+    // machine should be retired, through a predicate nothing in the app called.
+    // They have been removed rather than repointed, because the two policies they
+    // were about are already covered against the code that actually runs:
+    //
+    //   One_working_display_among_several_keeps_the_feature
+    //   A_round_with_no_displays_resets_rather_than_counting
+    //   Two_failed_rounds_in_a_row_retire_the_feature
+    //
+    // all in BacklightAvailabilityTests, all driving BacklightAvailability.Record.
+    // Keeping a second set here would assert the same policy against a second
+    // implementation of it, which is how the two could drift apart unnoticed.
 }

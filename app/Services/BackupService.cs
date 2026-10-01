@@ -25,10 +25,29 @@ public sealed class BackupFile
 
     public int Version { get; set; }
 
-    public DateTime CreatedAt { get; set; } = DateTime.Now;
-
-    public string CreatedOn { get; set; } = string.Empty;
-
+    /// <summary>
+    /// The whole configuration being backed up, and nothing else.
+    /// <para>
+    /// There used to be two more fields here: a creation timestamp and the
+    /// computer's name. Neither was ever read - not by the importer, not by the
+    /// UI, not by a test - so both were payload that only left the machine. The
+    /// name was the sharper problem, because a backup is a file people are meant
+    /// to hand to somebody else, and <c>AppLog.Sanitise</c> goes out of its way to
+    /// redact the user name from every log line for exactly that reason. The same
+    /// file was then stamped with the machine name on the way out of the export.
+    /// </para>
+    /// <para>
+    /// The date is not lost by dropping the timestamp: the suggested file name
+    /// carries it. Removing it also makes an export of unchanged settings
+    /// byte-for-byte reproducible, which it was not while a wall clock was in
+    /// there.
+    /// </para>
+    /// <para>
+    /// Backups written by an older build still import. System.Text.Json ignores
+    /// members it does not recognise, so the two removed fields are simply
+    /// skipped on the way in.
+    /// </para>
+    /// </summary>
     public AppSettings? Settings { get; set; }
 }
 
@@ -139,7 +158,6 @@ public sealed class BackupService
         {
             Format = FormatTag,
             Version = FormatVersion,
-            CreatedOn = Environment.MachineName,
             Settings = settings
         };
 
@@ -357,10 +375,21 @@ public sealed class BackupService
             report.SoundDeviceReset = true;
         }
 
+        // A saved engine path belongs to the machine that wrote it. Restoring a profile
+        // is the main way a path arrives from somewhere else, and it is not
+        // automatically wrong: FxSound installed in a custom folder is still the
+        // engine, and the app already looks in four places for it. So the working
+        // path is preferred and the imported one is only kept when it points at
+        // something that is actually called FxSound.exe.
+        //
+        // The old rule replaced the path only when the imported one did not exist,
+        // which left a path from another machine in place whenever it did. That is
+        // the shape of a problem rather than a nuisance: the path is the FileName
+        // of a process the app launches, and a profile is the sort of thing people
+        // swap, so a backup carrying someone else's path would have run whatever
+        // it named, as this user, on every engine call.
         if (!string.IsNullOrWhiteSpace(workingFxSoundPath)
-            && settings.FxSoundPath.Length > 0
-            && !File.Exists(settings.FxSoundPath)
-            && File.Exists(workingFxSoundPath))
+            && !AudioService.IsPlausibleFxSoundPath(settings.FxSoundPath))
         {
             settings.FxSoundPath = workingFxSoundPath;
             report.FxSoundPathReset = true;
@@ -470,7 +499,7 @@ public sealed class BackupService
 
         if (report.FxSoundPathReset)
         {
-            report.Notes.Add("The saved FxSound folder was not here, so the one found on this PC is used.");
+            report.Notes.Add("The saved FxSound folder was not one this app would use, so the one found on this PC is used instead.");
         }
     }
 }

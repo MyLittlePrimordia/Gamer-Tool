@@ -47,6 +47,7 @@ public partial class MainWindow : Window
         _settings.FxPromptDisabled = FxPromptBox.IsChecked == true;
         _settings.StartHidden = StartHiddenBox.IsChecked == true;
         _settings.CloseToTray = CloseToTrayBox.IsChecked == true;
+        SyncNightScheduleControls();
 
         bool wasEnabled = _settings.HardwareBrightnessEnabled;
         _settings.HardwareBrightnessEnabled = HardwareBrightnessBox.IsChecked == true;
@@ -79,16 +80,10 @@ public partial class MainWindow : Window
                 Backlight.Probe();
                 Dispatcher.InvokeAsync(() =>
                 {
-                    // The probe may have decided the feature is not worth offering on
-                    // this machine at all. Acting on it here rather than inside the
-                    // probe keeps the settings write and the repaint on the UI
-                    // thread, where they belong.
-                    if (Backlight.ConsumeRetirement())
-                    {
-                        _settings.HardwareBrightnessEnabled = false;
-                        HardwareBrightnessBox.IsChecked = false;
-                    }
-
+                    // Deliberately not doing the retirement check here. It is what
+                    // AfterBacklightProbe is for, and calling it here as well meant
+                    // every retirement was handled twice on this path - two log
+                    // lines for one event, and the switch moved twice.
                     AfterBacklightProbe();
                 });
             });
@@ -201,13 +196,19 @@ public partial class MainWindow : Window
 
         bool wanted = StartWithWindowsBox.IsChecked == true;
         bool ok = _startup.SetEnabled(wanted);
-        _settings.StartWithWindows = ok && wanted;
         Commit();
 
         if (!ok && wanted)
         {
             StartWithWindowsBox.IsChecked = false;
-            Flash("Could not enable, try again as admin", true);
+
+            // No mention of being an administrator. The key is under the current
+            // user, which never needs elevation, so "try again as admin" named a
+            // remedy that cannot possibly be the answer and would have sent
+            // somebody off to run a portable app elevated for no reason. The
+            // realistic causes are a locked-down profile folder or a policy, and
+            // the user can also just tick the box in Task Manager's Startup tab.
+            Flash("Could not write the startup entry", true);
         }
     }
 
@@ -215,6 +216,16 @@ public partial class MainWindow : Window
     private void ApplyWatchState()
     {
         bool wanted = _settings.AutoSwitch && _settings.Slots.Any(s => s.Enabled && s.AutoActivate);
+
+        // Cleared on the way into both arms, not only when arming. The watcher
+        // remembers the last foreground window so it can raise a change once
+        // rather than on every tick, and that memory outlives a stop: without
+        // this, turning auto-switch off and on again while sitting in a game
+        // re-armed the watcher with the game's window still recorded, and the
+        // next tick read the same window and either missed the change or, worse,
+        // matched a slot again for a game the user had already left.
+        _watcher.Reset();
+
         if (wanted)
         {
             _watcher.PrimeProcesses(SlotService.TargetProcessNames(_settings.Slots));
@@ -397,7 +408,18 @@ public partial class MainWindow : Window
 
     private void OnUpgradeFxSoundClick(object sender, RoutedEventArgs e)
     {
-        _ = UpgradeFxSoundAsync();
+        // Two jobs, decided by what is already known. The banner's button says
+        // "Check update" until a check has happened, and pressing it then is an
+        // explicit request to go and look - which is the only path in the app that
+        // touches the network for anything other than an install the user asked
+        // for. Once an update is known the same button performs it.
+        if (_fxUpdateAvailable)
+        {
+            _ = UpgradeFxSoundAsync();
+            return;
+        }
+
+        _ = CheckFxSoundUpdateAsync();
     }
 
 
@@ -689,10 +711,17 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Past this point the window really is closing, so the fault handlers stop
+        // interrupting. Set here rather than in the close-to-tray branch above,
+        // which is not a shutdown at all.
+        _quitting = true;
+        SessionState.Current.ShuttingDown = true;
+
         _audioPreview.Pause();
         _previewFrameTimer?.Stop();
         _diagFeedbackTimer?.Stop();
-        Commit();
+        _previewTimer.Stop();
+        StopNightScheduleTimer();
         _tray?.Dispose();
         _tray = null;
         _hotkeys.Dispose();
@@ -701,6 +730,19 @@ public partial class MainWindow : Window
         _audioPreview.Dispose();
         _spectrum?.Release();
         EmergencyReset.Run();
+
+        // Written after the restore, not before it, and the order is the whole
+        // point. Restoring the backlight empties OriginalHardwareBrightness, which
+        // is what records the value each display was found at. Saving first left
+        // that map on disk with the session's entries still in it, and the next
+        // launch trusted them: TrySet only captures a display's brightness when
+        // the map has nothing for it, so a stale entry from a previous session
+        // suppressed the capture, and a restore three sessions later dragged a
+        // monitor back to a brightness that had nothing to do with this one.
+        // Saving afterwards persists the empty map, which is the honest record
+        // that there is nothing outstanding to put back.
+        Commit();
+
         if (_stateTimer is not null)
         {
             _stateTimer.Stop();

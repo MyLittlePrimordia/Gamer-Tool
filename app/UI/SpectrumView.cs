@@ -82,6 +82,9 @@ public sealed class SpectrumView
     /// <summary>Set once the first capture has been logged, so it is not logged on every start.</summary>
     private bool _announced;
 
+    /// <summary>True between <see cref="Start"/> and <see cref="Stop"/>, so starts cannot stack.</summary>
+    private bool _running;
+
     public SpectrumView(Grid host, ISampleFeed feed)
     {
         _host = host;
@@ -109,8 +112,49 @@ public sealed class SpectrumView
     /// <summary>True while real audio is arriving.</summary>
     public bool IsLive => _feed.IsLive;
 
+    /// <summary>
+    /// The tallest level currently on its way to the screen, zero when the row
+    /// has nothing to show.
+    /// <para>
+    /// Public because "the bars are stuck" is a question about the drawn
+    /// spectrum rather than about any one stage of producing it, so a test that
+    /// cannot see the drawn row has to be able to ask about the levels feeding
+    /// it. The smoother is not asked directly: that is a step short of the thing
+    /// the complaint was about.
+    /// </para>
+    /// </summary>
+    public double PeakLevel
+    {
+        get
+        {
+            double peak = 0.0;
+            ReadOnlySpan<double> levels = _smoother.Levels;
+            for (int i = 0; i < levels.Length; i++)
+            {
+                if (levels[i] > peak)
+                {
+                    peak = levels[i];
+                }
+            }
+
+            return peak;
+        }
+    }
+
     public void Start()
     {
+        // Asked for on every window state change, every visibility change and
+        // every page switch, so it arrives constantly while the tab is on screen.
+        // Answering it every time used to reopen the capture underneath the
+        // running one and reset the announcement flag, which is why the log said
+        // the loopback had come live again every twenty seconds on a machine
+        // where nothing about the audio had changed at all.
+        if (_running)
+        {
+            return;
+        }
+
+        _running = true;
         _feed.Start();
         _announced = false;
 
@@ -122,6 +166,7 @@ public sealed class SpectrumView
 
     public void Stop()
     {
+        _running = false;
         _timer.Stop();
         _feed.Stop();
         _smoother.Reset();
@@ -130,6 +175,7 @@ public sealed class SpectrumView
 
     public void Release()
     {
+        _running = false;
         _timer.Stop();
         _feed.Stop();
     }
@@ -218,6 +264,23 @@ public sealed class SpectrumView
         double dt = _lastTick <= 0.0 ? 1.0 / 60.0 : Math.Clamp(now - _lastTick, 0.0, 0.1);
         _lastTick = now;
 
+        Draw(dt);
+    }
+
+    /// <summary>
+    /// One drawn frame. Separated from the timer so a test can step the display
+    /// without waiting on a real clock.
+    /// <para>
+    /// Public because the freeze this reaches is a behaviour of the whole
+    /// chain - feed, analyser, smoothing, draw - and none of the halves can show
+    /// it on their own. The seam exists for that, not so the timer can be
+    /// swapped out.
+    /// </para>
+    /// </summary>
+    public void Draw(double dtSeconds)
+    {
+        double dt = Math.Clamp(dtSeconds, 0.0, 0.1);
+
         int got = _feed.Read(_samples);
 
         // A full window or nothing, which is what the analyser itself requires.
@@ -245,6 +308,34 @@ public sealed class SpectrumView
         // raw frame to frame and looked like they were having a fight.
         _smoother.Push(_raw.AsSpan(), analysed, dt);
         _bars.Update(_smoother.Levels, Math.Max((_host.ActualHeight - 4) / 2.0, 1));
+
+        // Once the bars have decayed to silence on their own, saying so is
+        // clearer than leaving a flat row that could be read as a stalled
+        // display. Only after the decay, so a pause between tracks does not
+        // flicker the message in and out.
+        if (!analysed && LevelsAreSilent(_smoother.Levels))
+        {
+            _bars.SetIdle(_feed.IsLive
+                ? "Nothing playing"
+                : "Audio capture unavailable");
+        }
+    }
+
+    /// <summary>
+    /// True when every drawn level has reached zero, which is the only moment a
+    /// flat row is silence rather than a row that has not been told anything yet.
+    /// </summary>
+    private static bool LevelsAreSilent(ReadOnlySpan<double> levels)
+    {
+        for (int i = 0; i < levels.Length; i++)
+        {
+            if (levels[i] > 0.0)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
 
@@ -259,14 +350,30 @@ public sealed class SpectrumView
 /// </para>
 /// <para>
 /// The pitch is still worked out in whole device pixels, for the reason given on
-/// <see cref="SpectrumView.LayoutColumns"/>: 423 pixels across 48 bars is 8.81
+/// <see cref="SpectrumView.LayoutColumns"/>: 423 pixels across eighty bars is 5.28
 /// each, which cannot be drawn as equal whole pixel steps, and letting the
 /// leftover land in the gaps makes the row read as unevenly spaced.
+/// </para>
+/// <para>
+/// The bar count is <see cref="SpectrumView.BarCount"/> rather than a number of
+/// its own, and that is the whole point of writing it that way. It used to be a
+/// literal forty eight sitting here while the analyser produced eighty bands, so
+/// <c>Update</c> silently copied the first forty eight and threw the rest away.
+/// The row then drew the bottom 1.4 kHz of an 80 band spread across the full
+/// width, and everything from there to 16 kHz was never drawn at all - while the
+/// class above it described the range as 40 Hz to 16 kHz, and the layout tests
+/// went on checking the pitch arithmetic for eighty bars. Tying the two numbers
+/// together means the next count change cannot be half made.
 /// </para>
 /// </summary>
 public sealed class SpectrumBars : FrameworkElement
 {
-    private const int Count = 48;
+    /// <summary>
+    /// How many bars the row draws, which is exactly as many as the analyser
+    /// produces. Public because that equality is the thing worth asserting: the
+    /// two numbers were once independent and the gap was invisible.
+    /// </summary>
+    public const int BarCount = SpectrumView.BarCount;
     /// <summary>
     /// Share of the pitch that a bar fills. The remainder is the gap between
     /// bars.
@@ -285,7 +392,14 @@ public sealed class SpectrumBars : FrameworkElement
     public const double MinDrawablePitch = 3;
 
     private readonly Brush _brush;
-    private readonly double[] _level = new double[Count];
+    private readonly double[] _level = new double[BarCount];
+
+    /// <summary>
+    /// How many of those bars the current width has room for. Equal to
+    /// <see cref="BarCount"/> at any width the panel normally occupies, and fewer
+    /// only on a box too narrow to give every bar a pixel of pitch and a gap.
+    /// </summary>
+    private int _drawable = BarCount;
 
     private double _pitch = 8;
     private double _barWidth = 6;
@@ -407,16 +521,19 @@ public sealed class SpectrumBars : FrameworkElement
     {
         double scale = dpiScale > 0 ? dpiScale : 1.0;
         int deviceWidth = (int)Math.Round(actualWidth * scale);
-        int pitch = deviceWidth / Count;
 
-        // Below about three pixels of pitch there is no room for a bar and a gap,
-        // and a sub pixel bar would only look like noise.
-        if (pitch < MinDrawablePitch)
-        {
-            return;
-        }
+        // Fewer device pixels than there are bars. Rather than keeping the last
+        // layout and drawing the new count at the old pitch, which would run the
+        // row off the right edge of its own box, the bars are dropped from the
+        // end until there is room for them. Losing the top of the spectrum is a
+        // better answer than a row drawn on top of whatever sits next to it, and
+        // it only happens at widths the panel does not normally occupy.
+        int drawable = Math.Max(1, (int)(deviceWidth / MinDrawablePitch));
+        int bars = Math.Min(BarCount, drawable);
+        _drawable = bars;
 
-        _pitch = pitch / scale;
+        int pitch = deviceWidth / bars;
+        _pitch = Math.Max(1, pitch) / scale;
 
         // The bar is a share of the pitch, and the rest is gap, rather than a
         // fixed number of pixels. Two reasons.
@@ -434,7 +551,7 @@ public sealed class SpectrumBars : FrameworkElement
         int deviceBar = (int)(pitch * BarDuty);
 
         // Always leave at least one pixel of gap, or the row fuses into a band.
-        deviceBar = Math.Clamp(deviceBar, 1, pitch - 1);
+        deviceBar = Math.Clamp(deviceBar, 1, Math.Max(1, pitch - 1));
         _barWidth = Math.Max(1.0, deviceBar / scale);
 
         // Rounded, but only just. The cap used to be half the bar width, which on
@@ -442,7 +559,10 @@ public sealed class SpectrumBars : FrameworkElement
         // as beads on a string instead of as a spectrum.
         _radius = Math.Min(1.25, _barWidth / 3.0);
 
-        int groupWidth = pitch * Count;
+        // The leftover becomes an equal inset at each end, so the row is centred
+        // and the gaps stay even rather than the remainder all landing on one
+        // side.
+        int groupWidth = pitch * bars;
         int insetLeft = (deviceWidth - groupWidth) / 2;
         _inset = insetLeft / scale;
 
@@ -462,7 +582,7 @@ public sealed class SpectrumBars : FrameworkElement
         double centreY = RenderSize.Height / 2.0;
         double x = _inset;
 
-        for (int i = 0; i < Count; i++)
+        for (int i = 0; i < _drawable; i++)
         {
             // Doubled, because the bar is centred on the axis and grows both ways,
             // so a loud passage reads as a thick symmetric band rather than a row

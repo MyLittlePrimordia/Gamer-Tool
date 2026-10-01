@@ -22,6 +22,17 @@ public sealed class SessionState
     /// </summary>
     public Action? RestoreBacklight { get; set; }
 
+    /// <summary>
+    /// Set the moment the app starts going away, so the fault handlers can tell a
+    /// problem worth showing from teardown noise.
+    /// <para>
+    /// Process wide rather than a field on the window, because the handlers that
+    /// need to read it are static and are reached from threads that have no window
+    /// to ask.
+    /// </para>
+    /// </summary>
+    public bool ShuttingDown { get; set; }
+
     public static SessionState Current { get; } = new();
 
     private int _done;
@@ -93,6 +104,21 @@ public static class EmergencyReset
         catch (Exception ex)
         {
             TraceLog.Write("RESET", ex);
+        }
+
+        // Last, and only if there is anything to undo. The preset file is the
+        // last thing this app needs in FxSound's folder: it exists so the engine
+        // can be handed an equaliser curve, and by the time the process is going
+        // away nothing is being applied any more. Leaving it behind would mean
+        // writing into another program's data directory and staying there.
+        //
+        // Gated on the same flags as the reset above so a launch where the user
+        // never touched anything does not go poking in a folder it never wrote
+        // to, and last so the audio has already been put back first in the
+        // vanishingly unlikely case the engine wants the file to still be there.
+        if (state.DisplayTouched || state.AudioTouched)
+        {
+            FxPresetFile.RemoveWrittenPreset();
         }
     }
 }

@@ -81,6 +81,12 @@ public partial class MainWindow : Window
 
     private AppSettings _settings;
 
+    /// <summary>
+    /// A one-line account of a profile that did not come from the file, shown once
+    /// the window is up. Null the rest of the time, so the common launch is silent.
+    /// </summary>
+    private readonly string? _settingsRescue;
+
 
     private DisplayPreset _workDisplay = DisplayPreset.Flat();
 
@@ -142,6 +148,9 @@ public partial class MainWindow : Window
     /// <summary>Set by the launch-time winget query in SetupService.</summary>
     private bool _fxUpdateAvailable;
 
+    /// <summary>Keeps the launch-time query to once, whatever else asks for it.</summary>
+    private bool _fxUpdateChecked;
+
 
     private string _fxUpdateVersion = string.Empty;
 
@@ -192,6 +201,19 @@ public partial class MainWindow : Window
 
         _settings = _profiles.Load();
 
+        // Said once, on the window, rather than nowhere. A profile that came back
+        // from somewhere other than the file itself is worth knowing about, and so
+        // is a profile that started from defaults because the real one was
+        // damaged: without a line saying so, both look identical to the user who
+        // finds their presets and slots have gone.
+        _settingsRescue = _profiles.Quarantined
+            ? _profiles.RecoveredFromBackup
+                ? "Settings were damaged, and were restored from the backup"
+                : "Settings were damaged. A copy was kept in the settings folder"
+            : _profiles.RecoveredFromBackup
+                ? "Settings were restored from the backup"
+                : null;
+
         // Settings saved by an older build carry the old defaults, so they are
         // brought up to date before anything reads the active presets.
         if (_settings.Schema < AppSettings.CurrentSchema)
@@ -214,6 +236,15 @@ public partial class MainWindow : Window
         BlueLightBox.ItemsSource = DisplayPreset.BlueLightNames.ToList();
         BlueLightBox.SelectedItem = DisplayPreset.BlueLightNames[
             Math.Clamp(_settings.BlueLightFilter, 0, DisplayPreset.BlueLightNames.Length - 1)];
+
+        // The two hour pickers, filled here rather than in the sync below.
+        // SyncNightScheduleControls only ever sets SelectedItem, and a selection
+        // with nothing behind it is silently dropped - so with the list left
+        // empty the two boxes rendered as empty bordered rectangles and the
+        // schedule had no times to work from. Both halves of a combo are needed
+        // to make one.
+        NightStartBox.ItemsSource = NightSchedule.TimeLabels;
+        NightEndBox.ItemsSource = NightSchedule.TimeLabels;
         BuildModal();
 
         _display.StatusChanged += SetRailStatus;
@@ -255,16 +286,56 @@ public partial class MainWindow : Window
         Closing += OnClosing;
         Loaded += OnWindowLoaded;
 
-        // Whatever ends this app, including a crash or a kill, the displays go
-        // back to the brightness they were found at.
+        // The displays go back to the brightness they were found at on the way out, and
+        // this is what puts that in front of the exit path. EmergencyReset calls it
+        // before it checks anything else, because whether the gamma ramp or the
+        // audio were ever touched is beside the point: a display this app dimmed
+        // has to come back whatever else happened.
+        //
+        // Worth being exact about what that covers, because it used to be claimed
+        // for a kill as well. It covers closing the window, quitting from the tray,
+        // and a crash - an unhandled exception still runs the ProcessExit handler,
+        // which is why these two registrations exist at all.
+        //
+        // It does not cover being terminated from outside: Task Manager's End Task,
+        // Stop-Process -Force, another program calling TerminateProcess, or a hard
+        // power cut. Those do not run managed code, so nothing here can answer
+        // them, and a monitor the app had dimmed stays dimmed. There is no honest
+        // way to close that gap - the process is already gone - and the
+        // remembered-brightness map is not a recovery for it either, since nothing
+        // reads it back at startup. Worth knowing the limit, not worth pretending
+        // otherwise.
         SessionState.Current.RestoreBacklight = () => Backlight.RestoreAll();
 
         SyncControlsFromSettings();
 
         _tray = new TrayService();
         _tray.ShowRequested += RestoreFromTray;
-        _tray.ResetScreenRequested += () => Dispatcher.Invoke(() => _display.Reset());
-        _tray.ResetSoundRequested += () => Dispatcher.Invoke(() => _ = _audio.ResetSoundAsync());
+
+        // Routed through the same two methods the reset button and the panic key
+        // use, rather than calling the services directly. Those are documented as
+        // the one definition of "back to normal", and the tray was the third way
+        // in that skipped them: the screen went to neutral on the display while
+        // the panel, the remembered preset id and the profile all still said
+        // something else, so the app came back up on the preset the user had just
+        // turned off. And the sound reset ran its engine calls on the dispatcher,
+        // which is up to ten seconds of a frozen window with no sign anything was
+        // happening - from a tray menu, where the window is not even on screen.
+        _tray.ResetScreenRequested += () => Dispatcher.Invoke(GoScreenNeutral);
+        _tray.ResetSoundRequested += () => _ = Dispatcher.InvokeAsync(async () => await GoSoundNeutralAsync());
+
+        // The same dispatcher hop the two above use, and then ToggleSlot rather
+        // than PlaySlot, so choosing a slot from the tray loads it the first
+        // time and takes it back off the second, exactly as its key does.
+        _tray.SlotRequested += id => _ = Dispatcher.InvokeAsync(async () =>
+        {
+            HotkeySlot? slot = _settings.Slots.FirstOrDefault(s => s.Id == id);
+            if (slot is not null)
+            {
+                await ToggleSlot(slot);
+            }
+        });
+
         _tray.QuitRequested += QuitApp;
 
         // The output list is not filled here. Working it out means reading the
@@ -282,7 +353,10 @@ public partial class MainWindow : Window
         UpdateLiveLabels();
         RenderDisplayPreview();
         _audioPreview.StateChanged += UpdateAudioPreviewState;
-        _audioPreview.Failed += text => Flash(text + " failed, check the assets folder", true);
+        // No "check the assets folder" any more. There is no assets folder: the
+        // loops are read out of the executable, so the only thing that can make
+        // one fail is a damaged build.
+        _audioPreview.Failed += text => Flash(text + " failed, the app may be damaged", true);
         _audioPreview.Prepare();
         UpdatePreviewTrackButton();
 
@@ -315,19 +389,75 @@ public partial class MainWindow : Window
     }
 
 
-        private void HideToTray()
+private void HideToTray()
         {
-            // The spectrum holds a WASAPI client open, and one left running for
-            // the hours an app spends in the tray shows up as audio the app is
-            // using for no visible reason. Stopped here and started again by
-            // RestoreFromTray.
-            _spectrum?.Stop();
-
             Hide();
             ShowInTaskbar = false;
             _tray?.Show();
+
+            // Both halves of the Audio tab's background work stop here rather than
+            // only the spectrum. This used to stop the analyser on the way to the
+            // tray and leave the four second poll running, so an app nobody could
+            // see went on starting FxSound.exe --status about fifteen times a
+            // minute for as long as it stayed resident.
+            UpdateAudioTabActivity();
         }
 
+
+    /// <summary>
+    /// Whether anyone can actually see the Audio tab.
+    /// <para>
+    /// Selected, on screen, and not minimised. Deliberately does not include
+    /// whether the window has focus: the case this exists for is a fullscreen
+    /// game with the tool behind it, but a second monitor with the tool parked on
+    /// it is the same picture - the spectrum is right there in plain sight, and
+    /// freezing it because an unrelated window elsewhere took focus would be
+    /// wrong.
+    /// </para>
+    /// </summary>
+    private bool AudioTabVisible =>
+        IsVisible
+        && WindowState != WindowState.Minimized
+        && Pages.SelectedIndex == 1;
+
+    /// <summary>
+    /// The one decision about whether the Audio tab is doing background work.
+    /// <para>
+    /// Two things used to be tied together by hand and drifted apart. The
+    /// analyser stopped on a tab change and on a hide to the tray, but not on a
+    /// minimise or on the window being covered, and the four second engine poll
+    /// stopped on nothing at all. Each poll starts a FxSound.exe --status process
+    /// and waits on it, and each running analyser holds a WASAPI capture open that
+    /// shows up in the volume mixer as the app using audio for no visible reason.
+    /// So both are now asked the same question here.
+    /// </para>
+    /// <para>
+    /// Coming back to the tab takes one immediate read rather than waiting out the
+    /// first interval, so the band frequencies under the faders are right straight
+    /// away. Every event-driven read elsewhere - after an apply, a restore, an
+    /// install, a device change - is untouched and still fires whether the tab is
+    /// up or not, because those are answers to something the user just did rather
+    /// than a background watch.
+    /// </para>
+    /// </summary>
+    private void UpdateAudioTabActivity()
+    {
+        if (AudioTabVisible)
+        {
+            _spectrum?.Start();
+
+            if (_stateTimer is not null && !_stateTimer.IsEnabled && _audio.IsInstalled)
+            {
+                _stateTimer.Start();
+                _ = RefreshFxStateAsync(true);
+            }
+
+            return;
+        }
+
+        _spectrum?.Stop();
+        _stateTimer?.Stop();
+    }
 
 
     private void RestoreFromTray()
@@ -343,14 +473,10 @@ public partial class MainWindow : Window
 
             Activate();
 
-            // Only if the Audio tab is the one being restored to. Starting the
-            // capture on any other tab would open a WASAPI client for a picture
-            // nobody can see, which is exactly what stopping it on the way out was
-            // for.
-            if (Pages.SelectedIndex == 1)
-            {
-                _spectrum?.Start();
-            }
+            // Asked as a question rather than answered by looking at the tab
+            // index, because arriving back on the Display tab should start
+            // nothing and arriving back on the Audio tab should start both.
+            UpdateAudioTabActivity();
         });
     }
 
@@ -358,9 +484,31 @@ public partial class MainWindow : Window
     private void QuitApp()
     {
         _quitting = true;
+
+        // Before anything else, so a fault raised by the rest of this is not shown
+        // to the user on the way out.
+        SessionState.Current.ShuttingDown = true;
+
         Show();
         _audioPreview.Pause();
+        StopNightScheduleTimer();
         EmergencyReset.Run();
+
+        // Released here rather than waiting for the close handler, so the WASAPI
+        // client and the decoded MP3 go while the runtime is still healthy. Left to
+        // the closing pass they are torn down later in the shutdown sequence, and
+        // anything a finalizer touches during AppDomain unload is running against
+        // a process that is already coming apart. Dispose is guarded, so the close
+        // handler doing it again is harmless.
+        _audioPreview.Dispose();
+
+        // For the same reason the window's close path does this after the restore
+        // rather than before: restoring empties the map of the brightness each
+        // display was found at, and quitting through the tray without saving
+        // afterwards left the last Commit's copy of it on disk for the next
+        // launch to trust.
+        Commit();
+
         _tray?.Dispose();
         _tray = null;
         Application.Current.Shutdown();
@@ -415,6 +563,7 @@ public partial class MainWindow : Window
         CloseToTrayBox.IsChecked = _settings.CloseToTray;
         AntiClipBox.IsChecked = _settings.AntiClip;
         BypassBox.IsChecked = BypassToggle.IsEngaged(_settings.EffectsEnabled);
+        LoudGuardBox.IsChecked = _settings.LoudGuard;
         HardwareBrightnessBox.IsChecked = _settings.HardwareBrightnessEnabled;
 
         // A machine the app retired the feature on comes back with the switch off
@@ -423,14 +572,17 @@ public partial class MainWindow : Window
         // collapsed; the user turns the switch on and gets the two rounds again.
         RefreshBacklightNote();
 
+        // Asked of the registry, and the registry is the only place it lives. The
+        // switch used to be mirrored into the settings file as well, which made
+        // the JSON claim to hold a value nothing ever read.
         StartWithWindowsBox.IsChecked = _startup.IsEnabled;
-        _settings.StartWithWindows = _startup.IsEnabled;
 
         BlueLightBox.SelectedItem = DisplayPreset.BlueLightNames[
             Math.Clamp(_settings.BlueLightFilter, 0, DisplayPreset.BlueLightNames.Length - 1)];
 
         _audio.AntiClipEnabled = _settings.AntiClip;
         _audio.EffectsEnabled = _settings.EffectsEnabled;
+        _audio.LoudGuardEnabled = _settings.LoudGuard;
         _display.SetLock(_settings.GammaLock);
         UpdateAntiClipReadout();
     }
@@ -480,15 +632,10 @@ public partial class MainWindow : Window
             RefreshBacklightNote();
         }
 
-        // The analyser only burns CPU while it is actually on screen.
-        if (index == 1)
-        {
-            _spectrum?.Start();
-        }
-        else
-        {
-            _spectrum?.Stop();
-        }
+        // The analyser only burns CPU while it is actually on screen, and the engine
+        // poll only runs while there is somebody to read it. Asked as one question
+        // so the two cannot come to disagree.
+        UpdateAudioTabActivity();
 
         // Same reasoning for the looping preview: no reason to keep a picture
         // moving on a tab nobody is looking at.
@@ -555,12 +702,30 @@ public partial class MainWindow : Window
         _display.StartLock();
         _display.SetLock(_settings.GammaLock);
 
+        // After the scan, because the first thing the schedule does when it is
+        // already inside its hours is push a ramp, and it needs a monitor to
+        // push it to. Started here rather than in the constructor for the same
+        // reason the audio state timer is: nothing below this line depends on
+        // it, and a constructor that touches the display service before the
+        // window is up is the thing that made the window take seconds to
+        // appear.
+        StartNightScheduleTimer();
+
         UpdateFxBanner();
         _ = FinishStartupAsync();
 
+        // Created here, started by UpdateAudioTabActivity and not before. It used
+        // to start immediately and then run for the whole life of the process,
+        // whatever the user was looking at or whether the window existed at all.
         _stateTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
         _stateTimer.Tick += (s, e) => _ = RefreshFxStateAsync(false);
-        _stateTimer.Start();
+
+        // The two moments that are neither a tab change nor a hide to the tray,
+        // and so were the two the spectrum was still capturing through.
+        StateChanged += (_, _) => UpdateAudioTabActivity();
+        IsVisibleChanged += (_, _) => UpdateAudioTabActivity();
+
+        UpdateAudioTabActivity();
 
         if (_settings.StartHidden)
         {
@@ -570,6 +735,27 @@ public partial class MainWindow : Window
         if (_settings.ShowOsd)
         {
             Flash("Ready, hit a slot key to load");
+        }
+
+        // Said after the ready line rather than instead of it, because it explains
+        // the state the window is now in and the ready line is just orientation.
+        // Only for a profile that did not come from where it was left, so a normal
+        // launch says nothing extra.
+        //
+        // The status strip carries it rather than the OSD because Flash is
+        // suppressed when the OSD is switched off, and this is the one line that
+        // must not be suppressed: without it a user whose presets and slots have
+        // gone has no way to connect what they are looking at with what happened
+        // to the file.
+        if (!string.IsNullOrEmpty(_settingsRescue))
+        {
+            RailStatus.Text = _settingsRescue;
+            RailStatus.Foreground = (Brush)FindResource(_profiles.Quarantined ? "Amber" : "TextMid");
+
+            if (_settings.ShowOsd)
+            {
+                Flash(_settingsRescue, _profiles.Quarantined);
+            }
         }
 
         HotkeySlot? startSlot = _settings.Slots.FirstOrDefault(s => s.Enabled && s.ApplyOnStart && s.HasWork);
@@ -583,16 +769,17 @@ public partial class MainWindow : Window
         // by the live state on the right and by the edited dot on the preset tag.
         UpdateLiveLabels();
 
-        // Both FxSound jobs run off the UI thread: the prompt only appears when
-        // the engine is genuinely missing, and the update badge is filled in
-        // later so a slow winget call never delays the window opening.
+        // No update check here. It used to run on every launch, and it spawns
+        // winget, so an app that never phones home still reached the network
+        // before the user had clicked anything - on a machine where the only
+        // thing the user had done was start it. The check is reachable from the
+        // banner's own update button instead, so it happens when somebody asks
+        // for it rather than every time.
         bool missing = !_setup.IsInstalled(_audio);
         if (missing)
         {
             PromptForFxSound();
         }
-
-        _ = CheckFxSoundUpdateAsync();
     }
 
 
@@ -634,17 +821,48 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>
+    /// Asks winget whether FxSound has a newer build, off the UI thread.
+    /// <para>
+    /// This reaches the network, and it is only ever called because the user
+    /// pressed the banner's update button. It used to be called on every launch as
+    /// well, which put a winget call in front of a user who had done nothing but
+    /// open the app.
+    /// </para>
+    /// <para>
+    /// A launch re-checks at most once, so a second press on the button is a no-op
+    /// rather than a second network call - the guard is here so that promise does
+    /// not quietly depend on there being only one caller.
+    /// </para>
+    /// </summary>
     private async System.Threading.Tasks.Task CheckFxSoundUpdateAsync()
     {
-        FxUpdateResult? result = await System.Threading.Tasks.Task.Run(() => _setup.CheckForUpdate());
-        if (result is null)
+        if (_fxUpdateChecked)
         {
             return;
         }
 
-        _fxUpdateAvailable = result.UpdateAvailable;
-        _fxUpdateVersion = result.AvailableVersion;
-        UpdateFxBanner();
+        _fxUpdateChecked = true;
+        FxUpgradeButton.IsEnabled = false;
+
+        try
+        {
+            FxUpdateResult? result = await System.Threading.Tasks.Task.Run(() => _setup.CheckForUpdate());
+            if (result is not null)
+            {
+                _fxUpdateAvailable = result.UpdateAvailable;
+                _fxUpdateVersion = result.AvailableVersion;
+            }
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("UPDATE CHECK", ex);
+        }
+        finally
+        {
+            FxUpgradeButton.IsEnabled = true;
+            UpdateFxBanner();
+        }
     }
 
 
@@ -966,6 +1184,177 @@ public partial class MainWindow : Window
         ScreenLiveDot.Fill = _liveDisplayName == "NOTHING"
             ? (Brush)FindResource("TextLow")
             : (Brush)FindResource("AccentDisplay");
+
+        UpdateTrayStatus();
+    }
+
+
+    /// <summary>
+    /// Puts what the app is currently doing into the tray tooltip.
+    /// <para>
+    /// The tooltip said "Gamer Tool" and nothing else, for the whole life of the
+    /// app, even though the tray is the one surface the user goes to precisely
+    /// when they have lost the window: it is already open, it is already in the
+    /// corner, and the question at that moment is almost always "is it actually
+    /// doing the thing, or did it quietly not work".
+    /// </para>
+    /// <para>
+    /// Composed from the live preset ids rather than from remembered state, so it
+    /// agrees with the on-screen label by construction. The two halves are named
+    /// the way the slot board names them, and a missing half says so rather than
+    /// leaving a gap that reads like a bug.
+    /// </para>
+    /// <para>
+    /// Deliberately not driven from <see cref="Flash"/>. Every message the app
+    /// raises passes through there, including one-line confirmations, so hooking
+    /// it would leave the tooltip describing the last thing that happened rather
+    /// than the state it is in. Errors are the exception and go through
+    /// <see cref="SetTrayProblem"/>, which does write over it.
+    /// </para>
+    /// </summary>
+    private void UpdateTrayStatus()
+    {
+        try
+        {
+            _tray?.SetStatus(
+                (ActiveSlotName() is { } slot ? slot + " - " : string.Empty)
+                + (PresetName(_activeDisplayId) ?? "no screen")
+                + " + "
+                + (PresetName(_activeAudioId) ?? "no sound"));
+
+            RefreshTraySlots();
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("TRAY", ex);
+        }
+    }
+
+
+    /// <summary>
+    /// Rebuilds the slot lines in the tray menu.
+    /// <para>
+    /// Driven from <see cref="UpdateTrayStatus"/>, which is the one place that
+    /// already runs whenever the loaded slot or either loaded preset changes.
+    /// That is the whole requirement: the lines have to be right when the menu
+    /// opens, and the menu can only be opened by the user, so tying this to a
+    /// "something changed" event rather than to opening the menu means the work
+    /// is not done on the UI thread of a hover and cannot make the menu feel slow
+    /// to open.
+    /// </para>
+    /// <para>
+    /// A slot with nothing set is still listed. Hiding it would make the menu
+    /// change shape as slots are edited, and an empty slot is a slot the user
+    /// made and has not finished; it says so in its own hover text rather than
+    /// vanishing and leaving them wondering where it went.
+    /// </para>
+    /// </summary>
+    private void RefreshTraySlots()
+    {
+        if (_tray is null)
+        {
+            return;
+        }
+
+        string? activeId = _settings.Slots
+            .FirstOrDefault(s => s.Enabled && SlotService.IsLoaded(s, _activeDisplayId, _activeAudioId))?.Id;
+
+        List<TraySlotEntry> entries = new(_settings.Slots.Count(s => s.Enabled));
+
+        foreach (HotkeySlot slot in _settings.Slots)
+        {
+            if (!slot.Enabled)
+            {
+                continue;
+            }
+
+            string monitor = string.IsNullOrWhiteSpace(slot.MonitorDevice)
+                ? string.Empty
+                : _display.MonitorChoices
+                    .FirstOrDefault(c => string.Equals(c.Device, slot.MonitorDevice, StringComparison.OrdinalIgnoreCase))
+                    ?.Name ?? string.Empty;
+
+            entries.Add(new TraySlotEntry
+            {
+                Id = slot.Id,
+                Label = TrayService.ComposeSlotLabel(slot.Name, monitor),
+                Detail = TrayService.ComposeSlotDetail(slot.Hotkey, slot.HasWork ? slot.WorkText : null, monitor),
+                Active = string.Equals(slot.Id, activeId, StringComparison.OrdinalIgnoreCase)
+            });
+        }
+
+        _tray.SetSlots(entries);
+    }
+
+
+    /// <summary>
+    /// The name of the slot that matches what is loaded, or null when none does.
+    /// <para>
+    /// Found by asking <see cref="SlotService.IsLoaded"/> rather than by tracking
+    /// a "current slot" field. A slot can be loaded by a hotkey, by clicking its
+    /// row, by auto-switch when a game starts, or by restoring a profile, and
+    /// remembering it in one place means the tooltip is right for three of those
+    /// four and quietly wrong for the fourth. This asks the same question the
+    /// toggle logic asks, so the tray cannot disagree with what pressing the key
+    /// again would do.
+    /// </para>
+    /// <para>
+    /// Enabled slots are searched first. <c>IsLoaded</c> treats a slot with only
+    /// one half set as matching, so on a profile with a sound-only and a
+    /// screen-only slot the first one in the list would otherwise be named
+    /// regardless of which was actually pressed.
+    /// </para>
+    /// </summary>
+    private string? ActiveSlotName()
+    {
+        HotkeySlot? match = _settings.Slots.FirstOrDefault(s =>
+            s.Enabled && SlotService.IsLoaded(s, _activeDisplayId, _activeAudioId));
+
+        return match?.Name;
+    }
+
+
+    /// <summary>
+    /// Overwrites the tooltip with something that went wrong, which is more worth
+    /// knowing than the current preset until it is fixed.
+    /// </summary>
+    private void SetTrayProblem(string message)
+    {
+        try
+        {
+            _tray?.SetStatus(message);
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("TRAY", ex);
+        }
+    }
+
+
+    /// <summary>
+    /// The display name for a preset id, or null when it is not one we know.
+    /// <para>
+    /// Searches the user's own presets as well as the built-ins, because a user
+    /// who has made their own "Cyberpunk" tune is exactly the person hovering the
+    /// tray to check which one is loaded, and a tooltip reading "no screen" for
+    /// it would be worse than no tooltip.
+    /// </para>
+    /// </summary>
+    private string? PresetName(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return null;
+        }
+
+        return _settings.CustomDisplayPresets
+                .FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase))?.Name
+            ?? DisplayPreset.Defaults
+                .FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase))?.Name
+            ?? _settings.CustomAudioPresets
+                .FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase))?.Name
+            ?? AudioPreset.Defaults
+                .FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase))?.Name;
     }
 
 
@@ -995,6 +1384,16 @@ public partial class MainWindow : Window
         if (_settings.ShowOsd)
         {
             _osd.ShowToast(message, warn);
+        }
+
+        // A warning is the one case where the tooltip should stop describing the
+        // current presets and say what went wrong instead. The window may be
+        // closed, the OSD may be switched off, and either way the user is not
+        // being told that a value did not reach the engine. UpdateLiveLabels
+        // puts the presets back the next time one actually changes.
+        if (warn)
+        {
+            SetTrayProblem(message);
         }
     }
 
@@ -1044,9 +1443,21 @@ public partial class MainWindow : Window
     }
 
 
-    public sealed class DeviceChoice
-    {
-        public string Id { get; set; } = string.Empty;
+public sealed class DeviceChoice
+{
+    /// <summary>
+    /// The name of the entry that means "whatever the app is set to".
+    /// <para>
+    /// Shared rather than written in both places. It appears in the Settings
+    /// dropdown and again in every slot's output picker, and the whole point of
+    /// the slot picker saying the same words is that the user recognises the
+    /// row's default as the same thing as the setting it follows. Two literals
+    /// that happen to match today are two literals that can stop matching.
+    /// </para>
+    /// </summary>
+    public const string SystemDefaultName = "System default";
+
+    public string Id { get; set; } = string.Empty;
 
         public string Name { get; set; } = string.Empty;
 

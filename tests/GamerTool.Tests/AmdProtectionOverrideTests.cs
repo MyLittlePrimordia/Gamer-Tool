@@ -91,36 +91,13 @@ public class AmdProtectionOverrideTests
             AmdProtectionOverride.Classify(legacyFound: true, currentFound: true, currentKeyPresent: false));
     }
 
-    [Fact]
-    public void The_legacy_path_names_the_option_key_the_value_lives_in()
-    {
-        Assert.Equal(
-            @"DisplayPath_8\EDID_E305_A610\Option\ProtectionControl",
-            AmdProtectionOverride.LegacyValuePath(
-                new[] { "DisplayPath_8" },
-                new[] { "EDID_E305_A610" }));
-    }
-
-    [Fact]
-    public void An_edid_key_is_required_so_a_stray_subkey_is_not_mistaken_for_one()
-    {
-        // The legacy tree holds adjustment and option subkeys alongside the per
-        // display ones, and picking up one of those would report a path that does
-        // not exist.
-        Assert.Equal(
-            string.Empty,
-            AmdProtectionOverride.LegacyValuePath(
-                new[] { "DisplayPath_8" },
-                new[] { "Adjustment" }));
-    }
-
-    [Fact]
-    public void An_empty_tree_yields_no_path_rather_than_a_guess()
-    {
-        Assert.Equal(string.Empty, AmdProtectionOverride.LegacyValuePath(
-            Array.Empty<string>(),
-            Array.Empty<string>()));
-    }
+    // Three tests that used to sit here drove LegacyValuePath, a helper that built
+    // the registry path as a string and had no caller. The real walk does not
+    // concatenate paths at all: it opens each level with OpenSubKey, so a path
+    // that does not exist fails visibly rather than reading a key one level too
+    // high. That left the tests asserting a shape the app never uses, which is
+    // worse than no test - the EDID-prefix guard they were nominally about is
+    // real, and it lives in EdidKeys, which is what the walk calls.
 
     [Fact]
     public void The_summary_says_the_setting_is_saved_in_the_wrong_place()

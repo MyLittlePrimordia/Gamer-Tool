@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -495,7 +495,7 @@ public static class HardwareBrightness
     private static readonly object Gate = new();
 
     /// <summary>
-    /// Set while a call is inside its worker, so only ever one is in there.
+/// Set while a call is inside its worker, so only ever one is in there.
     /// <para>
     /// The timeout on a wedged monitor abandons the worker but cannot cancel the
     /// I2C call inside it, and that worker goes on holding the bus lock for as
@@ -506,6 +506,14 @@ public static class HardwareBrightness
     /// back. Refusing new work while one is outstanding caps the damage at a
     /// single consumed thread and reports the bus as busy, which is true.
     /// </para>
+    /// <para>
+    /// The cap only holds because an abandoned transaction keeps the claim rather
+    /// than handing it back - see <see cref="HandBusToAbandonedWorker"/>. Both
+    /// callers used to release it in a <c>finally</c> that ran on the timeout path
+    /// too, so the claim came back while the worker was still holding the lock, and
+    /// the next call walked straight into it. The promise above was the opposite of
+    /// what the code did.
+    /// </para>
     /// </summary>
     private static int _busBusy;
 
@@ -514,10 +522,52 @@ public static class HardwareBrightness
         return Interlocked.Exchange(ref _busBusy, 1) == 0;
     }
 
-    private static void LeaveBus()
+private static void LeaveBus()
     {
         Interlocked.Exchange(ref _busBusy, 0);
     }
+
+    /// <summary>
+    /// Gives the bus claim to a transaction that was abandoned before it finished.
+    /// <para>
+    /// A call that has not come back inside <see cref="ProbeTimeoutMs"/> has left a
+    /// worker still inside the I2C transaction, still holding <see cref="Gate"/>,
+    /// and holding it for good if the monitor never answers. Releasing the claim
+    /// at that point is what turns one wedged monitor into an unbounded leak: the
+    /// next call enters, starts a second worker that blocks on the same lock,
+    /// times out the same way, and hands the claim back the same way - one pool
+    /// thread consumed per attempt, for as long as the window stays open.
+    /// </para>
+    /// <para>
+    /// The note on <see cref="_busBusy"/> promises the damage is capped at a
+    /// single consumed thread. That only holds if the claim outlives the timeout,
+    /// so the worker gives it back when it is genuinely finished rather than when
+    /// someone stopped waiting for it. If the monitor never answers the claim is
+    /// simply never returned, and every later call is told the bus is busy - which
+    /// is the truth, and is what the row wants to show.
+    /// </para>
+    /// </summary>
+    private static void HandBusToAbandonedWorker(Task worker)
+    {
+        _ = worker.ContinueWith(
+            _ => LeaveBus(),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    // The claim is process wide and has no seam of its own, so the three things
+    // needed to exercise the rule are exposed to the test project rather than
+    // reimplemented there. Nothing in the app uses these.
+    internal static bool TryEnterBusForTest() => TryEnterBus();
+
+    internal static void LeaveBusForTest() => LeaveBus();
+
+    internal static void HandBusToAbandonedWorkerForTest(Task worker) => HandBusToAbandonedWorker(worker);
+
+    /// <summary>Whether the bus is currently claimed. For the tests.</summary>
+    internal static bool IsBusClaimed => Interlocked.CompareExchange(ref _busBusy, 0, 0) == 1;
+
 
     private static readonly Dictionary<IntPtr, long> LastCallUtc = new();
 
@@ -735,13 +785,25 @@ public static class HardwareBrightness
             return BusOutcome.Busy;
         }
 
+// Null unless the transaction was abandoned still running, in which case
+        // the claim goes to the worker rather than back to the pool. See
+        // HandBusToAbandonedWorker for why that is not a detail.
+        Task? abandoned = null;
+
         try
         {
-            return WriteBrightness(deviceName, value, minimum, maximum, out why, out win32Error);
+            return WriteBrightness(deviceName, value, minimum, maximum, out why, out win32Error, out abandoned);
         }
         finally
         {
-            LeaveBus();
+            if (abandoned is null)
+            {
+                LeaveBus();
+            }
+            else
+            {
+                HandBusToAbandonedWorker(abandoned);
+            }
         }
     }
 
@@ -752,10 +814,12 @@ public static class HardwareBrightness
         uint minimum,
         uint maximum,
         out string? why,
-        out int win32Error)
+        out int win32Error,
+        out Task? abandoned)
     {
         why = null;
         win32Error = 0;
+        abandoned = null;
 
         uint clamped = Math.Clamp(value, minimum, maximum);
 
@@ -844,8 +908,12 @@ public static class HardwareBrightness
             }
         });
 
-        if (!write.Wait(ProbeTimeoutMs))
+if (!write.Wait(ProbeTimeoutMs))
         {
+            // The worker is still inside the transaction and still holding the
+            // gate. Handing it the claim is what stops every later call from
+            // spending another thread to arrive at the same place.
+            abandoned = write;
             why = "the monitor did not acknowledge the write in time, so the bus is treated as wedged";
             return BusOutcome.TimedOut;
         }
@@ -969,19 +1037,33 @@ public static class HardwareBrightness
             };
         }
 
+Task? abandoned = null;
+
         try
         {
-            return ReadBrightnessCore(hMonitor);
+            return ReadBrightnessCore(hMonitor, out abandoned);
         }
         finally
         {
-            LeaveBus();
+            // Same rule as the write path, for the same reason: a read that timed
+            // out has left a worker holding the gate, and giving the claim back
+            // anyway would let the next monitor in the probe spend another thread
+            // to block on it.
+            if (abandoned is null)
+            {
+                LeaveBus();
+            }
+            else
+            {
+                HandBusToAbandonedWorker(abandoned);
+            }
         }
     }
 
     /// <summary>The body of a read, with the bus already claimed.</summary>
-    private static BusResult ReadBrightnessCore(IntPtr hMonitor)
+    private static BusResult ReadBrightnessCore(IntPtr hMonitor, out Task? abandoned)
     {
+        abandoned = null;
         var started = Stopwatch.StartNew();
 
         Task<BusResult> read = Task.Run(() =>
@@ -1128,8 +1210,12 @@ public static class HardwareBrightness
             }
         });
 
-        if (!read.Wait(ProbeTimeoutMs))
+if (!read.Wait(ProbeTimeoutMs))
         {
+            // The worker is still inside the transaction holding the gate. It takes
+            // the claim with it, so this and every later call report the bus as
+            // busy instead of each spending a thread to find out again.
+            abandoned = read;
             TraceLog.Write("HWB probe timed out after " + ProbeTimeoutMs + "ms, monitor will be left alone");
             return new BusResult
             {
@@ -1652,7 +1738,6 @@ public static class HardwareBrightness
 
             if (root is null)
             {
-                LastRegistryError = "OpenSubKey(Enum\\DISPLAY) returned null";
                 return null;
             }
 
@@ -1753,7 +1838,13 @@ public static class HardwareBrightness
         }
         catch (Exception ex)
         {
-            LastRegistryError = ex.GetType().Name + ": " + ex.Message;
+            // A failure here means the display falls back to no registry EDID,
+            // which the caller treats as "no EDID" rather than as an error. That
+            // is the right outcome, but it used to be a completely silent one:
+            // the reason was written to a field nothing ever read, so a
+            // permissions problem on HKLM looked identical to a monitor that
+            // simply has no cached EDID.
+            TraceLog.Write("HWB registry EDID fallback failed: " + ex.GetType().Name + " " + ex.Message);
             return null;
         }
     }
@@ -1822,7 +1913,7 @@ public static class HardwareBrightness
 
 
     /// <summary>Why the registry fallback gave up, for diagnostics. Empty when it worked.</summary>
-    public static string LastRegistryError { get; private set; } = string.Empty;
+
 
 
     /// <summary>

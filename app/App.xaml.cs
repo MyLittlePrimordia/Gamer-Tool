@@ -80,6 +80,20 @@ public partial class App : Application
 
         try
         {
+            // Before the window, and so before anything can ask for a preview
+            // track. An older build copied eleven megabytes of preview audio out
+            // to the profile folder and never deleted it; the audio is decoded
+            // from the executable now, so this is only clearing up after the
+            // builds that did litter.
+            AudioPreviewPlayer.RemoveExtractedCopies();
+        }
+        catch (Exception ex)
+        {
+            WriteLog("PREVIEW CLEANUP", ex);
+        }
+
+        try
+        {
             MainWindow window = new();
             MainWindow = window;
             window.Show();
@@ -136,15 +150,106 @@ public partial class App : Application
     {
         WriteLog("UI", e.Exception);
         e.Handled = true;
-        MessageBox.Show("SOMETHING WENT WRONG: " + e.Exception.Message, "GAMER TOOL", MessageBoxButton.OK, MessageBoxImage.Warning);
+
+        // Not while the app is on its way out. A fault raised during teardown has
+        // nothing to recover and nowhere to report to - the window may already be
+        // gone - so a dialog is pure noise, and a modal on the exit path is worse
+        // than noise because it can hold the process open.
+        if (!FaultPolicy.ShouldShowDialog(SessionState.Current.ShuttingDown, isTerminating: false))
+        {
+            return;
+        }
+
+        ShowFault("SOMETHING WENT WRONG: " + e.Exception.Message);
     }
 
     private static void OnDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
-        if (e.ExceptionObject is Exception ex)
+        if (e.ExceptionObject is not Exception ex)
         {
-            WriteLog("APP", ex);
-            MessageBox.Show("SOMETHING WENT WRONG: " + ex.Message, "GAMER TOOL", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        WriteLog("APP", ex);
+
+        // This is where the one on quit came from. Unloading the AppDomain runs
+        // every native module's uninitializer, and one of them threw a
+        // DllNotFoundException: the log showed __scrt_uninitialize_type_info ->
+        // _app_exit_callback -> SingletonDomainUnload, with no managed frame in
+        // sight. It happens after the app has finished and the process is already
+        // dying.
+        //
+        // Logged, not shown. The record belongs in the file, which is one click
+        // away through diagnostics; a modal at this point tells the user nothing
+        // they can act on and makes an ordinary quit look like a crash.
+        if (!FaultPolicy.ShouldShowDialog(SessionState.Current.ShuttingDown, e.IsTerminating))
+        {
+            return;
+        }
+
+        ShowFault("SOMETHING WENT WRONG: " + ex.Message);
+    }
+
+    /// <summary>How long the same fault has to stay quiet before it is shown again.</summary>
+    private const int FaultDialogCooldownSeconds = 30;
+
+    private static readonly object FaultGate = new();
+
+    private static string _lastFault = string.Empty;
+
+    private static DateTime _lastFaultAt = DateTime.MinValue;
+
+    /// <summary>
+    /// Reports a fault to the user, at most once for any given fault in any
+    /// thirty second window.
+    /// <para>
+    /// Every fault is written to the log without exception or limit - that is the
+    /// record, and the diagnostics button can reach it. This is only about how
+    /// often the same one interrupts.
+    /// </para>
+    /// <para>
+    /// The dispatcher handler sets <c>e.Handled</c>, so the app carries on after a
+    /// fault, which is right. The problem was what happens next: several timers
+    /// run continuously - the gamma lock every 1.5 s, the state poll every 4 s,
+    /// the spectrum at sixty frames a second - so a fault in a tick handler
+    /// produced a modal box on every single tick. A modal on a timer is the worst
+    /// of both worlds: it is unmissable, it is modal, and it recurs the instant it
+    /// is dismissed. Thirty seconds of quiet is long enough to have read and copied
+    /// it, and short enough that a genuinely different fault is not swallowed by
+    /// the previous one's cooldown.
+    /// </para>
+    /// </summary>
+    private static void ShowFault(string text)
+    {
+        if (!TryBeginFaultDialog(text, DateTime.UtcNow))
+        {
+            return;
+        }
+
+        MessageBox.Show(text, "GAMER TOOL", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    /// <summary>
+    /// Whether this fault is due a dialog, recording the decision either way.
+    /// <para>
+    /// Split out from the box itself so the rule can be exercised without one:
+    /// a test cannot show a modal, and a rule that can only be checked by causing
+    /// a real fault in a real app is a rule that will quietly rot.
+    /// </para>
+    /// </summary>
+    internal static bool TryBeginFaultDialog(string text, DateTime nowUtc)
+    {
+        lock (FaultGate)
+        {
+            if (string.Equals(text, _lastFault, StringComparison.Ordinal)
+                && (nowUtc - _lastFaultAt).TotalSeconds < FaultDialogCooldownSeconds)
+            {
+                return false;
+            }
+
+            _lastFault = text;
+            _lastFaultAt = nowUtc;
+            return true;
         }
     }
 

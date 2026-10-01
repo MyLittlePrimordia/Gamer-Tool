@@ -42,14 +42,58 @@
     <Using Remove="System.Windows.Forms" />
   </ItemGroup>
 
+<ItemGroup>
+    <!--
+      The test project is the only thing that can see internals, and it needs to
+      for the parts of a service that are genuinely internal state rather than
+      API: whether the gamma lock has anything to defend, for instance, cannot be
+      set up any other way without actually pushing a gamma ramp at a real
+      display, which is exactly what a unit test must not do.
+
+      Named rather than blanket-public for the same reason: these stay out of the
+      shipped surface.
+    -->
+    <InternalsVisibleTo Include="GamerTool.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <!-- Live system audio for the spectrum. Loopback capture is the only way an
          app can hear what Windows is playing, the same way FxSound does. -->
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+
+    <!--
+      Laptop internal panels.
+
+      root\wmi exposes WmiMonitorBrightnessMethods / WmiSetBrightness, and it is
+      the only documented way to change a laptop screen's own backlight. The DDC
+      route used for external monitors does not answer on an internal panel, which
+      is why laptops were left unsupported until this.
+
+      This is a first-party Microsoft package that is part of the shared framework
+      on Windows, so it adds no runtime to install and does not put anything on
+      the machine: the published executable stays a single self-contained file.
+
+      The alternative was doing the COM interop by hand, which is a large amount
+      of code to talk to something this package already wraps, and the whole
+      point of the library rule is that a dependency has to earn its place.
+    -->
+    <PackageReference Include="System.Management" Version="10.0.0" />
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      GamerTool.ico is deliberately NOT embedded. It is the build-time
+      ApplicationIcon above, which is what puts the icon on the executable, and
+      that is the only job it has. It used to be listed here as an
+      EmbeddedResource as well, which put a second, unread copy of 62 KB into
+      every published binary: nothing loads it, because IconFactory reads
+      icon.png, and ReadAsset only ever looks for that.
+
+      spectrum.bin is gone entirely. The spectrum is captured live from a
+      loopback now, so there is no baked magnitude table to ship, and its
+      <None Remove> was left behind pointing at a file that no longer existed.
+    -->
     <None Remove="Assets\day.jpg" />
     <None Remove="Assets\night.jpg" />
     <None Remove="Assets\game.mp3" />
@@ -57,7 +101,6 @@
     <None Remove="Assets\footsteps.mp3" />
     <None Remove="Assets\icon.png" />
     <None Remove="Assets\GamerTool.ico" />
-    <None Remove="Assets\spectrum.bin" />
     <None Remove="Assets\fac-template.fac" />
     <EmbeddedResource Include="Assets\day.jpg" LogicalName="GamerTool.assets.day.jpg" />
     <EmbeddedResource Include="Assets\night.jpg" LogicalName="GamerTool.assets.night.jpg" />
@@ -65,8 +108,6 @@
     <EmbeddedResource Include="Assets\music.mp3" LogicalName="GamerTool.assets.music.mp3" />
     <EmbeddedResource Include="Assets\footsteps.mp3" LogicalName="GamerTool.assets.footsteps.mp3" />
     <EmbeddedResource Include="Assets\icon.png" LogicalName="GamerTool.assets.icon.png" />
-    <EmbeddedResource Include="Assets\GamerTool.ico" LogicalName="GamerTool.assets.GamerTool.ico" />
-    <!-- spectrum.bin is gone: the spectrum is captured live now. -->
     <EmbeddedResource Include="Assets\animated.gif" LogicalName="GamerTool.assets.animated.gif" />
     <EmbeddedResource Include="Assets\fac-template.fac" LogicalName="GamerTool.assets.fac-template.fac" />
     <!-- Colour emoji. WPF cannot draw COLR/CPAL glyphs, so these are baked
