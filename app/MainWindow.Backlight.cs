@@ -128,12 +128,23 @@ public partial class MainWindow
 
         foreach (MonitorProbe monitor in monitors)
         {
-            BacklightPanel.Children.Add(BacklightRow(monitor));
+            // Null when the display stopped being drivable while its row was being
+            // built, which is a real possibility rather than a theoretical one: the
+            // pool thread nulls the reading the moment a refusal count tips over,
+            // and the next refresh will draw it correctly as a refused row.
+            if (BacklightRow(monitor) is { } row)
+            {
+                BacklightPanel.Children.Add(row);
+            }
         }
     }
 
 
-    private UIElement BacklightRow(MonitorProbe monitor)
+    /// <summary>
+    /// One display's row. Returns null when the display stopped being drivable
+    /// partway through building it, which the caller drops rather than renders.
+    /// </summary>
+    private UIElement? BacklightRow(MonitorProbe monitor)
     {
         bool live = monitor.CanControlBacklight;
 
@@ -242,14 +253,41 @@ public partial class MainWindow
         StackPanel block = new();
         block.Children.Add(row);
 
-        BrightnessReading reading = monitor.Brightness!;
+        // Snapshot, and re-checked. The row was started from a CanControlBacklight
+        // check about a hundred lines and several FindResource calls ago, and the
+        // pool thread nulls Brightness on this very display as soon as a refusal
+        // tips the count over - so the field can be gone by the time it is read,
+        // and the null-forgiving operator would turn that into a crash on the UI
+        // thread with no handler of its own. This returns rather than draws a
+        // half-row, because there is nothing to draw a slider for.
+        BrightnessReading? maybeReading = monitor.Brightness;
+        if (maybeReading is null || !monitor.CanControlBacklight)
+        {
+            return null;
+        }
+
+        BrightnessReading reading = maybeReading;
+
+        // The monitor's own numbers, corrected for the case where they contradict
+        // each other. RangeBase throws on a Maximum below its Minimum, and it
+        // silently coerces a Value outside the range, so an unsorted reading from
+        // the hardware would either throw here or invent a slider position.
+        uint low = reading.Minimum;
+        uint high = reading.Maximum;
+        if (low > high)
+        {
+            (low, high) = (high, low);
+        }
+
+        uint current = Math.Clamp(reading.Current, low, high);
+
         Slider slider = new()
         {
             Style = (Style)FindResource("ModernSlider"),
             Foreground = (Brush)FindResource("AccentDisplay"),
-            Minimum = reading.Minimum,
-            Maximum = reading.Maximum,
-            Value = reading.Current,
+            Minimum = low,
+            Maximum = high,
+            Value = current,
             TickFrequency = 1,
             IsSnapToTickEnabled = true,
             Margin = new Thickness(0, 6, 0, 0),
@@ -260,13 +298,13 @@ public partial class MainWindow
         {
             Style = (Style)FindResource("Value"),
             HorizontalAlignment = HorizontalAlignment.Right,
-            Text = reading.Current + " / " + reading.Maximum
+            Text = current + " / " + high
         };
 
         slider.ValueChanged += (s, e) =>
         {
             uint wanted = (uint)Math.Round(slider.Value);
-            value.Text = wanted + " / " + reading.Maximum;
+            value.Text = wanted + " / " + high;
             QueueBacklightWrite(monitor, wanted);
         };
 

@@ -267,6 +267,9 @@ public sealed class ProfileManager
             settings = parsed!;
             return parsed is not null;
         }
+        // The variable is in the filter and not in the body, so it is dead. The catch
+        // at line 242 is the same shape and does use it, which is what makes this
+        // one look like a mistake rather than a copy.
         catch (Exception ex) when (ex is JsonException or NotSupportedException)
         {
             settings = null!;
@@ -388,7 +391,7 @@ public sealed class ProfileManager
     /// every write after that is a replace.
     /// </para>
     /// </summary>
-    private static void AtomicSwap(string temp, string target)
+    internal static void AtomicSwap(string temp, string target)
     {
         if (File.Exists(target))
         {
@@ -468,7 +471,16 @@ settings.CustomDisplayPresets ??= new List<DisplayPreset>();
         settings.AppProfiles.RemoveAll(p => p is null);
         settings.Slots.RemoveAll(s => s is null);
 
-        settings.Slots = SlotService.Migrate(settings);
+        // RemoveAll rather than Remove inside the loop, which throws. Removing
+        // bumps the list's version and the enumerator checks that on every step,
+        // so a single blank entry raised InvalidOperationException out of here -
+        // and because the file had already parsed, that escaped Load, escaped the
+        // window constructor and landed on the "could not start" box, with the
+        // quarantine path never reached and the offending file left exactly where
+        // it was. Not recoverable without editing settings.json by hand.
+        settings.ExcludedDdcMonitors ??= new List<string>();
+        settings.OriginalHardwareBrightness ??= new Dictionary<string, uint>();
+        settings.ExcludedDdcMonitors.RemoveAll(string.IsNullOrWhiteSpace);
 
         // The same goes for the strings inside each entry. A declared string
         // property with a non-null default is only that until a file says
@@ -479,18 +491,6 @@ settings.CustomDisplayPresets ??= new List<DisplayPreset>();
         settings.ActiveDisplayPresetId ??= string.Empty;
         settings.ActiveAudioPresetId ??= string.Empty;
         settings.EmergencyHotkey ??= string.Empty;
-
-        settings.ExcludedDdcMonitors ??= new List<string>();
-        settings.OriginalHardwareBrightness ??= new Dictionary<string, uint>();
-
-        // RemoveAll rather than Remove inside the loop, which throws. Removing
-        // bumps the list's version and the enumerator checks that on every step,
-        // so a single blank entry raised InvalidOperationException out of here -
-        // and because the file had already parsed, that escaped Load, escaped the
-        // window constructor and landed on the "could not start" box, with the
-        // quarantine path never reached and the offending file left exactly where
-        // it was. Not recoverable without editing settings.json by hand.
-        settings.ExcludedDdcMonitors.RemoveAll(string.IsNullOrWhiteSpace);
 
         foreach (HotkeySlot slot in settings.Slots)
         {
@@ -528,13 +528,23 @@ settings.CustomDisplayPresets ??= new List<DisplayPreset>();
             preset.Tag ??= string.Empty;
         }
 
-        foreach (AudioPreset preset in settings.CustomAudioPresets)
+foreach (AudioPreset preset in settings.CustomAudioPresets)
         {
             preset.Id ??= string.Empty;
             preset.Name ??= string.Empty;
             preset.Tag ??= string.Empty;
         }
 
+        // Migration goes last of the shape-fixing, not before it. It reads
+        // slot.Id, combo.Id and profile fields on every entry, and hands out a
+        // fresh id when one is blank - which is exactly the read that threw on a
+        // file carrying a null. That guard used to sit 45 lines further down, after
+        // the call, so the guard existed and was simply too late: the exception
+        // escaped Normalize, escaped Load, escaped the window constructor and
+        // landed on the "could not start" box, with the quarantine path never
+        // reached because the file had parsed perfectly well. Unrecoverable without
+        // editing settings.json by hand.
+        settings.Slots = SlotService.Migrate(settings);
 
         foreach (AppProfile profile in settings.AppProfiles)
         {

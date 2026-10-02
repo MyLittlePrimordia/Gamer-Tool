@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Threading;
 using GamerTool.Models;
 
 namespace GamerTool.Services;
@@ -492,6 +494,71 @@ public MonitorProbe? Find(string deviceName)
     /// bool false is to show the user that it failed.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// How long to wait between attempts, and how many to make, when a preset's
+    /// backlight collides with something already on the bus.
+    /// <para>
+    /// A preset apply is a discrete write that the user is waiting on, unlike a
+    /// slider drag which is already debounced. Two things can hold the bus at that
+    /// moment: the periodic DDC probe, and the tail of a drag the user just let
+    /// go of. Both are short, so a small bounded retry catches them - and bounded
+    /// is the load-bearing word, because the alternative is a preset that silently
+    /// fails to set its backlight because a probe was three milliseconds away from
+    /// finishing.
+    /// </para>
+    /// </summary>
+    private const int PresetWriteAttempts = 3;
+
+    private const int PresetWriteRetryMs = 50;
+
+    /// <summary>
+    /// Applies a preset's own backlight value.
+    /// <para>
+    /// A separate entry point from <see cref="TrySet"/> because the two callers
+    /// want opposite things. A slider drag wants the newest value and does not
+    /// mind being told "busy" - the next drag will send it again. A preset wants
+    /// the value to land before the slot is considered loaded, and "busy" means the
+    /// screen and the sound are now from one preset and the panel from another.
+    /// </para>
+    /// <para>
+    /// Returns the outcome rather than throwing, and says so through
+    /// <paramref name="why"/> for the same reason every other bus call does: the
+    /// gamma half of the preset has already been applied by the time this runs, so
+    /// there is nothing to abort.
+    /// </para>
+    /// </summary>
+    public BusOutcome TrySetPresetBacklight(MonitorProbe monitor, uint value, out string? why)
+    {
+        BusOutcome outcome = BusOutcome.Busy;
+        why = null;
+
+        for (int attempt = 1; attempt <= PresetWriteAttempts; attempt++)
+        {
+            outcome = TrySet(monitor, value, out why);
+
+            // Only Busy is worth another go. Every other outcome is a real answer
+            // from the display, and repeating it would just spend the bus claim
+            // three times and end in the same place.
+            if (outcome != BusOutcome.Busy)
+            {
+                return outcome;
+            }
+
+            if (attempt < PresetWriteAttempts)
+            {
+                TraceLog.Write("backlight preset write busy, retrying " + attempt.ToString(CultureInfo.InvariantCulture)
+                    + "/" + PresetWriteAttempts.ToString(CultureInfo.InvariantCulture));
+
+                Thread.Sleep(PresetWriteRetryMs);
+            }
+        }
+
+        // Last word: the bus never freed up, which is worth saying plainly rather
+        // than reporting it as a refusal. Nothing was written.
+        why = "the display bus was busy and did not free up";
+        return outcome;
+    }
+
     public BusOutcome TrySet(MonitorProbe monitor, uint value, out string? why)
     {
         why = null;
@@ -502,22 +569,35 @@ public MonitorProbe? Find(string deviceName)
             return BusOutcome.Failed;
         }
 
-        // The remembered brightness, taken before the write and under the profile's
-        // gate. It is a dictionary the window can be serialising at this instant,
-        // and it is written on every successful write rather than rarely.
-        lock (_settings.Gate)
+        // Taken once, here, and used for the rest of the call. The property is
+        // written by whichever write finishes next - including this one, further
+        // down - so reading it four times across a bus transaction that can take
+        // two seconds is reading a value that can change under the middle of the
+        // call. One snapshot is both the correct range for this write and the one
+        // that goes into the recorded reading afterwards, so the two cannot
+        // disagree.
+        BrightnessReading live = monitor.Brightness;
+        uint low = live.Minimum;
+        uint high = live.Maximum;
+        if (low > high)
         {
-            if (!_settings.OriginalHardwareBrightness.ContainsKey(monitor.DeviceName))
-            {
-                _settings.OriginalHardwareBrightness[monitor.DeviceName] = monitor.Brightness.Current;
-            }
+            (low, high) = (high, low);
         }
+
+        // What this panel is at right now, which is the value a restore would put back -
+        // so it has to be read before the write. Taken to a local rather than
+        // recorded in place, because recording it here is what orphaned the entry:
+        // the map was written before the bus call, so a write that then failed
+        // still left a claim on a panel this app had never actually changed. The
+        // restore would later push that value onto it anyway, overriding whatever
+        // the user had set by hand in the meantime.
+        uint before = live.Current;
 
         BusOutcome outcome = _bus.TrySetBrightness(
             monitor.DeviceName,
             value,
-            monitor.Brightness.Minimum,
-            monitor.Brightness.Maximum,
+            low,
+            high,
             out why,
             out int win32Error);
 
@@ -593,12 +673,29 @@ public MonitorProbe? Find(string deviceName)
         monitor.NoReplyBecause = null;
         monitor.Outcome = BusOutcome.Ok;
 
+        // The baseline is claimed only now, after the panel has actually taken the
+        // value, and under the profile's gate because it is a dictionary the window
+        // can be serialising at this instant. If absent, so it is the value from
+        // before this session touched the panel rather than the value the last
+        // preset happened to leave - which is the whole reason the map exists.
+        lock (_settings.Gate)
+        {
+            if (!_settings.OriginalHardwareBrightness.ContainsKey(monitor.DeviceName))
+            {
+                _settings.OriginalHardwareBrightness[monitor.DeviceName] = before;
+            }
+        }
+
+        // Built from the snapshot taken at the top of this call rather than from
+        // whatever monitor.Brightness says now: the field is replaced on every
+        // write and nulled on every refusal, so reading it here after a two second
+        // bus transaction could read a different answer, or nothing at all.
         monitor.Brightness = new BrightnessReading
         {
-            Minimum = monitor.Brightness.Minimum,
-            Current = Math.Clamp(value, monitor.Brightness.Minimum, monitor.Brightness.Maximum),
-            Maximum = monitor.Brightness.Maximum,
-            CodeType = monitor.Brightness.CodeType
+            Minimum = low,
+            Current = Math.Clamp(value, low, high),
+            Maximum = high,
+            CodeType = live.CodeType
         };
 
         return BusOutcome.Ok;
@@ -660,7 +757,7 @@ public MonitorProbe? Find(string deviceName)
     }
 
     /// <summary>
-    /// True when <see cref="ExcludedDdcMonitors"/> has grown and the profile has
+    /// True when <see cref="AppSettings.ExcludedDdcMonitors"/> has grown and the profile has
     /// not been written yet. The window commits once this is set, rather than the
     /// exclusion being written to memory and then quietly forgotten, which is
     /// what used to happen.
@@ -675,6 +772,92 @@ public MonitorProbe? Find(string deviceName)
     public bool ConsumeSettingsChanged() =>
         Interlocked.Exchange(ref _settingsChanged, 0) == 1;
 
+
+    /// <summary>
+    /// Drops every device not in <paramref name="attached"/>, from both the probe
+    /// table and the baseline record.
+    /// <para>
+    /// Called when the display topology changes, and it is what makes the skip in
+    /// <see cref="RestoreAll"/> load-bearing rather than incidental.
+    /// </para>
+    /// <para>
+    /// Without it, restoring consults a table that still describes hardware which
+    /// is no longer there. An undocked monitor is off the DDC/CI bus, but Windows
+    /// reassigns "\\.\DISPLAY2" to whatever is plugged in next, so a later write to
+    /// that name is a successful write to different hardware - one panel's captured
+    /// brightness landing on another. Only a table refreshed after the change can
+    /// tell the difference, and the exit path has no time to re-probe: a DDC
+    /// transaction takes seconds and the shutdown budget is about one.
+    /// </para>
+    /// <para>
+    /// So the record is pruned here, while a rescan is already running, and the
+    /// exit restore can then only ever write to devices that were attached at the
+    /// last topology change.
+    /// </para>
+    /// </summary>
+    public void ForgetDetached(IReadOnlyCollection<string> attached)
+    {
+        if (attached is null)
+        {
+            return;
+        }
+
+        // Deliberately DisplayService's matcher rather than a second copy of it. The
+        // rule is "a suffix match has to land on a path separator", which exists
+        // because "\\.\DISPLAY2" and "\\.\DISPLAY20" share a suffix - and a rule
+        // this important should have exactly one owner. Two copies is how they
+        // drift, and a version that had lost the separator check would have meant
+        // pruning one display's baseline because another one was plugged in.
+        bool attached_to(string device) =>
+            attached.Any(a => DisplayService.DeviceMatches(a, device));
+
+        // Both prunes are driven by the attached list directly rather than by the
+        // difference against _byDevice, and that is not a style preference.
+        //
+        // The probe rebuilds _byDevice on every refresh, so by the time this runs
+        // the departed device is usually *already* gone from it - which meant a
+        // prune computed as "was in the table, is not any more" found nothing to
+        // do and left the baseline record untouched. The record is the thing that
+        // matters, and it outlives any probe: a display can leave the table while
+        // its baseline entry stays behind, and it is that entry which is written on
+        // the way out.
+        lock (_gate)
+        {
+            List<string> stale = _byDevice.Keys
+                .Where(device => !attached_to(device))
+                .ToList();
+
+            foreach (string device in stale)
+            {
+                _byDevice.Remove(device);
+            }
+        }
+
+        List<string> released;
+
+        lock (_settings.Gate)
+        {
+            released = _settings.OriginalHardwareBrightness.Keys
+                .Where(device => !attached_to(device))
+                .ToList();
+
+            foreach (string device in released)
+            {
+                _settings.OriginalHardwareBrightness.Remove(device);
+            }
+        }
+
+        if (released.Count > 0)
+        {
+            // The profile changed, so it has to be written. Not cosmetic: an entry
+            // left behind would be read back by the next launch as "already
+            // captured", which is how a baseline outlives the session that made it.
+            Interlocked.Exchange(ref _settingsChanged, 1);
+
+            AppLog.Warn("backlight baseline dropped for " + string.Join(", ", released)
+                + ": no longer attached, and its brightness must not be written to whatever takes that name");
+        }
+    }
 
     /// <summary>
     /// Puts every display back where it was found. Called on the way out, and by
@@ -703,8 +886,33 @@ public MonitorProbe? Find(string deviceName)
 
         foreach ((string device, uint original) in pending)
         {
+            // Skipped, and this is the whole fix.
+            //
+            // "\\.\DISPLAY2" is not an identity. Windows reassigns those names
+            // across dock, KVM and GPU transitions, so a name remembered before an
+            // undock can name a completely different physical panel afterwards.
+            // The old fallback here - Find returning nothing, so assume a maximum
+            // and write anyway - meant the exit path took one monitor's captured
+            // baseline and applied it to whichever monitor had been handed that
+            // handle. That is not a failed write, it is a successful write to the
+            // wrong hardware: a laptop's internal panel flashed to full, or a
+            // newly plugged monitor blasted.
+            //
+            // There is nothing to salvage by trying anyway. A detached panel is off
+            // the DDC/CI bus entirely, so the write cannot reach it; it retains its
+            // last hardware brightness until it is powered off or adjusted by hand,
+            // which is how every DDC utility behaves and is the correct outcome.
+            // Protecting the panels that *are* attached outranks restoring one that
+            // is not.
             MonitorProbe? monitor = Find(device);
-            uint maximum = monitor?.Brightness?.Maximum ?? Math.Max(original, 100);
+            if (monitor is null)
+            {
+                AppLog.Warn("backlight restore skipped " + device
+                    + ": no attached display answers to that name any more");
+                continue;
+            }
+
+            uint maximum = monitor.Brightness?.Maximum ?? Math.Max(original, 100);
 
             // No UI, no opt-in check, no probing: this runs while the app is
             // already on its way out and has to work with what is already known.

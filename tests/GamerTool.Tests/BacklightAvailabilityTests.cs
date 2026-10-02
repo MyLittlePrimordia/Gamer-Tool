@@ -32,6 +32,109 @@ public class BacklightAvailabilityTests
         Outcome = BusOutcome.NoDdcPathway
     };
 
+    /// <summary>
+    /// A display whose brightness could not be reached this round, for a reason
+    /// that is about the bus rather than the monitor.
+    /// </summary>
+    private static MonitorProbe Skipped(BusOutcome outcome, string name = @"\\.\DISPLAY3") => new()
+    {
+        DeviceName = name,
+        FriendlyName = "Never asked",
+        Outcome = outcome
+    };
+
+    /// <summary>
+    /// A round where nothing was ever asked is not evidence, and retiring on one
+    /// is the exact mistake <see cref="BusOutcome.Busy"/> exists to prevent.
+    /// <para>
+    /// It was split out of "refused" because a second caller arriving while the
+    /// first was still on the bus used to be told the monitor had declined, and
+    /// the decline counted towards the permanent exclusion - so a monitor that
+    /// worked fine was greyed out for the rest of the session. The refusal path
+    /// learned that lesson and the retirement path did not: CanControlBacklight is
+    /// false for a skipped display precisely because there is no reading, so Busy
+    /// and TimedOut rounds landed here looking identical to a monitor that had
+    /// genuinely declined three times.
+    /// </para>
+    /// <para>
+    /// Two quiet rounds then turned the feature off on hardware that had never
+    /// been asked a question, on a machine with one monitor where a second caller
+    /// was in flight. Both of these assert the streak is left alone rather than
+    /// reset, because a skipped round is not a pass either: the next real refusal
+    /// must still be the first of two.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Two_busy_rounds_in_a_row_do_not_retire_the_feature()
+    {
+        var availability = new BacklightAvailability();
+        var round = new List<MonitorProbe> { Skipped(BusOutcome.Busy) };
+
+        Assert.False(availability.Record(round));
+        Assert.False(availability.Record(round));
+
+        Assert.False(availability.Retired);
+        Assert.Equal(0, availability.ConsecutiveRounds);
+    }
+
+    [Fact]
+    public void Two_timed_out_rounds_in_a_row_do_not_retire_the_feature()
+    {
+        var availability = new BacklightAvailability();
+        var round = new List<MonitorProbe> { Skipped(BusOutcome.TimedOut) };
+
+        Assert.False(availability.Record(round));
+        Assert.False(availability.Record(round));
+
+        Assert.False(availability.Retired);
+        Assert.Equal(0, availability.ConsecutiveRounds);
+    }
+
+    /// <summary>
+    /// The mixed machine: two displays where one answers and the other is skipped.
+    /// The live one has already reset the streak through the branch above this
+    /// one, so this is here to pin that a skipped display cannot tip a round that
+    /// something answered into a retirement.
+    /// </summary>
+    [Fact]
+    public void A_skipped_display_alongside_a_live_one_is_harmless()
+    {
+        var availability = new BacklightAvailability();
+
+        Assert.False(availability.Record(new List<MonitorProbe> { Live(), Skipped(BusOutcome.Busy) }));
+
+        Assert.False(availability.Retired);
+        Assert.Equal(0, availability.ConsecutiveRounds);
+    }
+
+    /// <summary>
+    /// A skipped round between two real ones must not spend the grace period. The
+    /// skipped round counts for nothing either way, so the refusal that follows is
+    /// still the first of two and the feature survives - and the refusal after
+    /// that still retires, which is the half that would be lost if a skipped round
+    /// silently reset the counter.
+    /// </summary>
+    [Fact]
+    public void A_skipped_round_between_two_real_ones_changes_neither_of_them()
+    {
+        var availability = new BacklightAvailability();
+
+        Assert.False(availability.Record(new List<MonitorProbe> { Skipped(BusOutcome.Busy) }));
+        Assert.Equal(0, availability.ConsecutiveRounds);
+
+        Assert.False(availability.Record(new List<MonitorProbe> { Dead() }));
+        Assert.Equal(1, availability.ConsecutiveRounds);
+
+        // Still only the first real failure: the skipped round bought nothing.
+        Assert.False(availability.Record(new List<MonitorProbe> { Skipped(BusOutcome.TimedOut) }));
+        Assert.Equal(1, availability.ConsecutiveRounds);
+
+        // And the second real failure still retires, so a skipped round cannot
+        // grant an unlimited number of free passes.
+        Assert.True(availability.Record(new List<MonitorProbe> { Dead() }));
+        Assert.True(availability.Retired);
+    }
+
     [Fact]
     public void One_failed_round_does_not_retire_anything()
     {

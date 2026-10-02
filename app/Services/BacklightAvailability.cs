@@ -104,6 +104,25 @@ public sealed class BacklightAvailability
             return false;
         }
 
+        // A round where every display was skipped counts as evidence, and that is
+        // the one thing this class exists not to do. Busy and TimedOut are the
+        // outcomes that say the monitor was never spoken to: the bus was held by
+        // another caller, or it did not answer in time. CanControlBacklight is
+        // false for both, because it is derived from there being no reading, so
+        // they landed here as indistinguishable from a monitor that declined three
+        // times - which is the specific mistake BusOutcome.Busy was split out to
+        // stop happening. Two quiet rounds then turned the feature off on a machine
+        // whose hardware was never asked a question.
+        //
+        // A round in which nothing was even attempted is not a failed round. It is
+        // not a pass either, so the streak is left exactly as it was rather than
+        // reset: a real refusal next time still counts as the first of two, and a
+        // working display still resets immediately through the branch above.
+        if (monitors.All(m => !m.WasAsked))
+        {
+            return false;
+        }
+
         _consecutiveRounds++;
 
         if (_consecutiveRounds < RoundsBeforeRetiring)

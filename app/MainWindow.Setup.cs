@@ -215,7 +215,18 @@ public partial class MainWindow : Window
 
     private void ApplyWatchState()
     {
-        bool wanted = _settings.AutoSwitch && _settings.Slots.Any(s => s.Enabled && s.AutoActivate);
+        // A wildcard counts as an armed slot even though it names no process.
+        // SlotService.TargetProcessNames deliberately contributes nothing for it -
+        // the wildcard matches on the foreground window rather than on the watch
+        // list - so the watcher has to be running for a wildcard to work at all,
+        // and this is what starts it. Without the wildcard clause, arming one
+        // while no other game was bound left the watcher stopped and the slot
+        // silently never fired.
+        bool wildcard = _settings.Slots.Any(s =>
+            s.Enabled && s.AutoActivate && s.HasWork && s.IsAnyGameTarget);
+
+        bool wanted = _settings.AutoSwitch
+            && (wildcard || _settings.Slots.Any(s => s.Enabled && s.AutoActivate));
 
         // Cleared on the way into both arms, not only when arming. The watcher
         // remembers the last foreground window so it can raise a change once
@@ -229,6 +240,40 @@ public partial class MainWindow : Window
         if (wanted)
         {
             _watcher.PrimeProcesses(SlotService.TargetProcessNames(_settings.Slots));
+
+            // Re-armed here, and this is the whole fix for the invariant "a wildcard
+            // is applied, therefore its process is watched for exit".
+            //
+            // Both calls above clear the unbound watch, and neither knows whether one
+            // was live - a wildcard contributes nothing to the watch list by design,
+            // so there is nothing to rebuild it from. Nothing re-armed it, because
+            // the one place that could was behind the duplicate-apply guard: that
+            // guard rejects the same slot-and-process pair the apply already
+            // recorded, which is exactly the state a live wildcard leaves behind. So
+            // a wildcard's exit revert was armed once and could never be re-armed.
+            //
+            // Any edit to any slot goes through here - renaming one, changing its
+            // monitor or output dropdown, adding another, resetting them all - so
+            // changing a dropdown while a game was fullscreen silently disarmed the
+            // revert. The game closed and the profile stayed on the desktop, with
+            // the app still reporting the slot as loaded and nothing able to undo
+            // it.
+            //
+            // Re-armed unconditionally on the armed branch. A name that is no longer
+            // running raises its own exit on the next scan, which is the correct
+            // outcome: the wildcard is applied for a program that has gone.
+            if (_autoWildcardProcess.Length > 0 && _watcher.WatchUnbound(_autoWildcardProcess).Length == 0)
+            {
+                // Refused, which means a different process is being watched. Only
+                // one wildcard is ever live, so this is the app disagreeing with
+                // itself and the old watcher's owner is the one that needs standing
+                // down. Named rather than silently ignored, because the alternative
+                // on this path is a preset that can never be reverted.
+                TraceLog.Write("WATCH re-arm refused for " + _autoWildcardProcess);
+                _watcher.ForgetUnbound(_autoWildcardProcess);
+                _watcher.WatchUnbound(_autoWildcardProcess);
+            }
+
             _watcher.Start(1500);
         }
         else
@@ -722,6 +767,23 @@ public partial class MainWindow : Window
         _diagFeedbackTimer?.Stop();
         _previewTimer.Stop();
         StopNightScheduleTimer();
+
+        // Before the emergency reset, because this is a timer that can push a
+        // gamma ramp. Unplugging a display on the way out, or a dock closing as
+        // the machine suspends, produces display-change messages right through
+        // teardown; without this the rescan would rebuild the slot rows and push
+        // a ramp while the line below is trying to take that same ramp off, and
+        // the exit restore would lose.
+        _displayDebounceTimer?.Stop();
+        _displayDebounceTimer = null;
+        _displayDebounce.Ignore = true;
+
+        if (_displayHookSource is { } source)
+        {
+            source.RemoveHook(OnWindowMessage);
+            _displayHookSource = null;
+        }
+
         _tray?.Dispose();
         _tray = null;
         _hotkeys.Dispose();

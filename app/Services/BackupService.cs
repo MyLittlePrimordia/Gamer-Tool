@@ -167,7 +167,18 @@ public sealed class BackupService
             Directory.CreateDirectory(folder);
         }
 
-        File.WriteAllText(path, JsonSerializer.Serialize(file, Options));
+        // Serialised fully in memory first, written to a temporary file, then swapped
+        // into place - the same three steps ProfileManager.Save takes for
+        // settings.json, and for the same reason. This was a single
+        // File.WriteAllText: a crash, a full disk or a killed process part way
+        // through left the user with a half-written backup and no other copy of
+        // their configuration, which is the one artefact in this app that exists
+        // nowhere else. It did not keep a ".bak" the way the profile does, because
+        // the whole point of a backup is that it is somewhere else.
+        string json = JsonSerializer.Serialize(file, Options);
+        string temp = path + ".tmp";
+        File.WriteAllText(temp, json);
+        ProfileManager.AtomicSwap(temp, path);
     }
 
     public AppSettings? Import(string path, out RestoreReport report, out string error)
@@ -407,6 +418,21 @@ public sealed class BackupService
         {
             slot.AppExePath = null;
             slot.AppName = null;
+            return;
+        }
+
+        // A wildcard is already consistent - it names no file, so there is
+        // nothing for the check below to fail on. Without this early return it
+        // would fall into the empty-path branch and disarm the slot, which would
+        // silently drop a wildcard from every restored backup. That is the
+        // failure mode this repair exists to prevent, happening to the one target
+        // shape it does not know about.
+        if (slot.IsAnyGameTarget)
+        {
+            slot.AppExePath = null;
+            slot.AppName = null;
+            slot.IsSelfTarget = false;
+            slot.ApplyOnStart = false;
             return;
         }
 

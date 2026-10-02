@@ -325,8 +325,19 @@ public partial class MainWindow
             // The schedule's filter was the only thing on the screen, so the
             // monitor's own ramp goes back rather than a flat one being left
             // there under the gamma lock until the app is closed.
-            _display.Reset();
-            _appliedMonitor = string.Empty;
+            //
+            // Checked, because a ramp that cannot be taken off is still out there:
+            // forgetting which display it was put on would leave the exit path
+            // with nothing to look for, and the label would claim the screen is
+            // back to normal while it is not.
+            if (_display.Reset())
+            {
+                _appliedMonitor = string.Empty;
+            }
+            else
+            {
+                TraceLog.Write("NIGHT the screen would not give the original ramp back");
+            }
         }
 
         UpdateLiveLabels();
@@ -363,9 +374,26 @@ public partial class MainWindow
         }
 
         DisplayPreset? active = FindDisplay(_activeDisplayId);
-        if (active is not null)
+        if (active is null)
         {
-            ApplyDisplay(active.Copy(), _appliedMonitor, false);
+            // The preset the schedule is re-pushing has been deleted since it was
+            // loaded - a custom screen the user removed while the filter was on.
+            // Nothing was written, so the schedule must not go on believing the
+            // screen is warm: _nightApplied is already true by this point, and the
+            // end-of-window branch would then take the "our ramp is still out
+            // there" path and re-push nothing. Saying so is what lets the next
+            // tick try again against whatever is loaded now.
+            TraceLog.Write("NIGHT the active screen preset is gone, so nothing was pushed");
+            return;
+        }
+
+        if (!ApplyDisplay(active.Copy(), _appliedMonitor, false))
+        {
+            // Blocked by the display. The flag is cleared for the same reason: the
+            // schedule's own record of what is on the screen has to match reality,
+            // or the end-of-window branch acts on a ramp that was never written.
+            _nightApplied = false;
+            TraceLog.Write("NIGHT the screen refused the filter, so the schedule will try again");
         }
     }
 

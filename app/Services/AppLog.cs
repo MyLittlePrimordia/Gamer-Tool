@@ -33,40 +33,37 @@ public static class AppLog
     /// <summary>True once something has gone wrong, so the bug button can say so.</summary>
     public static bool SawError { get; private set; }
 
-    /// <summary>
-    /// Where the log is written.
-    /// <para>
-    /// Follows the profile, so a portable install is genuinely portable: the
-    /// settings file, the preset files it points at and the log all travel
-    /// together on one folder, and nothing is left behind in the user profile
-    /// pointing at a drive that is no longer there.
-    /// </para>
-    /// <para>
-    /// A computed property rather than a field, because whether the install is
-    /// portable is decided by whether a settings file is sitting next to the
-    /// executable, and that can change while the app is running. The Settings tab
-    /// reads this when its "open log folder" button is pressed, so it has to be
-    /// the current answer rather than the one from startup.
-    /// </para>
-    /// </summary>
-    /// <summary>
-    /// Set by the test suite so it stops writing into the real log.
-    /// <para>
-    /// Tests deliberately exercise paths that log errors - a damaged settings
-    /// file, an unreadable one, engine output that is not JSON - and this class
-    /// writes to one fixed folder. Without somewhere else to put them, every test
-    /// run fills the log a user would paste into a bug report with failures that
-    /// never happened on their machine.
-    /// </para>
-    /// </summary>
-    private static string? _folderOverride;
-
-    /// <summary>Points the log somewhere else. For tests.</summary>
-    internal static void RedirectTo(string folder) => _folderOverride = folder;
+    private static string _folder = DefaultFolder;
 
     /// <summary>
-    /// Where the log would go, ignoring the test redirect. The rule itself, with
-    /// nothing layered over it.
+    /// Where the log is actually being written, which is <see cref="DefaultFolder"/>
+    /// unless something has redirected it.
+    /// <para>
+    /// A property rather than a fixed value so the test suite can send its output
+    /// somewhere harmless. A fair number of tests exist to drive the paths that log
+    /// a failure - a settings file that will not parse, an installer that is not
+    /// FxSound's - and this log is the one artefact a user is asked to paste into a
+    /// bug report. Filling it with failures that never happened on their machine is
+    /// worse than not logging at all.
+    /// </para>
+    /// </summary>
+    public static string Folder
+    {
+        get => _folder;
+        private set => _folder = string.IsNullOrWhiteSpace(value) ? DefaultFolder : value;
+    }
+
+    /// <summary>
+    /// Where the log goes when nothing has overridden it.
+    /// <para>
+    /// Deliberately the same decision <see cref="ProfileManager.AppDataFolder"/>
+    /// makes, and for the same reason: on a portable install the profile sits beside
+    /// the executable, so a log left in LocalAppData would be somewhere the user
+    /// would not look and the "open log folder" button would open a folder with
+    /// nothing in it - on exactly the install where somebody is most likely to be
+    /// reading it. Note this uses LocalAppData where the profile uses AppData, so
+    /// the two are siblings rather than the same folder.
+    /// </para>
     /// </summary>
     internal static string DefaultFolder => Path.Combine(
         ProfileManager.IsPortable && ProfileManager.ExecutableFolder is { } beside
@@ -76,9 +73,10 @@ public static class AppLog
                 "GamerTool"),
         "logs");
 
-    public static string Folder => _folderOverride ?? DefaultFolder;
-
     public static string Path_ => System.IO.Path.Combine(Folder, "app.log");
+
+    /// <summary>Sends the log somewhere else. Used by the test suite.</summary>
+    internal static void RedirectTo(string folder) => Folder = folder;
 
 
     public static void Info(string message) => Write("INFO ", message);
@@ -171,7 +169,16 @@ public static class AppLog
                         File.Delete(previous);
                     }
 
-                    for (int i = KeptFiles - 2; i >= 1; i--)
+                    // The shift loop. It never ran: with KeptFiles at 2 the loop starts at 0 and the
+                    // condition is >= 1, so it had no body. The rotation is correct
+                    // without it - the explicit delete of app.1.log above plus the
+                    // move of app.log at the end is the whole mechanism at this
+                    // setting - but the dead loop sat there looking like the part
+                    // that did the work, and would silently do nothing if KeptFiles
+                    // were ever raised to 3. Written so that it is true at any
+                    // setting: from the oldest kept file down to 1, each moving up
+                    // one slot.
+                    for (int i = KeptFiles - 1; i >= 1; i--)
                     {
                         string from = System.IO.Path.Combine(Folder, "app." + i + ".log");
                         string to = System.IO.Path.Combine(Folder, "app." + (i + 1) + ".log");
@@ -202,25 +209,14 @@ public static class AppLog
 
 
     /// <summary>
-    /// Replaces anything that identifies the person using the machine: the profile
-    /// folder, and the user name wherever it appears as a path segment.
+    /// Replaces anything that identifies the person using the machine: the user
+    /// name in a profile path, and the bare user name wherever it turns up in a
+    /// path or a message.
     /// <para>
-    /// Plain string replacement rather than a pattern, and the two behave very
-    /// differently here. A pattern has to be built out of the name, so a name that
-    /// is a single letter or ends in a backslash makes the pattern itself illegal -
-    /// a crash on the first line of startup, on the path every log write goes
-    /// through. Plain replacement has no such problem with any name at all.
-    /// </para>
-    /// <para>
-    /// This used to guard the second replacement with <c>name.Length &gt; 2</c>,
-    /// left over from the pattern days, where skipping the awkward names was the
-    /// whole fix. With plain replacement the guard no longer prevents anything and
-    /// only achieves one thing: an account called "ab" or "x" had its name left in
-    /// the log verbatim, in exactly the shapes the profile replace cannot catch -
-    /// the <c>\\?\</c> device path form, and a profile that is not under
-    /// C:\Users at all. The log is what a user pastes into a public bug report, so
-    /// a name that survives it is a disclosure, and the reason for the guard is
-    /// gone.
+    /// Done with plain string replacement rather than a pattern. The obvious
+    /// version of this used a regular expression, and a user name that is a
+    /// single letter or ends in a backslash turns the pattern itself into
+    /// something illegal, which is a crash on the very first line of startup.
     /// </para>
     /// </summary>
     public static string Sanitise(string text) => Sanitise(
@@ -229,13 +225,22 @@ public static class AppLog
         Environment.UserName);
 
     /// <summary>
-    /// The redaction itself, with the machine's own details passed in.
+    /// The redaction itself, with this machine's own details passed in.
     /// <para>
     /// Split out so it can be exercised for a user name that is not this one. The
     /// whole point of the change above is what happens to a one or two character
     /// account name, and no machine running the tests is going to have one, so
     /// reading <see cref="Environment.UserName"/> inside would put the behaviour
     /// that matters permanently out of reach of a test.
+    /// </para>
+    /// <para>
+    /// Which is also why there is no length guard on the name. It used to be
+    /// skipped for anything under three characters, on the reasoning that a
+    /// two-letter string appearing in a message was too likely to be a coincidence
+    /// - and that skipped the exact case the second replacement exists for. A
+    /// profile on another drive, or kept somewhere unusual, leaves the first
+    /// replacement with nothing to match, and then the name survives into a log
+    /// that is meant to be pasted into a public bug report.
     /// </para>
     /// </summary>
     internal static string Sanitise(string text, string profile, string name)

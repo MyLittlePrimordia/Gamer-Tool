@@ -56,6 +56,27 @@ public partial class App : Application
             // should carry on.
             claimed = true;
         }
+        catch (UnauthorizedAccessException)
+        {
+            // A mutex left behind by a different principal whose DACL denies this
+            // one SYNCHRONIZE or MUTEX_MODIFY_STATE. WaitOne throws rather than
+            // returning false, and this is caught above the point where the
+            // dispatcher and domain handlers are registered - the name is fixed,
+            // so a hardened or differently-owned install reproduces it, and the
+            // result was an unhandled exception on the way in with no log line
+            // explaining the start that never got any further.
+            //
+            // Treated as "cannot claim it" rather than "claim it anyway". The
+            // process holding it is entitled to, and assuming otherwise is how two
+            // instances end up fighting over the gamma ramp.
+            MessageBox.Show(
+                "GAMER TOOL COULD NOT CHECK FOR ANOTHER COPY RUNNING\n\n"
+                    + "Windows refused this app access to its single-instance check.\n"
+                    + "If another copy is already running, close it and try again.",
+                "GAMER TOOL", MessageBoxButton.OK, MessageBoxImage.Warning);
+            Shutdown();
+            return;
+        }
 
         if (!claimed)
         {
@@ -64,8 +85,10 @@ public partial class App : Application
             return;
         }
 
-        // Opened before anything else can fail, so the first line in the file is
-        // the one that explains a start that never got any further.
+        // Opened as early as it can be, so the first line in the file is the one that
+        // explains a start that never got any further. It cannot be first: the
+        // single-instance claim above can block for five seconds or throw, and
+        // that comment claimed a guarantee the code did not keep.
         AppLog.Info("start " + (typeof(App).Assembly.GetName().Version?.ToString() ?? "?")
             + " on " + Environment.OSVersion.VersionString
             + " " + (Environment.Is64BitProcess ? "x64" : "x86")

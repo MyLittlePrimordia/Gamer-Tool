@@ -51,13 +51,42 @@ public sealed class HotkeySlot
 
     public bool IsSelfTarget { get; set; }
 
+    /// <summary>
+    /// This slot is not bound to a game. It applies to any fullscreen program that
+    /// no other slot claims.
+    /// <para>
+    /// The case it covers is forgetting to bind something: a new game, a launcher
+    /// that starts a different executable, or a game that updates itself and
+    /// changes path. Binding by path is exact and that is what makes it safe -
+    /// and it is also what makes it fail silently when the path changes, which is
+    /// the one thing a slot exists to prevent.
+    /// </para>
+    /// <para>
+    /// Fullscreen is the qualifier that makes this safe rather than maddening.
+    /// Without it, alt-tabbing to a browser would apply the slot, and the app
+    /// would take over the picture of every window the user visits. A window
+    /// covering its whole monitor is the one shape that reliably means "a game is
+    /// running", and it is the same test the gamma lock already needs to decide
+    /// not to fight something.
+    /// </para>
+    /// <para>
+    /// At most one wildcard is armed. Two would both match every unmatched
+    /// program and the order between them would be the order they happen to sit in
+    /// the list, which is not a rule anybody could state.
+    /// </para>
+    /// </summary>
+    public bool IsAnyGameTarget { get; set; }
+
     public bool Enabled { get; set; } = true;
 
     public bool HasTarget
     {
         get
         {
-            return IsSelfTarget || !string.IsNullOrWhiteSpace(AppExePath) || !string.IsNullOrWhiteSpace(AppName);
+            return IsSelfTarget
+                || IsAnyGameTarget
+                || !string.IsNullOrWhiteSpace(AppExePath)
+                || !string.IsNullOrWhiteSpace(AppName);
         }
     }
 
@@ -76,6 +105,14 @@ public sealed class HotkeySlot
             if (IsSelfTarget)
             {
                 return "GAMER TOOL";
+            }
+
+            // Ahead of the HasTarget check, which would otherwise report NO GAME
+            // for a wildcard: it has no path and no name, so it looks untargeted
+            // to everything that has not been taught about it.
+            if (IsAnyGameTarget)
+            {
+                return "ANY GAME";
             }
 
             if (!HasTarget)
@@ -127,6 +164,7 @@ public sealed class HotkeySlot
             AutoActivate = AutoActivate,
             ApplyOnStart = ApplyOnStart,
             IsSelfTarget = IsSelfTarget,
+            IsAnyGameTarget = IsAnyGameTarget,
             MonitorDevice = MonitorDevice,
             OutputDeviceId = OutputDeviceId,
             Enabled = Enabled

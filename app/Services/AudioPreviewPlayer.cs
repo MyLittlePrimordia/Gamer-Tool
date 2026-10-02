@@ -326,7 +326,15 @@ public sealed class AudioPreviewPlayer : IDisposable
 
             // The sample chain is single pass, so the loop is a fresh chain over
             // the same in-memory bytes rather than a seek.
-            TearDownOutputOnly();
+            //
+            // The reader and the mix are disposed along with the output, not just
+            // the output. TearDownOutputOnly left them to be overwritten on the
+            // line below, so every end-of-loop iteration abandoned a 3.7 MB buffer
+            // and its decoder for the finaliser - on a track set to repeat, which
+            // is the default state, that is roughly a track's worth per few
+            // seconds for as long as the preview is left playing. Prepare does
+            // this correctly through TearDown, which is why only the loop leaked.
+            TearDown();
 
             byte[] data = DisplayPreview.ReadAsset(AssetFor(Track));
             _reader = new Mp3FileReader(new MemoryStream(data, writable: false));

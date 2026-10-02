@@ -379,7 +379,15 @@ public sealed class AudioPreset
     /// </summary>
     public static AudioPreset Flat(int bandCount = PresetBandCount)
     {
-        int bands = bandCount <= 0 ? PresetBandCount : bandCount;
+        // Bounded against BandCounts as well as against zero. The count arrives
+        // from two places that are not the app: another program's status.json and
+        // a hand-edited settings file, and neither bounds it. A count of two
+        // billion sized a double array of sixteen gigabytes from here. The engine
+        // has a fixed set of layouts, so anything outside them is not a layout at
+        // all and the default is the honest answer rather than a clamp.
+        int bands = bandCount <= 0 || !BandCounts.Contains(bandCount)
+            ? PresetBandCount
+            : bandCount;
         return new AudioPreset
         {
             Id = "flat",
@@ -442,17 +450,32 @@ public sealed class AudioPreset
         // Movement cues. Explosions live under about 150Hz, so that is cut hard,
         // and the presence bands come up so footsteps, reloads and a defuse read
         // first. Master gain is up a little because the curve only removes energy
-        // from the bottom rather than adding any.
+        // from the bottom rather than adding any - and the headroom that boost
+        // needs is taken off automatically, so the figure here is an offset and
+        // not the level that reaches the engine.
+        //
+        // No ambience and no surround, and this is the reason the preset exists in
+        // this shape rather than the one it shipped in. Games in this bracket -
+        // Counter-Strike, Valorant, Apex, Warzone - already output binaural audio
+        // with real interaural timing and head-related filtering, and adding a
+        // second spatialiser on top of it does not widen anything: the two stage
+        // models disagree about where a sound is, the summed signal has comb
+        // filtering across the whole midrange, and a transient as short as a
+        // footstep smears and detaches from its own direction. The EQ is enough.
         new AudioPreset
         {
             Id = "footstep",
             Name = "Footsteps",
             Tag = "Movement",
-            Bands = new[] { -8.0, -5.0, -2.0, 0.0, 2.0, 5.0, 6.0, 4.0, 1.0, -1.0 },
+            Bands = new[] { -7.0, -4.0, -1.0, 1.0, 2.0, 4.0, 6.0, 3.0, 0.0, -3.0 },
             NumBands = 10,
-            Clarity = 6.0,
-            Ambience = 1.0,
-            Surround = 1.0,
+            // Capped from 6.0. Clarity is a harmonic exciter, so it manufactures
+            // the upper midrange content that gunshot cracks and whistled voice
+            // already have most of - and at this level it is ear fatigue bought
+            // with detail nobody asked for.
+            Clarity = 3.0,
+            Ambience = 0.0,
+            Surround = 0.0,
             DynamicBoost = 3.0,
             BassBoost = 0.0,
             MasterGain = 3.0,
@@ -464,16 +487,22 @@ public sealed class AudioPreset
         // Battle royale. A gentler low cut than Footsteps, because the loud thing
         // in these games is an air strike rather than a footstep, and the stage is
         // opened up so a direction still reads across a wider field of view.
+        //
+        // The same reasoning as Footsteps on the ambience and the surround, and
+        // for a stronger reason here: the whole job is hearing a distant contact
+        // and knowing where it was. A second spatialiser does not add distance
+        // information to a signal that already carries it, it smears the arrival
+        // that the distance was being read from.
         new AudioPreset
         {
             Id = "royale",
             Name = "Royale",
             Tag = "Battle royale",
-            Bands = new[] { -6.0, -3.5, -1.5, 0.5, 2.0, 4.0, 4.0, 3.0, 1.5, 0.0 },
+            Bands = new[] { -5.0, -2.0, 0.0, 1.0, 2.0, 3.0, 5.0, 3.0, 1.0, -1.0 },
             NumBands = 10,
-            Clarity = 5.0,
-            Ambience = 4.0,
-            Surround = 5.0,
+            Clarity = 3.0,
+            Ambience = 0.0,
+            Surround = 0.0,
             DynamicBoost = 3.0,
             BassBoost = 1.0,
             MasterGain = 2.0,
@@ -485,14 +514,24 @@ public sealed class AudioPreset
         // Multiplayer combat. Weapons carry their weight in the low mids, and the
         // top end is opened so a hitmarker or a ping cuts through the fight. The
         // filter is the tightest here, which keeps impacts from smearing.
+        //
+        // Ambience and surround stay on here, unlike the two competitive presets
+        // above, because this one is aimed at games that mix for a stage rather
+        // than for headphones: Battlefield, Helldivers. There is no binaural
+        // master to fight, so the spatial cues are adding information rather than
+        // duplicating it.
         new AudioPreset
         {
             Id = "explosion",
             Name = "Shooter",
             Tag = "Combat",
-            Bands = new[] { -3.0, -1.0, 0.0, 1.5, 2.5, 3.5, 4.5, 5.0, 4.0, 2.0 },
+            Bands = new[] { 3.0, 4.0, 1.0, -1.0, 0.0, 2.0, 3.5, 4.0, 2.0, 0.0 },
             NumBands = 10,
-            Clarity = 5.0,
+            // 5.0 to 4.0, which was not on the list to change and had to be. This
+            // preset had the highest clarity of the three combat curves and sat
+            // above the cap the others were pulled under; a gunshot crack is the
+            // loudest thing in the game it is aimed at.
+            Clarity = 4.0,
             Ambience = 1.0,
             Surround = 2.0,
             DynamicBoost = 2.5,
@@ -511,7 +550,7 @@ public sealed class AudioPreset
             Id = "racing",
             Name = "Racing",
             Tag = "Engines",
-            Bands = new[] { 4.0, 6.0, 3.5, 1.0, -1.0, 0.0, 2.0, 3.5, 5.5, 3.5 },
+            Bands = new[] { 5.0, 6.0, 3.0, 0.0, -1.0, 1.0, 3.0, 4.0, 3.0, 1.0 },
             NumBands = 10,
             Clarity = 4.0,
             Ambience = 1.5,
@@ -532,7 +571,7 @@ public sealed class AudioPreset
             Id = "arcade",
             Name = "Immersive",
             Tag = "Story",
-            Bands = new[] { 6.0, 4.5, 2.0, 0.0, -1.0, 1.0, 2.5, 3.5, 4.5, 4.0 },
+            Bands = new[] { 4.0, 3.0, 1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.5, 3.0 },
             NumBands = 10,
             Clarity = 3.0,
             Ambience = 5.0,
@@ -553,9 +592,14 @@ public sealed class AudioPreset
             Id = "moba",
             Name = "Voice Chat",
             Tag = "Comms",
-            Bands = new[] { -9.0, -6.0, -2.0, 3.0, 5.0, 4.5, 2.5, 0.0, -3.0, -6.0 },
+            Bands = new[] { -9.0, -6.0, -1.0, 2.0, 4.0, 5.0, 3.0, 0.0, -4.0, -8.0 },
             NumBands = 10,
-            Clarity = 7.0,
+            // The highest Clarity in the list until now, at 7.0, and the least
+            // appropriate place for it: this is the preset people leave on while
+            // they are on voice comms, so an exciter adding 7 dB of harmonic
+            // energy in the sibilant band is the exact ear-fatigue complaint the
+            // cap exists for.
+            Clarity = 4.0,
             Ambience = 0.0,
             Surround = 0.0,
             DynamicBoost = 1.0,
@@ -574,7 +618,7 @@ public sealed class AudioPreset
             Id = "basshead",
             Name = "Basshead",
             Tag = "Sub bass",
-            Bands = new[] { 9.0, 6.0, 2.5, 0.0, -1.0, -1.0, 0.0, 1.0, 2.0, 2.5 },
+            Bands = new[] { 8.0, 6.0, 3.0, 1.0, 0.0, 0.0, 1.0, 2.0, 3.0, 2.0 },
             NumBands = 10,
             Clarity = 2.0,
             Ambience = 1.0,
@@ -595,9 +639,9 @@ public sealed class AudioPreset
             Id = "soundtrack",
             Name = "Soundtrack",
             Tag = "Orchestral",
-            Bands = new[] { 0.0, 1.0, 0.0, -0.5, 0.0, 1.5, 2.5, 4.5, 6.0, 7.0 },
+            Bands = new[] { 2.0, 1.0, 0.0, -0.5, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0 },
             NumBands = 10,
-            Clarity = 5.5,
+            Clarity = 3.5,
             Ambience = 3.0,
             Surround = 3.0,
             DynamicBoost = 2.0,
@@ -616,7 +660,7 @@ public sealed class AudioPreset
             Id = "lofi",
             Name = "Lo-Fi",
             Tag = "Warm",
-            Bands = new[] { 3.0, 3.5, 3.0, 2.0, 1.0, 0.0, -1.0, -2.5, -4.0, -6.0 },
+            Bands = new[] { 3.0, 4.0, 2.0, 1.0, 0.0, -1.0, -2.0, -3.0, -5.0, -7.0 },
             NumBands = 10,
             Clarity = 0.0,
             Ambience = 1.5,
@@ -637,7 +681,7 @@ public sealed class AudioPreset
             Id = "cinematic",
             Name = "Cinema",
             Tag = "Film",
-            Bands = new[] { 6.5, 4.0, 1.0, -1.0, 1.0, 3.0, 2.5, 2.0, 3.5, 4.5 },
+            Bands = new[] { 6.0, 4.0, 1.0, -1.0, 1.0, 2.0, 3.0, 3.5, 4.0, 3.0 },
             NumBands = 10,
             Clarity = 4.0,
             Ambience = 4.0,
@@ -659,8 +703,12 @@ public sealed class AudioPreset
             Id = "latenight",
             Name = "Late Night",
             Tag = "Quiet",
-            Bands = new[] { -4.0, -2.0, 0.0, 2.5, 3.5, 4.0, 3.0, 1.5, 0.0, -2.0 },
+            Bands = new[] { -8.0, -5.0, -2.0, 2.0, 3.0, 4.0, 3.0, 1.0, -1.0, -4.0 },
             NumBands = 10,
+            // 4.5, which is the cap and is left there. This is the one preset where
+            // the highest clarity in the set is defensible: the material is quiet by
+            // design and mostly speech, so there is nothing loud enough to be
+            // fatiguing and the top end is what makes a murmur audible.
             Clarity = 4.5,
             Ambience = 0.0,
             Surround = 0.0,

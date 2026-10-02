@@ -37,11 +37,16 @@ public sealed class SlotService
             AutoActivate = false,
             Enabled = true
         },
-        new HotkeySlot
+new HotkeySlot
         {
             Id = "slot_story",
             Name = "Story and RPG",
-            DisplayPresetId = "flat",
+            // Paired with the film look rather than Standard. The sound half of this
+            // slot was already doing the work - it is the Immersive curve, and a
+            // game with no picture of its own was getting a neutral screen beside
+            // a deliberately cinematic one. Standard is not wrong, it is just a
+            // mismatch: the two halves of one slot are meant to be one picture.
+            DisplayPresetId = "cinematic",
             AudioPresetId = "arcade",
             Hotkey = "SHIFT+3",
             AppExePath = null,
@@ -135,6 +140,21 @@ public sealed class SlotService
         copy.ApplyOnStart = source.ApplyOnStart;
         copy.Enabled = source.Enabled;
 
+        // The wildcard is not carried over. A duplicate exists to give a second
+        // key to the same look, and a copy of the one wildcard would mean two slots
+        // claiming every unbound game - which ResolveAutoClaims then has to stand
+        // one of down, so the duplicate silently differs from what it was a
+        // duplicate of. The new slot starts untargeted instead, which is what the
+        // user can then choose.
+        //
+        // ApplyOnStart is deliberately left alone. It looks like the same kind of
+        // mode flag and is not treated like one: there is a test pinning that it
+        // comes across, so a duplicate of a start-up slot is itself a start-up
+        // slot. Two of them is ambiguous - the launch picks the first - but that is
+        // pre-existing behaviour with a decision behind it, and quietly changing
+        // it here would be a different change wearing this feature's clothes.
+        copy.IsAnyGameTarget = false;
+
         return copy;
     }
 
@@ -183,7 +203,7 @@ public sealed class SlotService
         HashSet<string> usedIds = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string> usedKeys = new(StringComparer.OrdinalIgnoreCase);
 
-        foreach (HotkeySlot slot in settings.Slots)
+foreach (HotkeySlot slot in settings.Slots)
         {
             if (string.IsNullOrWhiteSpace(slot.Id))
             {
@@ -193,6 +213,28 @@ public sealed class SlotService
             if (string.IsNullOrWhiteSpace(slot.Name))
             {
                 slot.Name = "SLOT";
+            }
+
+            // The three target modes are mutually exclusive, and a file can arrive
+            // carrying more than one - a hand edit, or a build where the flags were
+            // separate. Everything downstream reads them independently, so a slot
+            // carrying two would arm two mechanisms and revert through whichever
+            // happened to be checked first.
+            //
+            // On start wins over the wildcard, because it is the older mode and
+            // the more specific claim: it applies at a known moment to a known
+            // thing, where the wildcard is a fallback. Self over both, since it
+            // does not compete for games at all.
+            if (slot.IsSelfTarget)
+            {
+                slot.IsAnyGameTarget = false;
+                slot.ApplyOnStart = true;
+            }
+            else if (slot.IsAnyGameTarget)
+            {
+                slot.ApplyOnStart = false;
+                slot.AppExePath = null;
+                slot.AppName = null;
             }
 
             // Drop a stored binding that names a key nobody can press. Builds
@@ -214,8 +256,22 @@ public sealed class SlotService
             slots.Add(slot);
         }
 
-        foreach (ComboPreset combo in settings.CustomCombos ?? new List<ComboPreset>())
+foreach (ComboPreset combo in settings.CustomCombos ?? new List<ComboPreset>())
         {
+            // Matched by name before minting an id, for the same reason the
+            // profile pass below does and with the same bug behind it. A combo
+            // whose Id does not begin with "slot_" had a fresh one generated on
+            // every load, so each launch appended one more slot per combo and the
+            // list grew without bound. CustomCombos is never cleared, so nothing
+            // stopped it. The name is what the user gave the combo and is what the
+            // slot it became is called, so it is also the only thing available to
+            // recognise it by.
+            bool already = slots.Any(s => string.Equals(s.Name, combo.Name, StringComparison.OrdinalIgnoreCase));
+            if (already)
+            {
+                continue;
+            }
+
             // A custom combo from a build that had them becomes a slot, so
             // nothing a user made is silently dropped on upgrade.
             string id = combo.Id.StartsWith("slot_", StringComparison.Ordinal) ? combo.Id : AppProfileTools.NewId("slot");
@@ -289,11 +345,16 @@ public sealed class SlotService
         return slots;
     }
 
-    public static string TargetKey(HotkeySlot slot)
+public static string TargetKey(HotkeySlot slot)
     {
         if (slot.IsSelfTarget)
         {
             return "self";
+        }
+
+        if (slot.IsAnyGameTarget)
+        {
+            return "any";
         }
 
         if (string.IsNullOrWhiteSpace(slot.AppExePath))
@@ -304,9 +365,17 @@ public sealed class SlotService
         return AppProfileTools.ProcessNameOf(slot.AppExePath).ToLowerInvariant();
     }
 
-    public static void ResolveAutoClaims(List<HotkeySlot> slots)
+public static void ResolveAutoClaims(List<HotkeySlot> slots)
     {
         HashSet<string> claimed = new(StringComparer.OrdinalIgnoreCase);
+
+        // At most one wildcard, and the first one in the list keeps it.
+        //
+        // Two wildcards would both match every unbound fullscreen program, so
+        // which one applied would come down to the order they happen to sit in the
+        // list - which is not a rule anybody could state, let alone rely on. First
+        // wins is the same rule every other conflict on this screen already uses.
+        bool wildcardTaken = false;
 
         foreach (HotkeySlot slot in slots)
         {
@@ -326,6 +395,17 @@ public sealed class SlotService
             {
                 slot.AutoActivate = false;
                 continue;
+            }
+
+            if (slot.IsAnyGameTarget)
+            {
+                if (wildcardTaken)
+                {
+                    slot.AutoActivate = false;
+                    continue;
+                }
+
+                wildcardTaken = true;
             }
 
             if (!claimed.Add(key))
@@ -419,12 +499,21 @@ public sealed class SlotService
         return appDevice;
     }
 
-    public static HashSet<string> TargetProcessNames(IEnumerable<HotkeySlot> slots)
+public static HashSet<string> TargetProcessNames(IEnumerable<HotkeySlot> slots)
     {
         HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
         foreach (HotkeySlot slot in slots)
         {
             if (!slot.Enabled || !slot.AutoActivate)
+            {
+                continue;
+            }
+
+            // A wildcard names no process, so it contributes nothing here. That is
+            // correct rather than an oversight: the watcher watches a fixed list of
+            // names, and a wildcard works from the foreground window instead, which
+            // is a different route entirely. See MatchWildcard.
+            if (slot.IsSelfTarget || slot.IsAnyGameTarget)
             {
                 continue;
             }
@@ -477,6 +566,34 @@ public sealed class SlotService
             if (!string.IsNullOrWhiteSpace(processName)
                 && !string.IsNullOrWhiteSpace(slot.AppExePath)
                 && string.Equals(AppProfileTools.ProcessNameOf(slot.AppExePath), processName, StringComparison.OrdinalIgnoreCase))
+            {
+                return slot;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The wildcard slot, if one is armed.
+    /// <para>
+    /// Kept separate from <see cref="MatchForeground"/> because the order is the
+    /// whole design. A specific match always wins: a wildcard is a fallback for
+    /// "I forgot to bind this", not a competitor. Checking for one first would
+    /// mean every bound game was at the mercy of list order.
+    /// </para>
+    /// <para>
+    /// The caller decides whether the window is a candidate at all - that is the
+    /// fullscreen test, and it needs the window handle rather than the strings
+    /// this class is handed. What is here is only "is there a wildcard, and is it
+    /// armed".
+    /// </para>
+    /// </summary>
+    public static HotkeySlot? MatchWildcard(IReadOnlyList<HotkeySlot> slots)
+    {
+        foreach (HotkeySlot slot in slots)
+        {
+            if (slot.Enabled && slot.AutoActivate && slot.HasWork && slot.IsAnyGameTarget)
             {
                 return slot;
             }

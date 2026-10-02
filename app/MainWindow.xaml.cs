@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -6,6 +6,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -184,6 +185,52 @@ public partial class MainWindow : Window
     private string _autoProcess = string.Empty;
 
 
+    /// <summary>
+    /// The process a wildcard slot applied itself for.
+    /// <para>
+    /// Separate from <see cref="_autoProcess"/> because the revert cannot use that
+    /// one. <see cref="OnTargetExited"/> looks the slot up by process name through
+    /// <see cref="SlotService.MatchProcessName"/>, which finds nothing here: a
+    /// wildcard matched a program that is not bound to any slot, so there is no
+    /// entry to match. Without this the profile would stay boosted for whatever the
+    /// user launched next.
+    /// </para>
+    /// <para>
+/// Cleared by the same places that clear the rest of the auto state, so a
+    /// revert cannot fire for a wildcard application the user has since overridden.
+    /// </para>
+    /// </summary>
+    private string _autoWildcardProcess = string.Empty;
+
+
+    /// <summary>
+    /// The device whose panel the loaded preset put where it is, or empty when no
+    /// preset owns a panel.
+    /// <para>
+    /// A device name rather than a bool, and that is the point of the fix. The
+    /// stand-down decision needs to know whether *this* preset moved *that* panel,
+    /// and the rescan needs to be able to drop the claim when that panel goes away.
+    /// A bare flag can answer neither question: nothing can tell whether the panel
+    /// it referred to is still attached, so ownership outlived an undock and the
+    /// next stand-down pushed a detached monitor's captured baseline onto whatever
+    /// display had been handed the same \\.\DISPLAYn name in the meantime.
+    /// </para>
+    /// <para>
+    /// Recorded at apply time rather than read back off the preset on the way out,
+    /// for two reasons. The preset id is overwritten by the stand-down itself
+    /// before the question gets asked, so there would be nothing left to read. And
+    /// the honest answer is about what actually happened to the panel, not about
+    /// what a preset file says.
+    /// </para>
+    /// </summary>
+    private string _presetOwnedPanelDevice = string.Empty;
+
+    /// <summary>
+    /// Whether the loaded preset currently owns a panel, which decides whether a
+    /// stand-down restores one.
+    /// </summary>
+    private bool _presetOwnsPanel => _presetOwnedPanelDevice.Length > 0;
+
     private DateTime _autoStamp = DateTime.MinValue;
 
 
@@ -285,6 +332,15 @@ public partial class MainWindow : Window
         WirePanicKeycap();
         Closing += OnClosing;
         Loaded += OnWindowLoaded;
+
+        // The display-change hook. On the window's own HwndSource rather than a
+        // hidden one, because this window is always alive - it hides to the tray
+        // rather than closing - and a second source would be a second thing to
+        // leak if the teardown order were ever wrong. Hooked here rather than in
+        // OnWindowLoaded because the handle exists as soon as the source is
+        // initialised and Loaded can fire more than once.
+        SourceInitialized += OnSourceInitialized;
+        Closing += (_, _) => _displayDebounce.Ignore = true;
 
         // The displays go back to the brightness they were found at on the way out, and
         // this is what puts that in front of the exit path. EmergencyReset calls it
@@ -516,21 +572,6 @@ private void HideToTray()
 
 
     /// <summary>
-    /// The one place the settings switches are told what the profile says.
-    /// <para>
-    /// This used to be written out inline in the constructor, and a restore
-    /// repeated a copy of it with five rows missing. A control left showing the
-    /// old value while the profile held the new one is worse than either on its
-    /// own, because the next save from any interaction writes the stale control
-    /// back and silently undoes the restore. Anything that replaces the profile
-    /// calls this rather than remembering which switches it has to remember.
-    /// </para>
-    /// <para>
-    /// The startup registry entry is the exception and is asked of the system
-    /// rather than the profile, because that is where the truth lives.
-    /// </para>
-    /// </summary>
-    /// <summary>
     /// Makes the caption buttons focusable, or not, depending on how the user is
     /// driving the window.
     /// <para>
@@ -552,6 +593,28 @@ private void HideToTray()
     }
 
 
+    /// <summary>
+    /// The one place the settings switches are told what the profile says.
+    /// <para>
+    /// This used to be written out inline in the constructor, and a restore
+    /// repeated a copy of it with five rows missing. A control left showing the
+    /// old value while the profile held the new one is worse than either on its
+    /// own, because the next save from any interaction writes the stale control
+    /// back and silently undoes the restore. Anything that replaces the profile
+    /// calls this rather than remembering which switches it has to remember.
+    /// </para>
+    /// <para>
+    /// The startup registry entry is the exception and is asked of the system
+    /// rather than the profile, because that is where the truth lives.
+    /// </para>
+    /// <para>
+    /// Its comment used to sit above SetCaptionFocusable instead, because the two
+    /// were written with one closing tag between them and the compiler read that as
+    /// one doc comment on the wrong method. Which left the method a restore depends
+    /// on with no documentation at all, and a second one on a method that did not
+    /// want it.
+    /// </para>
+    /// </summary>
     private void SyncControlsFromSettings()
     {
         GammaLockBox.IsChecked = _settings.GammaLock;
@@ -696,9 +759,170 @@ private void HideToTray()
     }
 
 
+    /// <summary>
+    /// The source the message hook was attached to, and the delegate itself, so
+    /// both can be undone on the way out.
+    /// <para>
+    /// RemoveHook takes the delegate rather than a token, and a delegate that is
+    /// built twice is two different objects, so removing one does not remove the
+    /// other. Naming the method - which is what this field holds - is what makes
+    /// the removal match.
+    /// </para>
+    /// </summary>
+    private HwndSource? _displayHookSource;
+
+    private readonly DisplayChangeDebounce _displayDebounce = new();
+
+    private DispatcherTimer? _displayDebounceTimer;
+
+    private void OnSourceInitialized(object? sender, EventArgs e)
+    {
+        if (PresentationSource.FromVisual(this) is not HwndSource source)
+        {
+            return;
+        }
+
+        _displayHookSource = source;
+        source.AddHook(OnWindowMessage);
+
+        // Started here rather than in the constructor so the debounce timer does
+        // not exist until there is a window to receive the messages. One second,
+        // not the 200ms the burst is measured in: short enough that the screen is
+        // not visibly unboosted for long, long enough that the messages a dock
+        // produces have all arrived.
+        _displayDebounceTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(1)
+        };
+        _displayDebounceTimer.Tick += (_, _) => RunDisplayRescan();
+        _displayDebounceTimer.Start();
+    }
+
+    /// <summary>
+    /// The window's message hook. Only display topology is interesting; everything
+    /// else is handed straight back to WPF.
+    /// </summary>
+    private IntPtr OnWindowMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (WindowMessage.Matters(msg, wParam.ToInt64()))
+        {
+            _displayDebounce.Notify();
+        }
+
+        return IntPtr.Zero;
+    }
+
+    /// <summary>
+    /// Re-enumerates the displays and puts the ramp back.
+    /// <para>
+    /// Two things, in this order, and the second is the reason this exists rather
+    /// than just a nicer display list. Windows resets the gamma ramp on a display
+    /// event, so the screen the user had just set up is sitting on the OS default
+    /// by the time the message arrives. The gamma lock's own timer re-pushes within
+    /// 1.5 seconds, but only if it is switched on, and it re-pushes without ever
+    /// re-enumerating - so a screen that had just been attached was never in the
+    /// list to be pushed to. That is the whole defect: the ramp comes back for
+    /// screens the app already knew about, and never for the new one.
+    /// </para>
+    /// <para>
+    /// So the rescan runs first and the push immediately after, rather than leaving
+    /// the screen wrong until the next lock tick.
+    /// </para>
+    /// </summary>
+    private void RunDisplayRescan()
+    {
+        if (!_displayDebounce.IsDue)
+        {
+            return;
+        }
+
+        _displayDebounce.Consume();
+
+        try
+        {
+            IReadOnlyList<string> before = _display.Monitors;
+
+            _display.Rescan();
+
+            IReadOnlyList<string> after = _display.Monitors;
+            bool added = after.Count > before.Count;
+            bool removed = after.Count < before.Count;
+
+            TraceLog.Write("DISPLAY rescan: "
+                + before.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + " -> " + after.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + (added ? " (added)" : removed ? " (removed)" : string.Empty));
+
+            // Ownership of the panel dropped, if the panel this preset moved is not
+            // in the list any more.
+            //
+            // Deliberately a physical fact rather than a bookkeeping one. There is
+            // nothing to restore to: an undocked monitor is off the DDC/CI bus, its
+            // scaler holds whatever it was last set to until it is powered off, and
+            // trying anyway risks writing to a *different* panel that Windows has
+            // since handed the same \\.\DISPLAYn name. Every DDC utility behaves this
+            // way - a detached panel keeps its last hardware level - and that is the
+            // correct trade against flashing a laptop's internal panel to full.
+            //
+            // So the claim is surrendered here and the stand-down leaves the panel
+            // alone, rather than carrying a baseline for hardware that is no longer
+            // reachable to somewhere that is.
+            if (_presetOwnedPanelDevice.Length > 0
+                && !after.Any(d => DisplayService.DeviceMatches(d, _presetOwnedPanelDevice)))
+            {
+                TraceLog.Write("backlight ownership dropped: " + _presetOwnedPanelDevice + " is no longer attached");
+                _presetOwnedPanelDevice = string.Empty;
+            }
+
+            // The service's own tables, for the same reason and with more teeth.
+            //
+            // Dropping the claim here stops the *stand-down* from restoring. It does
+            // not stop the *exit* path, which restores straight from the baseline
+            // record without consulting the window at all - so the record itself has
+            // to be pruned, while a rescan is already running. Otherwise a monitor
+            // that is no longer attached stays in the record, "\\.\DISPLAYn" gets
+            // reassigned to different hardware, and quitting writes one panel's
+            // captured brightness onto another. A DDC transaction takes seconds and
+            // the shutdown budget is about one, so re-probing on the way out is not
+            // available; pruning here is what makes the restore's own skip mean
+            // something.
+            Backlight.ForgetDetached(after);
+
+            // Read before the rebuild, because the rebuild is what destroys it.
+            // A docking station is plugged in by somebody who may well have been
+            // halfway through editing that exact slot row with the keyboard, and
+            // rebuilding under them drops focus to nothing.
+            string? focused = FocusedSlotTag();
+
+            // Both lists have to be rebuilt from the new set: a slot row's monitor
+            // dropdown is a snapshot of MonitorChoices taken when the row was built,
+            // so without this the dropdown keeps offering a screen that was just
+            // unplugged. BuildSlots is already the whole answer - it is what every
+            // other change to the slot list calls.
+            RefreshPresetBoxes();
+            BuildSlots();
+            RestoreSlotFocus(focused);
+            RefreshTraySlots();
+
+            // And the ramp, because Windows has just thrown it away. Only when
+            // there is one of ours to put back: pushing when IsEnabled is false
+            // would write a flat ramp over a screen nobody had tuned, which is the
+            // mistake the gamma lock already had to be corrected for.
+            if (_display.ShouldDefend)
+            {
+                _display.Push();
+                TraceLog.Write("DISPLAY ramp re-pushed after a display change");
+            }
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("DISPLAY rescan", ex);
+        }
+    }
+
     private void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
-        _display.ScanMonitors();
+        _display.Rescan();
         _display.StartLock();
         _display.SetLock(_settings.GammaLock);
 
@@ -1148,8 +1372,14 @@ private void HideToTray()
             _updating = false;
         }
 
-        UpdateScreenLabels(display);
-        UpdateSoundLabels(audio);
+        // The copies made above, not the parameters. Both of these re-alias the working
+        // field to whatever they are handed, so passing the originals undid the
+        // copy on the very next line - and the copy is the whole reason the working
+        // tune can be renamed to "Tuned" without the rename landing on a shipped
+        // preset that every other part of the app also holds a reference to. The
+        // protection existed and was undone one line later.
+        UpdateScreenLabels(_workDisplay);
+        UpdateSoundLabels(_workAudio);
         UpdatePresetChrome();
 
         // The curve reads the faders' own geometry, so it can only be drawn once

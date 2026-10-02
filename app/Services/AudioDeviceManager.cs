@@ -48,24 +48,48 @@ public sealed class AudioDeviceManager
             using MMDeviceEnumerator enumerator = new();
             foreach (MMDevice device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
             {
-                string name = string.Empty;
-                try
+                // Disposed per iteration. An MMDevice holds a COM reference to the
+                // endpoint, and this is called on every startup, every rescan and
+                // every restore - so without it each of those leaves one reference
+                // per output device alive until the finaliser gets to them. The
+                // loopback feed disposes its own for exactly this reason, with the
+                // same note; the comment simply had not reached here.
+                using (device)
                 {
-                    // NAudio already falls back from the friendly name to the
-                    // device description, which is what the property store walk
-                    // this replaced was doing by hand.
-                    name = device.FriendlyName;
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine(ex.Message);
-                }
+                    string name = string.Empty;
+                    try
+                    {
+                        // NAudio already falls back from the friendly name to the
+                        // device description, which is what the property store walk
+                        // this replaced was doing by hand.
+                        name = device.FriendlyName;
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine(ex.Message);
+                    }
 
-                devices.Add(new AudioDeviceInfo
-                {
-                    Id = device.ID,
-                    Name = string.IsNullOrWhiteSpace(name) ? "OUTPUT " + (devices.Count + 1).ToString() : name,
-                });
+                    try
+                    {
+                        devices.Add(new AudioDeviceInfo
+                        {
+                            // Inside the same guard as the name. An endpoint
+                            // unplugged between the enumeration and this read
+                            // throws here, and the outer catch then abandoned the
+                            // rest of the list and returned whatever had been
+                            // collected - so one disappearing device could hide
+                            // every device after it.
+                            Id = device.ID,
+                            Name = string.IsNullOrWhiteSpace(name)
+                                ? "OUTPUT " + (devices.Count + 1).ToString()
+                                : name,
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine(ex.Message);
+                    }
+                }
             }
         }
         catch (Exception ex)

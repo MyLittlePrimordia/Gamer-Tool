@@ -31,7 +31,27 @@ public sealed class StartupService
             try
             {
                 using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RunKey);
-                return key?.GetValue(ValueName) is string value && value.Contains("GamerTool", StringComparison.OrdinalIgnoreCase);
+
+                // Matches the executable this run is actually made of, not the
+                // string anywhere in the value. It is written quoted with the path
+                // and " --tray", so the leaf can be pulled out and compared - and a
+                // plain Contains matched any value with "GamerTool" anywhere in it,
+                // so a stale entry pointing at C:\Tools\NotGamerTool\x.exe read as
+                // this app being set to start. The user then saw the switch on and
+                // nothing happened at boot.
+                if (key?.GetValue(ValueName) is not string value)
+                {
+                    return false;
+                }
+
+                string trimmed = value.Trim().Trim('"');
+                int space = trimmed.IndexOf(' ');
+                string path = space > 0 ? trimmed[..space] : trimmed;
+
+                return string.Equals(
+                    Path.GetFileName(path),
+                    Path.GetFileName(ExecutablePath),
+                    StringComparison.OrdinalIgnoreCase);
             }
             catch (Exception ex)
             {

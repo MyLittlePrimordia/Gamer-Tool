@@ -33,8 +33,16 @@ public class BacklightRestoreRecordTests
     {
         public List<uint> Writes { get; } = new();
 
+        /// <summary>Whether the probe still finds the display. Turned off to model a dock being pulled.</summary>
+        public bool Visible { get; set; } = true;
+
         public IReadOnlyList<MonitorProbe> ProbeAll(IReadOnlyCollection<string>? excludedDeviceKeys)
         {
+            if (!Visible)
+            {
+                return Array.Empty<MonitorProbe>();
+            }
+
             return new[]
             {
                 new MonitorProbe
@@ -116,6 +124,12 @@ public class BacklightRestoreRecordTests
         var bus = new FakeBus();
         BacklightService service = new(settings, bus);
 
+        // Probed, because a restore only writes to a device the service has
+        // verified is attached. Restore used to fall back to an assumed maximum and
+        // write to the device string regardless, which on a reassigned
+        // \\.\DISPLAYn meant putting one monitor's baseline onto a different panel.
+        service.Probe();
+
         MonitorProbe monitor = LiveProbe();
         service.TrySet(monitor, 70u, out _);
         Assert.Equal(70u, bus.Writes[^1]);
@@ -128,6 +142,36 @@ public class BacklightRestoreRecordTests
     }
 
     [Fact]
+    public void Restoring_skips_a_device_that_is_no_longer_attached()
+    {
+        // The wrong-device write, and the reason the skip above exists.
+        AppSettings settings = new() { HardwareBrightnessEnabled = true };
+        var bus = new FakeBus();
+        BacklightService service = new(settings, bus);
+        service.Probe();
+
+        MonitorProbe monitor = LiveProbe();
+        service.TrySet(monitor, 70u, out _);
+        Assert.Single(settings.OriginalHardwareBrightness);
+
+        // The dock is pulled. The next probe sees a different machine entirely, and
+        // Windows may well have handed "\\.\DISPLAY1" to whatever is plugged in now.
+        bus.Visible = false;
+        service.Probe();
+
+        int writesBefore = bus.Writes.Count;
+        service.RestoreAll();
+
+        // No write at all. The detached panel keeps the hardware level it had, which
+        // is what every DDC utility does, and the panel that is currently attached
+        // is not handed a brightness that was captured for different hardware.
+        Assert.Equal(writesBefore, bus.Writes.Count);
+
+        // And the claim is gone rather than retried forever.
+        Assert.Empty(settings.OriginalHardwareBrightness);
+    }
+
+    [Fact]
     public void A_second_session_on_the_same_profile_starts_from_the_screen_not_the_last_one()
     {
         AppSettings settings = new() { HardwareBrightnessEnabled = true };
@@ -135,6 +179,7 @@ public class BacklightRestoreRecordTests
         // Session one: darken to 10, then put it back.
         var firstBus = new FakeBus();
         BacklightService first = new(settings, firstBus);
+        first.Probe();
         first.TrySet(LiveProbe(), 10u, out _);
         first.RestoreAll();
 
@@ -145,6 +190,7 @@ public class BacklightRestoreRecordTests
         // Session two on the same settings object, which is what a relaunch is.
         var secondBus = new FakeBus();
         BacklightService second = new(settings, secondBus);
+        second.Probe();
         second.TrySet(nowOnScreen, 30u, out _);
 
         Assert.Equal(80u, settings.OriginalHardwareBrightness[Device]);

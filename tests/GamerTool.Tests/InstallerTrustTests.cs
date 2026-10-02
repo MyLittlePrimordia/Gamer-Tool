@@ -182,6 +182,43 @@ public class InstallerTrustTests
             Path.Combine(Path.GetTempPath(), "GamerToolTests-nope.exe"), SetupService.PublisherHint));
     }
 
+    /// <summary>
+    /// The download must not still be holding its own file when it is verified.
+    /// <para>
+    /// This is the case every other test in this file misses, because each of them
+    /// writes its file and then reads it back with nothing else open: they prove
+    /// the reader works, not that the reader is reachable. The download wrote
+    /// through a <c>FileShare.None</c> handle held by a using *declaration*, which
+    /// disposes at the end of the enclosing block - the whole try - so the handle
+    /// was still open when the signature check reopened the path. That is a
+    /// sharing violation, the reader swallowed it and returned null, and the
+    /// direct install reported "not signed by FxSound" for every download. On a
+    /// machine with no winget there was then no way to install at all.
+    /// </para>
+    /// <para>
+    /// So the sequence is asserted rather than the reader: a signed file, held the
+    /// way the download holds it, and the answer has to survive.
+    /// </para>
+    /// </summary>
+    [SkippableFact]
+    public void A_signed_download_is_still_verifiable_while_held_the_way_the_download_holds_it()
+    {
+        using SignedExecutable signed = CreateSignedExecutableOrSkip(TestPublisher);
+
+        // Same share mode the download opens with. Read succeeds against this, so
+        // the test below is genuinely testing the verification rather than failing
+        // early on a lock nothing can get past.
+        using FileStream held = new(
+            signed.FilePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read);
+
+        Assert.True(
+            SetupService.IsSignedByPublisher(signed.FilePath, TestPublisher),
+            "a signature could not be read while the file was held open the way the download holds it");
+    }
+
     [SkippableFact]
     public void A_real_signed_executable_is_recognised_as_signed()
     {

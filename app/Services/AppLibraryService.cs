@@ -161,6 +161,29 @@ public sealed class AppLibraryService
         return false;
     }
 
+    /// <summary>
+    /// Whether a path sits inside a directory, separator and all.
+    /// <para>
+    /// The separator is what stops "C:\Program Files (x86)" from counting as
+    /// inside "C:\Program Files", which a plain StartsWith would happily report.
+    /// Both sides are compared on their full form first, so a ".." that climbs
+    /// out and one that does not are told apart - the comparison here is on the
+    /// resolved paths, not on the text that was combined.
+    /// </para>
+    /// </summary>
+    private static bool IsUnder(string path, string root)
+    {
+        string full = Normalize(Path.GetFullPath(path));
+        string under = Normalize(Path.GetFullPath(root));
+
+        if (!full.StartsWith(under, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return full.Length == under.Length || full[under.Length] == '\\';
+    }
+
     private static bool IsSystemBinary(string exe)
     {
         string clean = Normalize(exe);
@@ -349,8 +372,19 @@ public sealed class AppLibraryService
                     continue;
                 }
 
-                string folder = Path.Combine(steamapps, "common", installDir);
-                if (!Directory.Exists(folder))
+                // Contained, because installdir is a string out of a file on disk rather than
+                // anything this app wrote. Path.Combine discards everything before
+                // it when handed a rooted value, so "installdir" of "C:\Windows"
+                // made folder exactly that, and a relative one walked out with
+                // enough "..". The result is only ever shown in a dropdown and used
+                // for a process-name match and an icon read, so nothing is executed
+                // - but a scan that walks out of the library it was asked about is
+                // still a scan that should not have gone there, and the fix is two
+                // lines rather than an argument about whether the impact is bounded.
+                string commonRoot = Path.GetFullPath(Path.Combine(steamapps, "common"));
+                string folder = Path.GetFullPath(Path.Combine(commonRoot, installDir));
+
+                if (!IsUnder(folder, commonRoot) || !Directory.Exists(folder))
                 {
                     continue;
                 }

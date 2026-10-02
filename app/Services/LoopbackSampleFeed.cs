@@ -131,16 +131,91 @@ public sealed class LoopbackSampleFeed : ISampleFeed
         Open();
     }
 
-    public void Stop()
+    public void Stop() => Close();
+
+    public void Dispose() => Close();
+
+    /// <summary>
+    /// Tears the capture down and empties the ring.
+    /// <para>
+    /// The dispose deliberately happens outside the ring lock. NAudio's
+    /// WasapiCapture.Dispose stops recording and then joins its capture thread,
+    /// and that thread raises DataAvailable into <see cref="OnData"/>, which
+    /// takes this same lock. Holding the lock across the join is a deadlock: the
+    /// only thread that can release it is the one being waited on. Nothing
+    /// reports it - no exception, no log line, no recovery - because the UI
+    /// thread simply never comes back.
+    /// </para>
+    /// <para>
+    /// So the lock is taken only to take ownership of the capture and to empty
+    /// the ring, and the blocking calls happen afterwards on this thread. The
+    /// fields are nulled while the lock is held so a second close arriving in
+    /// that window finds nothing to do rather than disposing twice.
+    /// </para>
+    /// </summary>
+    private void Close()
     {
+        WasapiCapture? capture;
+        MMDevice? device;
+
         lock (_ringGate)
         {
-            CloseCapture();
+            capture = _capture;
+            device = _device;
+            _capture = null;
+            _device = null;
+            _endpointId = null;
+
+            // Under the same lock as the empty below, so a buffer that is already
+            // on its way in either lands first and is cleared, or arrives after
+            // IsLive has come down and is ignored by OnData. Anything else would
+            // leave the ring holding a tail of the device that just went away,
+            // which is exactly what ClearRing exists to prevent.
+            IsLive = false;
+            _format = null;
             ClearRing();
         }
+
+        DisposeProbe?.Invoke();
+
+        if (capture is null)
+        {
+            return;
+        }
+
+        try
+        {
+            capture.DataAvailable -= OnData;
+            capture.StopRecording();
+            capture.Dispose();
+        }
+        catch (Exception)
+        {
+            // A capture whose device has already gone throws on teardown.
+        }
+
+        device?.Dispose();
     }
 
-    public void Dispose() => Stop();
+    /// <summary>
+    /// Whether the calling thread is inside the ring lock right now.
+    /// <para>
+    /// This is the invariant the deadlock turned on, and it is the only one worth
+    /// asserting about a teardown that cannot be run for real: reproducing the
+    /// hang needs a live WASAPI capture mid-callback, and a test that depends on
+    /// one either passes vacuously on CI or hangs the suite. Asking whether the
+    /// lock is held at the point the dispose happens is deterministic, needs no
+    /// sound card, and fails loudly if the dispose is ever moved back inside the
+    /// lock.
+    /// </para>
+    /// </summary>
+    internal bool RingLockHeldByThisThread => Monitor.IsEntered(_ringGate);
+
+    /// <summary>
+    /// Runs at the point in <see cref="Close"/> where the capture would be
+    /// disposed, so a test can inspect the state at exactly that moment.
+    /// </summary>
+    internal Action? DisposeProbe { get; set; }
 
     /// <summary>
     /// Empties the ring and the write index, so the next capture starts from
@@ -188,12 +263,7 @@ public sealed class LoopbackSampleFeed : ISampleFeed
         if (IsLive && DefaultEndpointChanged())
         {
             Note("default audio device changed, reopening capture");
-            lock (_ringGate)
-            {
-                CloseCapture();
-                ClearRing();
-            }
-
+            Close();
             Open();
         }
 
@@ -205,12 +275,7 @@ public sealed class LoopbackSampleFeed : ISampleFeed
         if (IsLive && CaptureHasGoneQuiet())
         {
             Note("loopback stopped delivering audio, reopening capture");
-            lock (_ringGate)
-            {
-                CloseCapture();
-                ClearRing();
-            }
-
+            Close();
             Open();
         }
 
@@ -377,35 +442,6 @@ public sealed class LoopbackSampleFeed : ISampleFeed
             // state. Treated as "changed" so the reopen path gets a chance.
             return true;
         }
-    }
-
-    private void CloseCapture()
-    {
-        if (_capture is not null)
-        {
-            try
-            {
-                _capture.DataAvailable -= OnData;
-                _capture.StopRecording();
-                _capture.Dispose();
-            }
-            catch (Exception)
-            {
-                // A capture whose device has already gone throws on teardown.
-            }
-
-            _capture = null;
-        }
-
-        // Stand the callback down before the format goes, so a buffer that is
-        // already on its way in is ignored rather than read against a format that
-        // no longer describes anything.
-        _format = null;
-
-        _device?.Dispose();
-        _device = null;
-        _endpointId = null;
-        IsLive = false;
     }
 
     private void Note(string reason)

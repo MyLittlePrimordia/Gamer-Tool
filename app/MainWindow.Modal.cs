@@ -109,6 +109,9 @@ public partial class MainWindow : Window
     /// <summary>Named so the result state can drop it and keep just the message.</summary>
     private Border _modalWarningIcon = null!;
 
+    /// <summary>Where focus was when the dialog opened, to give it back on close.</summary>
+    private UIElement? _focusBehindModal;
+
 
     private void BuildModal()
     {
@@ -404,14 +407,79 @@ public partial class MainWindow : Window
         _modalConfirm = null;
         _modalSecondary = null;
         _modalKeepOpen = false;
+        RememberFocusBehind();
         _modalLayer.Visibility = Visibility.Visible;
         UpdateCounter();
         Dispatcher.BeginInvoke(new Action(() =>
         {
+            // The text box, and only the text box. The old shape focused the box,
+            // selected its text and then focused the layer, so the last call won
+            // and focus sat on the scrim. On a dialog whose whole job is naming
+            // something that meant the user had to click the box before they could
+            // type - and every one of this app's name dialogs is that.
             _modalInput.Focus();
             _modalInput.SelectAll();
+        }));
+    }
+
+    /// <summary>
+    /// Shows the scrim and moves focus into it.
+    /// <para>
+    /// All five dialogs go through here, which is the fix. Four of them set the
+    /// layer visible and stopped there, so a click on their button left keyboard
+    /// focus on that button - which is behind the scrim. Escape is handled by
+    /// <see cref="OnModalKeyDown"/> on the layer, and a key event only reaches an
+    /// element that is focused or an ancestor of it, so Escape did nothing. The
+    /// Tab trap in the same handler had the same problem: it only acts when focus
+    /// is on the first or last element inside the dialog, and it was not.
+    /// </para>
+    /// <para>
+    /// In other words the whole keyboard contract of the overlay was bypassed in
+    /// exactly the state a mouse user creates, which is the state the comment on
+    /// the layer says it exists to protect: a confirmation you cannot back out of
+    /// with the keyboard is a confirmation some people cannot back out of at all.
+    /// </para>
+    /// </summary>
+    private void ShowModalLayer()
+    {
+        RememberFocusBehind();
+        _modalLayer.Visibility = Visibility.Visible;
+
+        // Deferred, because the buttons' visibility for this particular dialog is
+        // set by the caller just above and the layer needs a layout pass before it
+        // can take focus usefully. Focusable on the layer is what makes this work
+        // at all - a Border with no Focusable will not accept it.
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_modalSaveButton.Visibility == Visibility.Visible)
+            {
+                _modalSaveButton.Focus();
+                return;
+            }
+
+            // A progress dialog has no buttons and no way out on purpose, so it
+            // takes focus on the layer rather than leaving it on the page behind.
             _modalLayer.Focus();
         }));
+    }
+
+    /// <summary>
+    /// Where focus goes back to when the dialog closes.
+    /// <para>
+    /// Without it, closing left focus on a collapsed element and the keyboard had
+    /// nowhere to be until the user tabbed out of the window and back in. That
+    /// matters most after a dialog that was opened to reach a control the user was
+    /// already on, which is every one of them.
+    /// </para>
+    /// </summary>
+    private void RememberFocusBehind()
+    {
+        if (_modalLayer.Visibility == Visibility.Visible)
+        {
+            return;
+        }
+
+        _focusBehindModal = Keyboard.FocusedElement as UIElement;
     }
 
 
@@ -473,7 +541,7 @@ public partial class MainWindow : Window
         _modalConfirm = CloseModal;
         _modalSecondary = null;
         _modalKeepOpen = false;
-        _modalLayer.Visibility = Visibility.Visible;
+        ShowModalLayer();
     }
 
 
@@ -507,7 +575,7 @@ public partial class MainWindow : Window
         _modalConfirm = action;
         _modalSecondary = null;
         _modalKeepOpen = keepOpen;
-        _modalLayer.Visibility = Visibility.Visible;
+        ShowModalLayer();
     }
 
 
@@ -543,7 +611,7 @@ public partial class MainWindow : Window
         _modalConfirm = null;
         _modalSecondary = null;
         _modalKeepOpen = false;
-        _modalLayer.Visibility = Visibility.Visible;
+        ShowModalLayer();
 
         // Last, so the first tick and the first phase both see a started clock.
         StartModalElapsed();
@@ -586,7 +654,7 @@ public partial class MainWindow : Window
         _modalConfirm = primary;
         _modalSecondary = secondary;
         _modalKeepOpen = false;
-        _modalLayer.Visibility = Visibility.Visible;
+        ShowModalLayer();
     }
 
 
@@ -868,6 +936,17 @@ public partial class MainWindow : Window
         _modalKeepOpen = false;
         _modalSaveButton.Content = "Save";
         StopModalBar();
+
+        // Back where the user was. Checked for both still-attached and still-
+        // visible, because the control a dialog was opened from may have been
+        // rebuilt out from under it - a slot row is torn down and rebuilt on every
+        // selection change - and focusing a detached element throws.
+        if (_focusBehindModal is { } back && back.IsVisible && back.IsEnabled)
+        {
+            back.Focus();
+        }
+
+        _focusBehindModal = null;
     }
 
 }

@@ -181,6 +181,64 @@ public class UntrustedProfileShapeTests
             AudioService.DefaultFxSoundPath, report);
     }
 
+    /// <summary>
+    /// The gap the null-combo test above left open.
+    /// <para>
+    /// That test carries a null combo id but no Slots key, so the migration
+    /// short-circuits on an empty slot list and never reaches the read. Add one
+    /// slot and the same file used to throw: the migration reads combo.Id on every
+    /// entry to decide whether it is already a slot, while the guard that puts a
+    /// null id back to empty sat 45 lines further down - after the call. The
+    /// exception escaped Normalize, escaped Load, escaped the window constructor
+    /// and landed on the "could not start" box. The file had parsed perfectly well,
+    /// so the quarantine path never ran and the profile stayed exactly where it
+    /// was: not one bad launch, but every launch until it was edited by hand.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void A_null_combo_id_alongside_a_real_slot_does_not_throw()
+    {
+        AppSettings settings = FromJson(
+            "{ \"Schema\": 2,"
+            + " \"Slots\": [ { \"Id\": \"s1\", \"Name\": \"Keep\" } ],"
+            + " \"CustomCombos\": [ { \"Id\": null, \"Name\": \"legacy\", \"Hotkey\": null } ] }");
+
+        AppSettings normalized = ProfileManager.Normalize(settings);
+
+        // The original slot survives, and the combo became a slot rather than being
+        // dropped, which is what the migration does with a real combo.
+        Assert.Contains(normalized.Slots, s => s.Id == "s1");
+        Assert.All(normalized.Slots, s => Assert.NotNull(s.Id));
+        Assert.All(normalized.CustomCombos, c => Assert.NotNull(c.Id));
+    }
+
+    /// <summary>
+    /// The same shape with every string on every entry null, which is what a
+    /// truncated or hand-written file tends to look like rather than one targeted
+    /// field.
+    /// </summary>
+    [Fact]
+    public void A_slot_list_with_nulls_throughout_it_survives_normalization()
+    {
+        AppSettings settings = FromJson(
+            "{ \"Schema\": 2,"
+            + " \"Slots\": [ { \"Id\": \"s1\", \"Name\": \"Keep\" } ],"
+            + " \"CustomCombos\": [ { \"Id\": null, \"Name\": null, \"Tag\": null,"
+            + "   \"Hotkey\": null, \"DisplayPresetId\": null, \"AudioPresetId\": null } ],"
+            + " \"AppProfiles\": [ { \"Id\": null, \"Name\": null, \"ExePath\": null } ] }");
+
+        AppSettings normalized = ProfileManager.Normalize(settings);
+
+        Assert.NotEmpty(normalized.Slots);
+        Assert.All(normalized.Slots, s =>
+        {
+            Assert.NotNull(s.Id);
+            Assert.NotNull(s.Name);
+            Assert.NotNull(s.Hotkey);
+            Assert.NotNull(s.MonitorDevice);
+        });
+    }
+
     [Fact]
     public void A_null_entry_in_every_list_is_dropped()
     {

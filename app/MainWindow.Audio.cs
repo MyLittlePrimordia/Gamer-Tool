@@ -979,8 +979,23 @@ public partial class MainWindow : Window
         // the Apply button, from a slot hotkey, from a game launching and from
         // alt-tabbing into one, so the freeze landed on the app's primary
         // workflow. The engine half is queued below and the window carries on.
-        _settings.ActiveAudioPresetId = preset.Id;
-        _activeAudioId = preset.Id;
+        //
+        // The identity written here is only recorded when the preset actually has
+        // an identity. Moving a fader and pressing Apply sends a working tune whose
+        // Id is still the preset it was derived from, and recording that made the
+        // profile, the tray and the panel all name a preset the engine is not
+        // playing - and the next launch reloaded the untouched original, so the
+        // edit looked like it had been thrown away. A tune the user has not given
+        // a name to is not a preset, and says so.
+        bool isNamedPreset = !string.Equals(preset.Id, "flat", StringComparison.OrdinalIgnoreCase)
+            && FindAudio(preset.Id) is not null;
+
+        if (isNamedPreset)
+        {
+            _settings.ActiveAudioPresetId = preset.Id;
+            _activeAudioId = preset.Id;
+        }
+
         UpdateSoundLabels(preset);
         UpdatePresetChrome();
 
@@ -1048,6 +1063,13 @@ public partial class MainWindow : Window
 
         public bool IsReset => Preset is null && Action is null;
 
+        /// <summary>
+        /// The queue's request count when this one was enqueued, so a reset can
+        /// tell whether anything has been asked for since. See
+        /// <see cref="MainWindow.NextAudioRequestSerial"/>.
+        /// </summary>
+        public int Serial { get; set; }
+
         public static AudioPushRequest ForPreset(AudioPreset preset, string device) => new(preset, device, null);
 
         public static AudioPushRequest ForReset() => new(null, string.Empty, null);
@@ -1071,9 +1093,53 @@ public partial class MainWindow : Window
     private LatestWinsQueue<AudioPushRequest>? _audioQueue;
 
     private void QueueAudioPush(AudioPreset preset, string device) =>
-        AudioQueue.Enqueue(AudioPushRequest.ForPreset(preset, device));
+        EnqueueAudio(AudioPushRequest.ForPreset(preset, device));
 
-    private void EnqueueAudio(AudioPushRequest request) => AudioQueue.Enqueue(request);
+    private void EnqueueAudio(AudioPushRequest request)
+    {
+        request.Serial = NextAudioRequestSerial();
+
+        // Only a preset push puts a tune back. Recorded against the serial so the
+        // reset's guard can tell "something newer was asked for, and it will
+        // restore a tune" from "something newer was asked for, and it will not".
+        _audioRestoreSerial = request.Preset is not null ? request.Serial : 0;
+
+        AudioQueue.Enqueue(request);
+    }
+
+    /// <summary>
+    /// Serial of the newest request that will put a tune back on the engine. Zero
+    /// when the newest thing asked for was not a tune.
+    /// <para>
+    /// The reset's guard reads this, and the distinction is load-bearing. Standing
+    /// down is only correct when the newer request restores a tune: the panic key,
+    /// then a slot key, and the slot wins - which is the whole reason the guard
+    /// exists. But the queue also carries actions that touch the engine without
+    /// applying anything, and those restore nothing. Panic key, then change the
+    /// output device: the reset flattened the engine, stood down because the
+    /// request serial had moved, and left the panel naming a preset that was no
+    /// longer playing - with AudioTouched still set, so the exit path ran the reset
+    /// a second time.
+    /// </para>
+    /// <para>
+    /// So an action records zero rather than its own serial, and the reset stands
+    /// down only for a real tune push. An action that did not change the tune
+    /// leaves the reset's own writes standing, which is right: the reset is then
+    /// the newest thing that happened to the sound.
+    /// </para>
+    /// </summary>
+    private int _audioRestoreSerial;
+
+    /// <summary>
+    /// Takes the next serial. Every request goes through here, so a serial says
+    /// both "how many things were asked for" and "which one was this".
+    /// </summary>
+    private int NextAudioRequestSerial() => Interlocked.Increment(ref _audioRequestSerial);
+
+    /// <summary>
+    /// The count of requests handed to the queue.
+    /// </summary>
+    private int _audioRequestSerial;
 
     private Task WaitForAudioQueueAsync() => AudioQueue.WhenIdle();
 
@@ -1089,15 +1155,47 @@ public partial class MainWindow : Window
     {
         if (request.IsReset)
         {
-            await RunSoundResetAsync();
+            await RunSoundResetAsync(request.Serial);
             return;
         }
 
         if (request.Action is { } action)
         {
             // An engine action that is a command sequence of its own but is not a
-            // tune push. It waits its turn for the same reason a reset does.
-            await Task.Run(() => action(_audio));
+            // tune push: writing a preset into FxSound, moving the output, or
+            // throwing the bypass. It waits its turn for the same reason a reset
+            // does, which is what stops two engine invocations overlapping.
+            //
+            // BypassReport is cleared before the action runs, not after it
+            // returns. Clearing afterwards meant a bypass whose PushBypass threw
+            // left the previous turn's verdict in the field, and the next
+            // unrelated action - a device change, a save into FxSound - then read
+            // it and announced a bypass failure that had nothing to do with it.
+            BypassReport = null;
+
+            try
+            {
+                await Task.Run(() => action(_audio));
+            }
+            catch (Exception ex)
+            {
+                TraceLog.Write("AUDIO ACTION", ex);
+                return;
+            }
+
+            if (BypassReport is { } bypass)
+            {
+                BypassReport = null;
+                if (bypass.Outcome != AudioService.ApplyOutcome.Applied)
+                {
+                    _bypassReports.Enqueue(() =>
+                        Flash("Bypass did not take: " + string.Join("; ", bypass.Mismatches), true));
+                }
+            }
+
+            // With the queue drained, a report queued above is now about the state
+            // the engine is actually in rather than one it has already left.
+            await Dispatcher.InvokeAsync(DrainBypassReports);
             return;
         }
 
@@ -1171,32 +1269,75 @@ public partial class MainWindow : Window
     /// <summary>
     /// The engine half of a reset, plus the state that has to follow it.
     /// <para>
-    /// Both halves together, and both inside the queue's turn, which is what
-    /// makes the clobber impossible rather than merely unlikely. There is no
-    /// longer a version of this where the writes happen after an await that
-    /// something else could have overtaken.
+    /// Both halves together, and both inside the queue's turn. That fixes the
+    /// engine half clobbering a newer tune, and it is why the comment above used
+    /// to claim the state half was safe as well.
+    /// </para>
+    /// <para>
+    /// It is not, quite, because a newer tune's own writes are outside the queue
+    /// by necessity - they happen at enqueue time so that IsLoaded answers
+    /// correctly in the click handler that follows without waiting on a child
+    /// process. So the reset stands down if anything has been enqueued since it
+    /// was. That newer request is pending by then and is about to apply, which is
+    /// what the user asked for; the engine has already been flattened, which the
+    /// next request undoes.
     /// </para>
     /// </summary>
-    private async System.Threading.Tasks.Task RunSoundResetAsync()
+    private async System.Threading.Tasks.Task RunSoundResetAsync(int serial)
     {
         // Off the dispatcher first. ResetSoundAsync is three engine calls that
         // each wait on a child process, and this is reached from paths where the
         // user is waiting on the result: a hotkey, the reset button, and now a
         // game closing. The window work after it goes back across explicitly, so
         // the only thing that moves off the UI thread is the blocking part.
+        //
+        // The process-wide stop token rather than anything owned here, because the
+        // thing that has to interrupt this is EmergencyReset, and it reaches the
+        // engine from AppDomain.ProcessExit where this window does not exist.
         try
         {
-            await System.Threading.Tasks.Task.Run(() => _audio.ResetSoundAsync());
+            await System.Threading.Tasks.Task.Run(
+                () => _audio.ResetSoundAsync(SessionState.Current.AudioStop));
         }
         catch (Exception ex)
         {
             TraceLog.Write("SOUND RESET", ex);
         }
 
+        // Stood down, so nothing about the window is touched either. Dispatcher
+        // work after the engine has already been reset by the exit path would
+        // repaint a preset nobody is looking at, save the profile a second time,
+        // and - the part that actually matters - post to a dispatcher that is
+        // already shutting down, where the await may never come back and the
+        // queue's pump would sit unfinished for the rest of the process's life.
+        if (SessionState.Current.AudioStop.IsCancellationRequested)
+        {
+            TraceLog.Write("SOUND RESET stood down: the app is going away");
+            return;
+        }
+
         try
         {
             await Dispatcher.InvokeAsync(() =>
             {
+                if (_audioRestoreSerial > serial)
+                {
+                    // A newer tune push arrived while the engine was being
+                    // flattened. Its own writes describe what is about to be on
+                    // screen, and writing flat over them is what left the engine
+                    // playing a slot while the panel and the profile both said flat.
+                    //
+                    // Compared against the restore serial rather than the request
+                    // serial on purpose. A newer *action* - moving the output,
+                    // saving a preset into FxSound - is not a tune, so the reset
+                    // still stands: standing down for one of those would flatten
+                    // the engine and leave the panel naming a preset that is no
+                    // longer playing, with the exit path re-running a reset
+                    // because AudioTouched was never cleared.
+                    TraceLog.Write("SOUND RESET stood down: a newer tune is already queued");
+                    return;
+                }
+
                 SessionState.Current.AudioTouched = false;
                 _liveAudioName = "FLAT";
                 _activeAudioId = "flat";
@@ -1545,79 +1686,57 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>The newest bypass state waiting to go to the engine.</summary>
-    private AudioPreset? _pendingBypassPush;
-
-    /// <summary>1 while a bypass push is in flight, so two of them never overlap.</summary>
-    private int _bypassPushBusy;
-
     /// <summary>
-    /// Hands the bypass to the engine off the dispatcher, newest state only.
+    /// Hands the bypass to the engine, in the queue's turn rather than beside it.
     /// </summary>
     /// <remarks>
-    /// Same reasoning as <see cref="QueueAudioPush"/>: a user flicking the switch
-    /// should hear where they ended up, not work through every position they
-    /// passed on the way. The push is a single child process and the read-back
-    /// that confirms it can take a second or two, so none of it belongs on the
-    /// thread that is drawing the switch.
+    /// This ran on its own pump, with its own in-flight flag, alongside the audio
+    /// queue. That is the one thing the audio queue exists to prevent: two engine
+    /// operations at once. Every other path into FxSound goes through it, so a flick
+    /// of the bypass switch during an apply - one keystroke and one click apart, and
+    /// Apply sits right beside the switch - put <c>--set_band_gain</c> in flight at
+    /// the same moment as <c>--preset</c>. The engine is one child process per
+    /// invocation reading its own arguments, so neither sees the other: a bypass
+    /// applied to one tune and a preset applied to the other, with a read-back
+    /// reporting drift on both.
+    /// <para>
+    /// Sharing the queue brings the newest-wins rule with it, which is the
+    /// behaviour a switch wants anyway: somebody dragging it should end up where
+    /// they let go rather than work through every position on the way.
+    /// </para>
     /// </remarks>
     private void QueueBypassPush(AudioPreset preset)
     {
-        _pendingBypassPush = preset;
-
-        if (Interlocked.Exchange(ref _bypassPushBusy, 1) == 1)
+        EnqueueAudio(AudioPushRequest.ForExclusive(audio =>
         {
-            return;
-        }
-
-        _ = PumpBypassPushAsync();
+            audio.PushBypass(preset);
+            BypassReport = audio.VerifyBypass(preset);
+        }));
     }
 
-    private async Task PumpBypassPushAsync()
+    /// <summary>
+    /// The read-back from the bypass turn. Written on the pool thread, read on the
+    /// dispatcher once the queue has run dry, and cleared before every action so
+    /// one turn's verdict cannot be announced against the next.
+    /// </summary>
+    private AudioService.ApplyReport? BypassReport;
+
+    private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _bypassReports = new();
+
+    /// <summary>
+    /// Reports a bypass turn that did not land, with the queue idle.
+    /// <para>
+    /// Nothing at all on success. The switch making the sound change is the whole
+    /// feedback, and a toast over the top of it would be the app announcing the
+    /// obvious. Only a failure is worth saying, because then nothing happened and
+    /// silence would be a lie.
+    /// </para>
+    /// </summary>
+    private void DrainBypassReports()
     {
-        try
+        while (_bypassReports.TryDequeue(out Action? report))
         {
-            while (_pendingBypassPush is not null)
-            {
-                AudioPreset preset = _pendingBypassPush;
-                _pendingBypassPush = null;
-
-                AudioService.ApplyReport report;
-                try
-                {
-                    report = await Task.Run(() =>
-                    {
-                        _audio.PushBypass(preset);
-                        return _audio.VerifyBypass(preset);
-                    });
-                }
-                catch (Exception ex)
-                {
-                    TraceLog.Write("BYPASS PUSH", ex);
-                    continue;
-                }
-
-                // Nothing at all on success. The switch making the sound change is
-                // the whole feedback, and a toast over the top of it would be the
-                // app announcing the obvious. Only a failure is worth saying,
-                // because then nothing happened and silence would be a lie.
-                if (report.Outcome != AudioService.ApplyOutcome.Applied)
-                {
-                    string detail = await Dispatcher.InvokeAsync(() => string.Join("; ", report.Mismatches));
-                    await Dispatcher.InvokeAsync(() => Flash("Bypass did not take: " + detail, true));
-                }
-            }
-        }
-        finally
-        {
-            Interlocked.Exchange(ref _bypassPushBusy, 0);
-
-            // A request that landed between the last null check and the flag coming
-            // down would otherwise sit with nobody to pick it up.
-            if (_pendingBypassPush is not null && Interlocked.Exchange(ref _bypassPushBusy, 1) == 0)
-            {
-                _ = PumpBypassPushAsync();
-            }
+            report();
         }
     }
 

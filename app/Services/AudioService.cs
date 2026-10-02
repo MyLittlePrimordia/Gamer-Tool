@@ -249,7 +249,14 @@ public sealed class AudioService
     /// </summary>
     public static double RequiredHeadroom(AudioPreset preset)
     {
-        int count = preset.Bands.Length;
+        // The count the preset is really for, not the length of the array. The
+        // band grid grows the array but never trims it, so a tune taken from a
+        // 31-band preset and dropped to 10 kept a 31-long array, and this folded
+        // band 25's boost into the preamp offset that is subtracted from the
+        // master gain actually sent. The result was a tune that was several
+        // decibels quieter than the curve asked for, for as long as the stale tail
+        // survived - which Copy preserves, so every copy and every reapply kept it.
+        int count = Math.Min(preset.Bands.Length, Math.Max(preset.NumBands, 1));
         double largest = 0.0;
         for (int i = 0; i < count; i++)
         {
@@ -428,13 +435,9 @@ public sealed class AudioService
     public double ExpectedBalance(AudioPreset preset) =>
         EffectsEnabled ? Math.Clamp(preset.Balance, -20.0, 20.0) : 0.0;
 
-    public string BuildApplyCommand(AudioPreset preset, string deviceName)
+    public string BuildApplyCommand(AudioPreset preset, string deviceName, bool selectPresetFile = true)
     {
-        int count = preset.NumBands;
-        if (count <= 0 || !AudioPreset.BandCounts.Contains(count))
-        {
-            count = AudioPreset.PresetBandCount;
-        }
+        int count = ResolveBandCount(preset);
 
         // The band gains and the effects are not sent from here, and not because
         // they are unimportant: selecting a preset re-applies both of them, so
@@ -463,7 +466,15 @@ public sealed class AudioService
         // between an option and its value is parsed as two unrelated arguments
         // and the value is silently ignored, so the older space form was dead
         // weight. Selecting the same preset twice is harmless.
-        helper.Add("--preset=" + FxPresetFile.PresetName);
+        //
+        // Unless there is no file to select, which is the failed-write case above:
+        // then this names a preset that is either absent or left over from an
+        // earlier tune, and the engine applies that one's state over everything
+        // else in this command line.
+        if (selectPresetFile)
+        {
+            helper.Add("--preset=" + FxPresetFile.PresetName);
+        }
 
         if (!string.IsNullOrWhiteSpace(deviceName))
         {
@@ -489,11 +500,11 @@ public sealed class AudioService
     /// while bypassed stays bypassed instead of quietly switching it back on.
     /// </para>
     /// </remarks>
-    public IReadOnlyList<string> BuildApplyCommands(AudioPreset preset, string deviceName)
+    public IReadOnlyList<string> BuildApplyCommands(AudioPreset preset, string deviceName, bool selectPresetFile = true)
     {
         return new List<string>(2)
         {
-            BuildApplyCommand(preset, deviceName),
+            BuildApplyCommand(preset, deviceName, selectPresetFile),
             BuildBypassCommand(preset),
         };
     }
@@ -520,9 +531,22 @@ public sealed class AudioService
         AudioPreset sent = WithLoudGuard(preset, LoudGuardEnabled);
 
         // The curve cannot go across as a command.
-        FxPresetFile.Write(sent, BandFrequencies(sent), EffectsEnabled);
+        //
+        // The return value is checked, which it was not. Write documents that a
+        // null means "only the curve is lost, so the caller carries on" - and then
+        // the caller sent --preset=GamerTool anyway. Selecting a preset makes the
+        // engine apply that file's state after it finishes parsing the command
+        // line, which is exactly why the band gains are already a command of their
+        // own. So a failed write did not merely lose the curve: it made the engine
+        // select a stale or absent GamerTool.fac, and the stale one's state won.
+        // Run then returned true and the caller raised "SOUND ON".
+        //
+        // Carrying on is still right - the scalar values and the bypass command
+        // that follow are unaffected - but selecting a file this call did not write
+        // is not, so it is left out.
+        bool wroteCurve = FxPresetFile.Write(sent, BandFrequencies(sent), EffectsEnabled) is not null;
 
-        IReadOnlyList<string> commands = BuildApplyCommands(sent, deviceName);
+        IReadOnlyList<string> commands = BuildApplyCommands(sent, deviceName, wroteCurve);
         for (int i = 0; i < commands.Count; i++)
         {
             string command = commands[i];
@@ -545,7 +569,17 @@ public sealed class AudioService
     /// The centre frequency for each band: the preset's own if it carries them,
     /// otherwise the engine's measured table for that band count.
     /// </summary>
-    private static IReadOnlyList<double> BandFrequencies(AudioPreset preset)
+    /// <summary>
+    /// The centre frequencies a preset's gains belong to, resolved once.
+    /// <para>
+    /// Public because the exit path has to write the same curve file the apply
+    /// path writes before it selects it, and it cannot reach a private helper from
+    /// outside. Both halves of that are load-bearing: selecting a preset makes the
+    /// engine apply the file's state after it parses the command line, so a reset
+    /// that selects a file it did not write re-applies the tune that wrote it last.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<double> BandFrequencies(AudioPreset preset)
     {
         int count = preset.NumBands <= 0 ? AudioPreset.PresetBandCount : preset.NumBands;
         var freqs = new double[count];
@@ -563,7 +597,7 @@ public sealed class AudioService
     /// changes the filter layout: someone on thirty one bands who presses reset
     /// expects the gains zeroed, not the faders dropping to ten.
     /// </summary>
-    public async System.Threading.Tasks.Task ResetSoundAsync()
+    public async System.Threading.Tasks.Task ResetSoundAsync(CancellationToken cancel = default)
     {
         if (!IsInstalled)
         {
@@ -574,21 +608,126 @@ public sealed class AudioService
         // Through ReadState, which asks the engine to refresh and waits for the
         // file to change. Reading the file cold here used to pick up whatever was
         // last written, so a reset could flatten the wrong number of bands.
-        int bands = ReadState()?.Equalizer.NumBands ?? AudioPreset.PresetBandCount;
+        //
+        // The count is resolved rather than passed through. status.json is another
+        // program's output, and nothing bounds num_bands in it - a value of two
+        // billion reached AudioPreset.Flat, which sizes an array from it, and the
+        // attempt was a sixteen gigabyte allocation on the pool thread. Flat now
+        // refuses it too, but this is the boundary where an untrusted number enters
+        // the app, so it is bounded here as well as downstream.
+        int reported = ReadState()?.Equalizer.NumBands ?? AudioPreset.PresetBandCount;
+        int bands = reported <= 0 || !AudioPreset.BandCounts.Contains(reported)
+            ? AudioPreset.PresetBandCount
+            : reported;
 
         Run("--power=0");
-        await System.Threading.Tasks.Task.Delay(350);
+
+        // Cancelled from here on, and every one of these points sits *after* the
+        // engine has been powered down. That is what makes cancelling safe rather
+        // than a new way to leave the engine in a half state: the caller wants the
+        // engine off, and stopping here leaves it off having done strictly less than
+        // it would otherwise have done.
+        //
+        // The gain over waiting for the reset to finish is that the wait is real.
+        // A reset is three engine calls and two delays, and the exit path's own
+        // budget is about a second per call - so joining a reset in flight would
+        // have meant either a visible hang on quit or a timeout that reintroduces
+        // the interleaving it was meant to avoid.
+        if (!await SettleAsync(350, cancel))
+        {
+            TraceLog.Write("SOUND RESET stood down early: engine left powered down");
+            return;
+        }
 
         AudioPreset flat = AudioPreset.Flat(bands);
         flat.MasterGain = 0.0;
         flat.VolumeLeveling = 0.0;
         flat.FilterQ = 1.0;
         flat.Balance = 0.0;
-        Run(BuildApplyCommand(flat, string.Empty));
-        await System.Threading.Tasks.Task.Delay(200);
+
+        // The curve is written, and the gains are sent as a command of their own,
+        // because a reset that did neither left the equaliser exactly where the
+        // game had it. Both halves were missing here.
+        //
+        // Selecting a preset makes the engine apply that file's state after it
+        // finishes parsing the command line - which is why Apply sends the gains
+        // separately at all. So --preset=GamerTool below was not selecting the flat
+        // curve built two lines up; it was selecting whatever GamerTool.fac last
+        // held, and the last thing to write it was the game's tune. The reset
+        // flattened master gain, volume levelling, filter Q, balance and the
+        // effects, reported SOUND RESET, and left a ten band EQ in place - which
+        // is a reset that looks like it worked and does not sound like one.
+        //
+        // Both halves are needed rather than one. The file is what --preset
+        // selects, so without it the engine re-applies the game's curve. The
+        // explicit gains are what actually zero the bands, so they still land when
+        // the write fails - and a write that fails is the case where the engine is
+        // left holding the stale file, which is the one that must not win.
+        //
+        // The loud guard is still not applied, and deliberately: this is an attempt
+        // to put things back, and a guard that fought one would be indefensible.
+        bool wroteCurve = FxPresetFile.Write(flat, BandFrequencies(flat), EffectsEnabled) is not null;
+
+        IReadOnlyList<string> reset = BuildApplyCommands(flat, string.Empty, wroteCurve);
+        for (int i = 0; i < reset.Count; i++)
+        {
+            if (cancel.IsCancellationRequested)
+            {
+                TraceLog.Write("SOUND RESET stood down early: engine left powered down");
+                return;
+            }
+
+            // Spaced, not sent together. The second command carries the band gains
+            // and has to land after the preset selection it is correcting.
+            if (i > 0 && !await SettleAsync(200, cancel))
+            {
+                TraceLog.Write("SOUND RESET stood down early: engine left powered down");
+                return;
+            }
+
+            Run(reset[i]);
+        }
+
+        // Before the power back on, and this is the boundary that matters most.
+        // Reaching here means the engine is flat and switched off; powering it on
+        // would undo what the caller is about to ask for.
+        if (!await SettleAsync(200, cancel))
+        {
+            TraceLog.Write("SOUND RESET stood down before power on: engine left powered down");
+            return;
+        }
+
         Run("--power=1");
         InvalidateCache();
         StatusChanged?.Invoke("SOUND RESET");
+    }
+
+    /// <summary>
+    /// A delay that reports whether it ran to completion rather than throwing when
+    /// it does not.
+    /// <para>
+    /// <c>Task.Delay(ms, token)</c> throws <see cref="TaskCanceledException"/>, and
+    /// a reset has four of these in a row. Letting the first one throw would skip
+    /// the engine write that follows it, which is the opposite of what standing
+    /// down means.
+    /// </para>
+    /// </summary>
+    private static async Task<bool> SettleAsync(int ms, CancellationToken cancel)
+    {
+        if (cancel.IsCancellationRequested)
+        {
+            return false;
+        }
+
+        try
+        {
+            await System.Threading.Tasks.Task.Delay(ms, cancel);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
     }
 
     /// <summary>How an apply compared against what the engine went on to report.</summary>
@@ -672,9 +811,7 @@ public sealed class AudioService
     /// </summary>
     public string BuildBypassCommand(AudioPreset preset)
     {
-        int count = preset.NumBands <= 0 || !AudioPreset.BandCounts.Contains(preset.NumBands)
-            ? AudioPreset.PresetBandCount
-            : preset.NumBands;
+        int count = ResolveBandCount(preset);
 
         List<double> gains = new(count);
         for (int i = 0; i < count; i++)
@@ -686,6 +823,32 @@ public sealed class AudioService
             + " --balance=" + Round(ExpectedBalance(preset), 1.0)
             + " --set_band_gain=\"" + BandString(gains) + "\""
             + " --set_effect=\"" + EffectString(preset) + "\"";
+    }
+
+    /// <summary>
+    /// How many bands this preset is really for.
+    /// <para>
+    /// One answer, from one place, because this was written five times with two
+    /// different rules and the disagreement was visible in adjacent lines of this
+    /// one file. Three of the five checked the value against
+    /// <see cref="AudioPreset.BandCounts"/> and two did not, so a preset naming
+    /// thirteen bands was sent as <c>--num_bands=10</c> alongside thirteen
+    /// <c>--set_band_freq</c> pairs - two different band layouts in a single command
+    /// line - and then graded against thirteen when ten had been sent.
+    /// </para>
+    /// <para>
+    /// The engine is told ten bands but handed thirteen frequencies, so the extras
+    /// have nowhere to go and are silently dropped. That is a wrong sound rather
+    /// than a failure, which is why it survived: the read-back agreed with what it
+    /// had been told to expect rather than with what the engine could actually hold.
+    /// </para>
+    /// </summary>
+    public static int ResolveBandCount(AudioPreset preset)
+    {
+        int count = preset.NumBands;
+        return count <= 0 || !AudioPreset.BandCounts.Contains(count)
+            ? AudioPreset.PresetBandCount
+            : count;
     }
 
     /// <summary>Throws the bypass, or takes it off. See <see cref="BuildBypassCommand"/>.</summary>
@@ -736,9 +899,7 @@ public sealed class AudioService
         // and then checked against thirteen, and the switch reported a drift on
         // bands that had never been asked for - which is the one thing a bypass
         // that is meant to be verifiable cannot afford.
-        int count = preset.NumBands <= 0 || !AudioPreset.BandCounts.Contains(preset.NumBands)
-            ? AudioPreset.PresetBandCount
-            : preset.NumBands;
+        int count = ResolveBandCount(preset);
         for (int i = 0; i < count; i++)
         {
             if (i >= state.Equalizer.Bands.Count)
@@ -826,14 +987,20 @@ public sealed class AudioService
         // what a bypassed equaliser is supposed to look like, so there is no longer
         // any reason to skip the comparison - and skipping it is what would have
         // let a bypass that quietly did nothing pass unremarked.
-        int count = preset.NumBands <= 0 ? AudioPreset.PresetBandCount : preset.NumBands;
+        int count = ResolveBandCount(preset);
         if (state.Equalizer.NumBands != count)
         {
             off.Add("bands " + state.Equalizer.NumBands + ", asked for " + count);
         }
 
 
-        Near(off, "master gain", state.Equalizer.MasterGain, EffectiveMasterGain(preset, AntiClipEnabled), 0.1);
+        // ExpectedMasterGain, not EffectiveMasterGain. While the bypass is thrown
+        // the apply sends a master gain of zero, so grading against the un-bypassed
+        // value reported drift on every apply the user had deliberately bypassed -
+        // and the amber "the engine did not take this sound" then sat on a preset
+        // that was exactly right. VerifyBypass already used the Expected form;
+        // this is the same fix on the other half.
+        Near(off, "master gain", state.Equalizer.MasterGain, ExpectedMasterGain(preset), 0.1);
         Near(off, "leveling", state.Equalizer.VolumeLeveling, Math.Clamp(preset.VolumeLeveling, AudioPreset.LevelingMin, AudioPreset.LevelingMax), 0.3);
         Near(off, "filter Q", state.Equalizer.FilterQ, Math.Clamp(preset.FilterQ, AudioPreset.FilterQMin, AudioPreset.FilterQMax), 0.3);
         Near(off, "balance", state.Equalizer.Balance, Math.Clamp(preset.Balance, -20.0, 20.0), 0.1);
@@ -1016,17 +1183,31 @@ public sealed class AudioService
                 UseShellExecute = false
             };
             using Process? process = Process.Start(info);
-            if (process is not null)
+            if (process is null)
             {
-                // Bounded, because this runs on the way out of the app where
-                // nothing is left to show a wait. The engine is given up on
-                // rather than letting the process linger after the window has
-                // already gone.
-                process.WaitForExit(waitMs);
+                // Starting the engine failed outright - an antivirus that blocked
+                // it, a path that stopped being the exe between the check and the
+                // launch. It used to fall through and report success, so the
+                // caller raised "SOUND ON" for a command that never ran.
+                TraceLog.Write("FX could not start: " + arguments);
+                return false;
             }
 
-            TraceLog.Write("FX " + arguments);
-            return true;
+            // Bounded, because this runs on the way out of the app where
+            // nothing is left to show a wait. The engine is given up on
+            // rather than letting the process linger after the window has
+            // already gone.
+            bool exited = process.WaitForExit(waitMs);
+
+            // The exit code is read, which it was not: a non-zero code from the
+            // engine means it rejected the command line, and reporting that as
+            // success is what let a failed apply go on to say "SOUND ON" while
+            // the read-back - the only honest signal - came back a failure
+            // separately. So the two halves of the UI disagreed.
+            int code = exited ? process.ExitCode : -1;
+
+            TraceLog.Write("FX " + arguments + (exited ? " exit=" + code : " no exit within " + waitMs + "ms"));
+            return exited && code == 0;
         }
         catch (Exception ex)
         {

@@ -692,16 +692,31 @@ public sealed class DisplayPreview
     {
         try
         {
+            // UInt16, not short. WPF hands back the GIF graphic control extension's
+            // delay as an unsigned 16 bit value, and a boxed ushort is never `is
+            // short`, so this branch could never be taken: every frame fell through
+            // to the default and a clip authored at 20fps played at 10. That is
+            // the opposite of what the comment above promises, and the reason it
+            // survived is that a loop playing at the wrong speed looks like a
+            // stylistic choice rather than a dead comparison.
+            //
+            // Convert.ToInt32 rather than a second type test, so a WPF that boxes
+            // it differently still gets read rather than silently defaulted again.
             if (frame.Metadata is BitmapMetadata meta
-                && meta.GetQuery("/grctlext/Delay") is short delay
+                && meta.GetQuery("/grctlext/Delay") is { } raw
+                && Convert.ToInt32(raw) is int delay
                 && delay > 0)
             {
                 return delay * 10;
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // No delay block on this frame. The default below is fine.
+            // No delay block on this frame, or one WPF will not convert. The
+            // default below is fine, but it used to be dropped entirely, so a
+            // frame whose timing could not be read was indistinguishable from one
+            // that had none.
+            TraceLog.Write("PREVIEW frame delay: " + ex.GetType().Name);
         }
 
         return 100;

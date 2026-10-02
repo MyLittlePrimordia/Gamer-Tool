@@ -71,18 +71,27 @@ public class RecoveryPathTests
     [Fact]
     public void Going_back_to_normal_also_puts_the_monitor_brightness_back()
     {
-        // BUG-001. The panic key, the Reset button, the tray's Reset Display and
-        // switching a loaded slot off all funnel through GoScreenNeutral, which is
-        // the one definition of "back to normal" for the screen. It reset the gamma
-        // ramp and left the hardware backlight where the last slot had put it, so
-        // the control a user reaches for when the picture is already wrong was
-        // the one control that left the picture wrong.
+        // BUG-001. The panic key, the Reset button and the tray's Reset Display all
+        // funnel through GoScreenNeutral, which is the one definition of "back to
+        // normal" for the screen. It reset the gamma ramp and left the hardware
+        // backlight where the last slot had put it, so the control a user reaches
+        // for when the picture is already wrong was the one control that left the
+        // picture wrong.
+        //
+        // Two halves now, because the stand-down and the hard reset have different
+        // answers for the panel and this path is the one that must always restore.
+        // GoScreenNeutral asks for an unconditional restore, and the call it is
+        // asking for has to still be in the body it delegates to.
         string display = Read("app/MainWindow.Display.cs");
-        string body = Body(display, "public void GoScreenNeutral()");
+
+        Assert.Contains(
+            "StandDownScreen(restorePanel: true)",
+            Body(display, "public void GoScreenNeutral()"),
+            StringComparison.Ordinal);
 
         Assert.Contains(
             "Backlight.RestoreAll()",
-            body,
+            Body(display, "private void StandDownScreen(bool restorePanel)"),
             StringComparison.Ordinal);
     }
 

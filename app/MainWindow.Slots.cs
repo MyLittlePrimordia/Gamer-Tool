@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -80,17 +80,18 @@ public partial class MainWindow : Window
     /// </summary>
     private const double KeyCapHeight = 28.0;
 
-    private static void ApplySlotColumns(Grid row)    {
+    private static void ApplySlotColumns(Grid row)
+    {
         foreach (GridLength width in SlotColumns)
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = width });
     }
 
 
-    private static void ApplySlotColumns(Grid row, GridLength[] widths)
-    {
-        foreach (GridLength width in widths)
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = width });
-    }
+    // The overload taking explicit widths was dead: every call site uses the
+    // parameterless one, because SlotColumns is the single definition of the row
+    // and a caller passing a different set would produce a header that no longer
+    // lined up with the row it labels. Removed rather than left, since the two
+    // definitions of the same thing is exactly how they drifted apart.
 
 
     /// <summary>
@@ -154,6 +155,77 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>
+    /// Puts focus back on the same slot control after the rows were rebuilt.
+    /// <para>
+    /// Every control in a slot row carries a Tag of the slot id and which control
+    /// it is, which is what makes this possible at all - the rows are torn down and
+    /// reconstructed, so the element that had focus is gone and WPF drops focus to
+    /// nothing. For a mouse user that is invisible. For someone changing a game's
+    /// dropdown with the keyboard, unplugging a dock would throw them out of the
+    /// slot board entirely, mid-edit, with no way back except tabbing from the top
+    /// again.
+    /// </para>
+    /// <para>
+    /// Only a row that is still there is restored, and only if it is still visible
+    /// and enabled - a monitor dropdown that lost the screen it was pointed at may
+    /// have been rebuilt as something else entirely.
+    /// </para>
+    /// </summary>
+    private void RestoreSlotFocus(string? tag)
+    {
+        if (string.IsNullOrEmpty(tag))
+        {
+            return;
+        }
+
+        foreach (UIElement child in SlotList.Children)
+        {
+            if (FindByTag(child, tag!) is { } found
+                && found.Focusable
+                && found.IsVisible
+                && found.IsEnabled)
+            {
+                found.Focus();
+                return;
+            }
+        }
+    }
+
+    private static FrameworkElement? FindByTag(DependencyObject root, string tag)
+    {
+        int count = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < count; i++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(root, i);
+
+            if (child is FrameworkElement { Tag: not null } element
+                && string.Equals(element.Tag as string, tag, StringComparison.Ordinal))
+            {
+                return element;
+            }
+
+            if (FindByTag(child, tag) is { } deeper)
+            {
+                return deeper;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The tag of the slot control that currently has focus, if any.</summary>
+    private string? FocusedSlotTag()
+    {
+        if (System.Windows.Input.Keyboard.FocusedElement is FrameworkElement { Tag: string tag } focused
+            && SlotList.IsAncestorOf(focused))
+        {
+            return tag;
+        }
+
+        return null;
+    }
+
     private void BuildSlots()
     {
         SlotList.Children.Clear();
@@ -200,12 +272,12 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(hotkey))
         {
             keyBox.Text = "NOT SET";
-            keyBox.ToolTip = "Click, then press the combo you want  Â·  F1 to F24 bind on their own";
+            keyBox.ToolTip = "Click, then press the combo you want  ·  F1 to F24 bind on their own";
             return;
         }
 
         keyBox.Text = hotkey;
-        keyBox.ToolTip = hotkey + "  Â·  click to change, Esc cancels, Backspace clears";
+        keyBox.ToolTip = hotkey + "  ·  click to change, Esc cancels, Backspace clears";
     }
 
 
@@ -257,7 +329,7 @@ public partial class MainWindow : Window
             // keycap is read only, so this is the only way it ever says anything
             // other than the current binding.
             keyBox.Text = "PRESS A KEY";
-            keyBox.ToolTip = "Esc cancels  Â·  Backspace clears  Â·  F1 to F24 bind on their own";
+            keyBox.ToolTip = "Esc cancels  ·  Backspace clears  ·  F1 to F24 bind on their own";
         };
         keyBox.LostKeyboardFocus += (s, e) =>
         {
@@ -355,6 +427,12 @@ public partial class MainWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center
         };
+
+        // IconButton's template has no ContentPresenter - it draws a Path from a
+        // Geometry property - so nothing in the visual tree can supply a name and
+        // the tooltip arrives as HelpText rather than as one. Every delete button
+        // in a list of slots has to say which slot it deletes.
+        System.Windows.Automation.AutomationProperties.SetName(remove, "Delete slot " + slot.Name);
         remove.Click += (s, e) =>
         {
             _settings.Slots.RemoveAll(x => x.Id == slot.Id);
@@ -439,6 +517,8 @@ public partial class MainWindow : Window
             Tag = slot.Id + "|output",
             ToolTip = "Which output this slot plays through"
         };
+        System.Windows.Automation.AutomationProperties.SetName(
+            box, "Output for " + slot.Name);
 
         MarqueeBox.SetAllowMarquee(box, true);
 
@@ -518,6 +598,7 @@ public partial class MainWindow : Window
             Tag = slot.Id + "|monitor",
             ToolTip = "Screens"
         };
+        System.Windows.Automation.AutomationProperties.SetName(box, "Screen for " + slot.Name);
 
         // A monitor name is whatever EDID says the panel is, which for a
         // well-specified display is a model number longer than 118 pixels. The
@@ -581,14 +662,22 @@ public partial class MainWindow : Window
             choices[0].Name = "No sound";
         }
 
+        // Named per slot rather than once for the whole list. A screen reader walking
+        // this column otherwise announces a row of identical unnamed drop-downs
+        // with nothing to say which slot any of them belongs to, and the caption
+        // strip above is not a label for a control - it is a TextBlock. The slot
+        // name is the only thing on the row that says which row it is.
+        string name = kind == "display" ? "Screen Preset" : "Sound Preset";
+
         ComboBox box = new()
         {
             Style = (Style)FindResource("ModernCombo"),
             ItemContainerStyle = (Style)FindResource("ModernComboItem"),
             ItemsSource = choices,
             Tag = slot.Id + "|" + kind,
-            ToolTip = kind == "display" ? "Screen Preset" : "Sound Preset"
+            ToolTip = name
         };
+        System.Windows.Automation.AutomationProperties.SetName(box, name + " for " + slot.Name);
 
         // Preset names are the user's to write, so a long one has to stay
         // readable in a fixed width column. Only the closed box needs this: the
@@ -617,7 +706,12 @@ public partial class MainWindow : Window
                 continue;
             }
 
-            if (candidate.ExePath == SelfMarker || candidate.ExePath == BrowseMarker)
+            // The three modes have no file behind them, so there is nothing to
+            // pull an icon out of. Without this each would try to read its own
+            // marker string as a path.
+            if (candidate.ExePath == SelfMarker
+                || candidate.ExePath == BrowseMarker
+                || candidate.ExePath == AnyGameMarker)
             {
                 continue;
             }
@@ -632,7 +726,12 @@ public partial class MainWindow : Window
         List<AppCandidate> choices = new()
         {
             new AppCandidate { Name = "No game", ExePath = string.Empty, ProcessName = string.Empty, Source = "NONE" },
-            new AppCandidate { Name = "Gamer Tool (on start)", ExePath = SelfMarker, ProcessName = string.Empty, Source = "SELF", Icon = IconFactory.LoadWindowIcon() }
+            new AppCandidate { Name = "Gamer Tool (on start)", ExePath = SelfMarker, ProcessName = string.Empty, Source = "SELF", Icon = IconFactory.LoadWindowIcon() },
+
+            // The wildcard, beside the two other modes rather than at the bottom of
+            // the list with several hundred installed games. It is a mode, not a
+            // target, and buried under a Steam library it would never be found.
+            new AppCandidate { Name = "Any game (fullscreen)", ExePath = AnyGameMarker, ProcessName = string.Empty, Source = "ANY" }
         };
         choices.AddRange(_appList.Where(c => !string.IsNullOrWhiteSpace(c.ExePath)));
         choices.Add(new AppCandidate { Name = "Browse for a file...", ExePath = BrowseMarker, ProcessName = string.Empty, Source = "BROWSE" });
@@ -651,6 +750,7 @@ public partial class MainWindow : Window
             // is also the only place the answer can be read from.
             ToolTip = AutoToolTip(slot)
         };
+        System.Windows.Automation.AutomationProperties.SetName(box, "Game for " + slot.Name);
 
         // Installed programs have long names and this column is narrow, so the
         // closed box scrolls rather than clipping.
@@ -659,11 +759,15 @@ public partial class MainWindow : Window
         // Icons are pulled the first time the list is actually opened, not on startup.
         box.DropDownOpened += (_, _) => ResolveAppIcons(choices);
 
-        int index = slot.IsSelfTarget ? 1 : 0;
-        if (!slot.IsSelfTarget && !string.IsNullOrWhiteSpace(slot.AppExePath))
+        // Index 2 is the wildcard, so the installed games start at 3. Hard-coded
+        // rather than counted, because a count would silently shift every index
+        // below it whenever a mode were added - and the symptom would be a game
+        // row that selects the wrong preset.
+        int index = slot.IsSelfTarget ? 1 : slot.IsAnyGameTarget ? 2 : 0;
+        if (!slot.IsSelfTarget && !slot.IsAnyGameTarget && !string.IsNullOrWhiteSpace(slot.AppExePath))
         {
             index = -1;
-            for (int i = 2; i < choices.Count; i++)
+            for (int i = 3; i < choices.Count; i++)
             {
                 if (string.Equals(choices[i].ExePath, slot.AppExePath, StringComparison.OrdinalIgnoreCase))
                 {
@@ -682,9 +786,9 @@ public partial class MainWindow : Window
                     Source = "MANUAL"
                 };
                 manual.Icon = IconFactory.ExtractAppIcon(manual.ExePath);
-                choices.Insert(2, manual);
+                choices.Insert(3, manual);
                 box.ItemsSource = choices;
-                index = 2;
+                index = 3;
             }
         }
 
@@ -698,6 +802,18 @@ public partial class MainWindow : Window
 
 
     private const string SelfMarker = "\\self";
+
+
+    /// <summary>
+    /// The wildcard entry in a slot's game dropdown: not bound to any program.
+    /// <para>
+    /// A marker rather than a path, so it cannot collide with a real file - the
+    /// same reason <see cref="SelfMarker"/> exists. Selected here rather than typed,
+    /// because it is a mode rather than a target and reading it off the dropdown
+    /// says which.
+    /// </para>
+    /// </summary>
+    private const string AnyGameMarker = "\\any";
 
 
     /// <summary>
@@ -720,6 +836,15 @@ public partial class MainWindow : Window
         if (a.IsSelfTarget || b.IsSelfTarget)
         {
             return a.IsSelfTarget && b.IsSelfTarget;
+        }
+
+        // Same shape as the check above it. Two wildcards claim the same set of
+        // programs, so they are the same target and a duplicate of one another -
+        // and without this the duplicate check would compare two empty paths and
+        // call them different.
+        if (a.IsAnyGameTarget || b.IsAnyGameTarget)
+        {
+            return a.IsAnyGameTarget && b.IsAnyGameTarget;
         }
 
         if (string.IsNullOrWhiteSpace(a.AppExePath) || string.IsNullOrWhiteSpace(b.AppExePath))
@@ -749,6 +874,17 @@ public partial class MainWindow : Window
         if (slot.IsSelfTarget)
         {
             return "On Startup";
+        }
+
+        // Said in full rather than as the row's own "ANY GAME" label, because this
+        // is the tooltip where the qualifier belongs: the dropdown saying "any
+        // game" does not say what stops it firing on every window, and a user who
+        // does not know that will think it is broken.
+        if (slot.IsAnyGameTarget)
+        {
+            return slot.AutoActivate
+                ? "Auto: any fullscreen game not bound to another slot"
+                : "Any fullscreen game, auto off";
         }
 
         if (!slot.HasTarget)
@@ -845,10 +981,47 @@ public partial class MainWindow : Window
             slot.AutoActivate = false;
             slot.AppExePath = null;
             slot.AppName = null;
+
+            // The three modes are mutually exclusive. Choosing one has to clear
+            // the other two, because HasTarget, TargetText and the matching code
+            // all read them as independent flags - and a slot that is both "on
+            // start" and "any game" would arm two different mechanisms and revert
+            // through whichever happened to be checked first.
+            slot.IsAnyGameTarget = false;
+
             ReleaseAutoClaims(slot);
             Commit();
             BuildSlots();
             ApplyWatchState();
+            return;
+        }
+
+        if (string.Equals(choice.ExePath, AnyGameMarker, StringComparison.Ordinal))
+        {
+            slot.IsAnyGameTarget = true;
+            slot.IsSelfTarget = false;
+            slot.ApplyOnStart = false;
+            slot.AppExePath = null;
+            slot.AppName = null;
+
+            // Armed, because a wildcard that has to be switched on separately is
+            // the same discoverability problem it is meant to solve. At most one
+            // ends up armed; ResolveAutoClaims stands the rest down and says so
+            // through the toast below rather than silently.
+            slot.AutoActivate = true;
+
+            ReleaseAutoClaims(slot);
+            bool kept = slot.AutoActivate;
+
+            Commit();
+            BuildSlots();
+            ApplyWatchState();
+
+            if (!kept)
+            {
+                Flash("Another slot already claims any game", true);
+            }
+
             return;
         }
 
@@ -866,6 +1039,11 @@ public partial class MainWindow : Window
                 string picked = ResolvePickedPath(dialog.FileName);
                 slot.AppExePath = picked;
                 slot.AppName = System.IO.Path.GetFileNameWithoutExtension(picked);
+
+                // A picked file is a specific target, so it clears the wildcard
+                // rather than sitting alongside it. Same reason as the two above.
+                slot.IsAnyGameTarget = false;
+
                 slot.AutoActivate = true;
                 ReleaseAutoClaims(slot);
                 Flash("Target set to " + slot.AppName);
@@ -878,6 +1056,7 @@ public partial class MainWindow : Window
         }
 
         slot.IsSelfTarget = false;
+        slot.IsAnyGameTarget = false;
         slot.ApplyOnStart = false;
         slot.AppExePath = choice.ExePath.Length == 0 ? null : choice.ExePath;
         slot.AppName = choice.ExePath.Length == 0 ? null : choice.Name;
@@ -947,6 +1126,9 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>1 while a scan is running, so two of them never overlap.</summary>
+    private int _scanBusy;
+
     /// <param name="force">
     /// Rescan even when the list already has something in it.
     /// <para>
@@ -957,6 +1139,23 @@ public partial class MainWindow : Window
     /// which is exactly what someone who has just installed a game concludes.
     /// </para>
     /// </param>
+    /// <summary>
+    /// Builds the app list, unless one is already being built.
+    /// <para>
+    /// There was no guard here, and this is reached from four places: the scan
+    /// button, the first time a slot's game dropdown opens, a restore, and a
+    /// window state change. The scan walks every Steam library and every
+    /// uninstall subkey on the machine, so a second click on the button - which
+    /// force:true permits, since it deliberately bypasses the cache - ran it
+    /// twice at once, and whichever finished last overwrote the other's result
+    /// with a list that may have been built mid-scan.
+    /// </para>
+    /// <para>
+    /// The pattern is the same one the FxSound state refresh uses three files
+    /// away: take an interlocked flag, and re-arm in the finally for a request
+    /// that arrived while the work was in flight.
+    /// </para>
+    /// </summary>
     private async System.Threading.Tasks.Task EnsureAppList(bool force = false)
     {
         if (!force && _appList.Count > 0)
@@ -964,17 +1163,76 @@ public partial class MainWindow : Window
             return;
         }
 
-        _appList = (await System.Threading.Tasks.Task.Run(() => _library.Scan())).OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        if (Interlocked.Exchange(ref _scanBusy, 1) == 1)
+        {
+            // A scan is already running. Recorded so it runs again afterwards
+            // rather than being dropped: a force:true caller - the scan button -
+            // wants a fresh look, and returning without saying so would leave it
+            // with the previous list and no indication that nothing happened.
+            _appListPending = true;
+            return;
+        }
+
+        try
+        {
+            // Cleared *before* each pass, not after the last one. The flag means
+            // "somebody asked while this was in flight", so a caller arriving
+            // during the scan sets it and the loop runs one more time; a caller
+            // arriving during the final check finds it clear and is served by that
+            // pass. Setting it inside the body instead - which is what this did
+            // first - means it is always true when the condition is read, so the
+            // scan runs at full speed for the life of the process.
+            while (true)
+            {
+                _appListPending = false;
+
+                _appList = (await System.Threading.Tasks.Task.Run(() => _library.Scan()))
+                    .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                if (!_appListPending)
+                {
+                    break;
+                }
+            }
+        }
+        finally
+        {
+            _appListPending = false;
+            Interlocked.Exchange(ref _scanBusy, 0);
+        }
     }
+
+    /// <summary>Set by a caller that arrived while a scan was already running.</summary>
+    private bool _appListPending;
 
 
     private async void OnScanAppsClick(object sender, RoutedEventArgs e)
     {
+        // Disabled for the duration rather than merely guarded, because this is
+        // the slowest thing the app does on demand and the only feedback it gave
+        // was one line of caption text. The flag above stops the duplicate work;
+        // this stops the button looking available while it is happening.
+        ScanGamesButton.IsEnabled = false;
         RailStatus.Text = "SCANNING FOR GAMES";
-        await EnsureAppList(force: true);
-        BuildSlots();
-        RailStatus.Text = "READY";
-        Flash(_appList.Count.ToString(CultureInfo.InvariantCulture) + " games found");
+
+        try
+        {
+            await EnsureAppList(force: true);
+            BuildSlots();
+            RailStatus.Text = "READY";
+            Flash(_appList.Count.ToString(CultureInfo.InvariantCulture) + " games found");
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("SCAN GAMES", ex);
+            RailStatus.Text = "SCAN FAILED";
+            Flash("Could not scan for games", true);
+        }
+        finally
+        {
+            ScanGamesButton.IsEnabled = true;
+        }
     }
 
 
@@ -994,20 +1252,35 @@ public partial class MainWindow : Window
             return;
         }
 
+        bool screenTookIt = true;
         if (display is not null)
         {
             LoadTune(display.Copy(), (audio ?? _workAudio).Copy());
-            ApplyDisplay(display.Copy(), slot.MonitorDevice, false);
+            screenTookIt = ApplyDisplay(display.Copy(), slot.MonitorDevice, false);
         }
 
         if (audio is not null)
         {
             ApplyAudioToDevice(audio.Copy(), false, slot);
         }
-        RailStatus.Text = slot.Name.ToUpperInvariant();
+
+        // The sound half is applied either way. A slot is one gesture covering two
+        // independent things, and a display that refuses a gamma ramp is no reason
+        // to leave the audio preset the user asked for unapplied as well. What
+        // changes is only what gets claimed afterwards: the rail and the toast
+        // describe the whole slot, so they say the screen did not take it rather
+        // than reporting a clean load for something half of which is missing.
+        RailStatus.Text = screenTookIt ? slot.Name.ToUpperInvariant() : "SCREEN BLOCKED";
         if (announce)
         {
-            Flash(slot.Name + " loaded");
+            if (screenTookIt)
+            {
+                Flash(slot.Name + " loaded");
+            }
+            else
+            {
+                Flash(slot.Name + " loaded, screen did not take it", true);
+            }
         }
     }
 
@@ -1019,12 +1292,148 @@ public partial class MainWindow : Window
             return;
         }
 
+        // A specific match always wins over the wildcard. The wildcard is a
+        // fallback for a game nobody remembered to bind, not a competitor - if it
+        // were checked first, every bound game would be at the mercy of list order.
         HotkeySlot? slot = SlotService.MatchForeground(_settings.Slots, window.ExePath, window.ProcessName);
-        if (slot is not null && ShouldAutoApply(slot, window.ProcessName))
+
+        bool wildcard = false;
+        if (slot is null)
         {
-            TraceLog.Write("AUTO FOCUS " + slot.Name + " <- " + window.ExePath);
-            PlaySlot(slot, true);
+            slot = SlotService.MatchWildcard(_settings.Slots);
+            wildcard = slot is not null;
+
+            // The fullscreen test, here rather than in the matcher because it needs
+            // the window handle and the matcher is handed strings. Without it the
+            // wildcard applies to every window the user alt-tabs to, which is
+            // worse than not having the feature: it would take over the picture of
+            // a browser and every document they open.
+            if (slot is not null && !IsFullscreen(window))
+            {
+                TraceLog.Write("AUTO WILDCARD skip " + window.ProcessName + " (not fullscreen)");
+                RevertWildcardOnFocusLoss(window);
+                return;
+            }
         }
+
+        if (slot is null || !ShouldAutoApply(slot, window.ProcessName))
+        {
+            return;
+        }
+
+        TraceLog.Write((wildcard ? "AUTO WILDCARD " : "AUTO FOCUS ") + slot.Name + " <- " + window.ExePath);
+
+        if (wildcard)
+        {
+            // Remembered so the revert knows what to undo. The wildcard matched a
+            // process rather than a slot's own game, and OnTargetExited looks the
+            // slot up by process name - which finds nothing here, because this
+            // process is not bound to anything. Without this the profile would be
+            // left boosted for whatever the user ran next.
+            _autoWildcardProcess = window.ProcessName;
+
+            // And registered with the watcher, which is the other half of that.
+            // OnTargetExited only ever hears about a process the scan considers
+            // alive-and-then-gone, and a wildcard contributes nothing to the watch
+            // list, so without this its exit was never noticed at all. The revert
+            // was fully written and simply never ran.
+            //
+            // The refusal is checked rather than dropped. An empty return means a
+            // different process is still being watched, so this game is applied but
+            // unmonitored and its exit will never revert anything - which used to
+            // be recorded nowhere at all.
+            if (_watcher.WatchUnbound(window.ProcessName).Length == 0)
+            {
+                TraceLog.Write("WATCH refused " + window.ProcessName + " <- already watching a different process");
+            }
+        }
+
+        PlaySlot(slot, true);
+    }
+
+    /// <summary>
+    /// Whether the window covers its whole monitor.
+    /// <para>
+    /// The shape that reliably means a game is running. A maximised browser covers
+    /// the work area and leaves the taskbar visible, so comparing against the work
+    /// area would match half the desktop; comparing against the monitor rectangle
+    /// is what distinguishes the two, and it is the same distinction the gamma lock
+    /// has to make before deciding not to fight something on screen.
+    /// </para>
+    /// <para>
+    /// Fails closed. If the window's own rectangle cannot be read - which happens
+    /// on a desktop that is being torn down, and for windows owned by another
+    /// user's session - the answer is no, so the wildcard stands down rather than
+    /// guessing.
+    /// </para>
+    /// </summary>
+    private static bool IsFullscreen(WatchedWindow window)
+    {
+        return window.IsFullscreen;
+    }
+
+    /// <summary>
+    /// The wildcard's game is still running but the user has left it, so the preset
+    /// goes back to neutral.
+    /// <para>
+    /// The other half of the fullscreen rule, and it was missing. The rule answers
+    /// "when should this apply", and until now nothing answered "when should it
+    /// stop" - so alt-tabbing to a browser left the game profile on a browser, and
+    /// the wildcard would not re-apply either because the browser is not fullscreen.
+    /// The screen stayed wrong until the user pressed something.
+    /// </para>
+    /// <para>
+    /// Gated on this being the wildcard's own application. Reverting because the
+    /// user alt-tabbed into some unrelated fullscreen window would undo a preset
+    /// they had chosen deliberately, and a game that owns a bound slot has its own
+    /// exit handling which does not work this way.
+    /// </para>
+    /// <para>
+    /// Deliberately does not release the watch. The game is still running, so
+    /// quitting it should still revert - and if the user alt-tabs back in, the
+    /// wildcard applies again on the normal path.
+    /// </para>
+    /// </summary>
+    private void RevertWildcardOnFocusLoss(WatchedWindow window)
+    {
+        if (_autoWildcardProcess.Length == 0)
+        {
+            return;
+        }
+
+        if (string.Equals(_autoWildcardProcess, window.ProcessName, StringComparison.OrdinalIgnoreCase))
+        {
+            // Back to the game, or another window of it. Not a focus loss.
+            return;
+        }
+
+        HotkeySlot? slot = _settings.Slots.FirstOrDefault(s =>
+            string.Equals(s.Id, _autoSlotId, StringComparison.OrdinalIgnoreCase));
+
+        if (slot is null || !slot.IsAnyGameTarget)
+        {
+            return;
+        }
+
+        if (!_settings.AutoRevertOnExit || _quitting)
+        {
+            return;
+        }
+
+        TraceLog.Write("AUTO WILDCARD focus left " + _autoWildcardProcess
+            + " <- " + window.ProcessName);
+
+        // The apply debounce is cleared inside GoScreenStandDown, which is where all four
+        // stand-down paths now clear it. This used to be a second site, and the two
+        // did not agree.
+
+        // A stand-down rather than a hard reset: the game is over, not the screen
+        // broken. Same reasoning as the exit path in OnTargetExited - the panel
+        // goes back to where the user had it, unless this preset never touched it.
+        GoScreenStandDown();
+        _ = GoSoundNeutralAsync();
+
+        Flash(slot.Name + " left behind, back to normal");
     }
 
 
@@ -1065,7 +1474,28 @@ public partial class MainWindow : Window
         HotkeySlot? slot = SlotService.MatchProcessName(_settings.Slots, processName);
         if (slot is null)
         {
-            return;
+            // Not a bound game. It may still be a program a wildcard slot applied
+            // itself for, which MatchProcessName cannot find by construction - the
+            // wildcard matched something that is not bound to anything.
+            //
+            // Both halves have to agree: the process must be the one remembered at
+            // apply time, and the slot that applied it must still be the one
+            // loaded. Without the first, quitting any unbound program would revert
+            // the profile; without the second, a revert would fire for an
+            // application the user has since overridden with their own key press.
+            if (!string.Equals(_autoWildcardProcess, processName, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            slot = _settings.Slots.FirstOrDefault(s =>
+                string.Equals(s.Id, _autoSlotId, StringComparison.OrdinalIgnoreCase));
+
+            if (slot is null || !slot.IsAnyGameTarget)
+            {
+                TraceLog.Write("AUTO WILDCARD EXIT SKIP " + processName + " <- no longer the loaded slot");
+                return;
+            }
         }
 
         if (!string.Equals(_autoSlotId, slot.Id, StringComparison.OrdinalIgnoreCase))
@@ -1076,9 +1506,19 @@ public partial class MainWindow : Window
 
         TraceLog.Write("AUTO EXIT " + slot.Name + " <- " + processName);
 
-        // GoScreenNeutral stands the auto-apply guard down as it goes, so a second
-        // exit for the same slot cannot fire a second revert.
-        GoScreenNeutral();
+        // Released explicitly rather than left to the watcher's own exit handling,
+        // which already removed it before raising this. Named here so the two
+        // paths - the wildcard's exit and the wildcard's focus loss - release the
+        // same thing, and so a second exit for the same process cannot be raised
+        // by a name that is no longer being watched.
+        _watcher.ForgetUnbound(processName);
+
+        // GoScreenStandDown stands the auto-apply guard down as it goes, so a second
+        // exit for the same slot cannot fire a second revert. And the panel is put
+        // back rather than left at the game's brightness, because the desktop the
+        // user is returning to is theirs and should be at the brightness they set
+        // - but only if this preset was what moved it.
+        GoScreenStandDown();
 
         // Off the dispatcher. This is three engine calls that each wait on a child
         // process, and it runs at the moment a game exits, which is the worst
@@ -1098,7 +1538,7 @@ public partial class MainWindow : Window
             return false;
         }
 
-        if (DateTime.UtcNow - _autoStamp < TimeSpan.FromSeconds(2))
+        if (AutoApplyGate.IsDebounced(_autoStamp, DateTime.UtcNow))
         {
             return false;
         }
@@ -1106,6 +1546,12 @@ public partial class MainWindow : Window
         _autoStamp = DateTime.UtcNow;
         _autoSlotId = slot.Id;
         _autoProcess = processName ?? string.Empty;
+
+        // A wildcard application is remembered against its process only. A slot
+        // applied for a bound game is undone through OnTargetExited's own lookup,
+        // which finds it by name, and a wildcard's name matches nothing - so the
+        // two cannot share a field without one of them reading the other's answer.
+        _autoWildcardProcess = slot.IsAnyGameTarget ? _autoProcess : string.Empty;
         return true;
     }
 
@@ -1127,10 +1573,8 @@ public partial class MainWindow : Window
         HashSet<string> taken = new(StringComparer.Ordinal);
         List<HotkeySlot> skipped = new();
 
-        /// <summary>
-        /// Keys some other program already owns, which is a different problem from
-        /// a duplicate in here and gets its own wording.
-        /// </summary>
+        // Keys some other program already owns, which is a different problem from
+        // a duplicate in here and gets its own wording.
         HashSet<string> refusedKeys = new(StringComparer.OrdinalIgnoreCase);
         int id = 1;
 
@@ -1143,9 +1587,21 @@ public partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(_settings.EmergencyHotkey))
         {
             panicKey = HotkeyService.Normalise(_settings.EmergencyHotkey);
-            if (taken.Add(panicKey))
+
+            // Checked, and claimed only on success, exactly as a slot is below.
+            // This threw the answer away, and that made two things wrong at once
+            // when another program owned the combo: the key stayed in `taken`, so
+            // the slot holding it was skipped and then reported as "the panic key
+            // took CTRL+ALT+F12 from <slot>" - a claim that was false, because the
+            // panic key was not registered either. Both bindings were dead and the
+            // message named the wrong one.
+            if (_hotkeys.Register(EmergencyHotkeyId, EmergencyTargetId, _settings.EmergencyHotkey))
             {
-                _hotkeys.Register(EmergencyHotkeyId, EmergencyTargetId, _settings.EmergencyHotkey);
+                taken.Add(panicKey);
+            }
+            else
+            {
+                panicKey = string.Empty;
             }
         }
 
@@ -1281,7 +1737,10 @@ public partial class MainWindow : Window
 
         if (SlotService.IsLoaded(slot, _activeDisplayId, _activeAudioId))
         {
-            GoScreenNeutral();
+            // A stand-down, not a hard reset. The user is turning a preset off, not
+            // asking for the whole screen rebuilt, so the panel is put back only if
+            // the preset they were running was the thing that dimmed it.
+            GoScreenStandDown();
             await GoSoundNeutralAsync();
             Flash(slot.Name + " off");
             return;
@@ -1381,7 +1840,7 @@ public partial class MainWindow : Window
             _captureSlotId = null;
             _captureBox = PanicKeyBox;
             PanicKeyBox.Text = "PRESS A KEY";
-            PanicKeyBox.ToolTip = "Esc cancels  Â·  Backspace clears  Â·  F1 to F24 bind on their own";
+            PanicKeyBox.ToolTip = "Esc cancels  ·  Backspace clears  ·  F1 to F24 bind on their own";
         };
         PanicKeyBox.LostKeyboardFocus += (s, e) =>
         {
@@ -1421,6 +1880,3 @@ public partial class MainWindow : Window
     }
 
 }
-
-
-

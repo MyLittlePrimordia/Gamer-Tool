@@ -154,8 +154,17 @@ public static class AmdProtectionOverride
         return reading;
     }
 
-    /// <summary>Forgets the cached reading, so the next call walks again.</summary>
-
+    /// <summary>
+    /// Reads the registry for the answer, every time. Read() is what caches.
+    /// </summary>
+    /// <para>
+    /// The summary here used to describe forgetting the cached reading, which is
+    /// the absence of a method rather than one: nothing here invalidates anything,
+    /// and a comment saying so next to the only method on the class reads as a
+    /// description of what it does. It matters because the cache has no way out at
+    /// all, so somebody reading this would reasonably assume one existed.
+    /// </para>
+    /// </summary>
     private static ProtectionOverrideReading Walk()
     {
         try

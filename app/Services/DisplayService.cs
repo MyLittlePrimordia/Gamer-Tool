@@ -124,7 +124,43 @@ public sealed class DisplayService
 
 
 
-    public string ActiveDevice { get; private set; } = string.Empty;
+    /// <summary>
+    /// The display a scope names, or empty for every attached screen.
+    /// <para>
+    /// Guarded by the same lock as the monitor list, and that is not tidiness. The
+    /// gamma lock's timer calls <see cref="Push"/> on its own interval while a
+    /// rescan is rewriting the monitor list and reconciling this field, and <see
+    /// cref="Push"/> read it *outside* the lock. Reconciling a detached display
+    /// clears it, and a push that read the cleared value applied a scoped preset to
+    /// every attached screen - so the scope the user chose was the one thing the
+    /// race could take away.
+    /// </para>
+    /// <para>
+    /// The setter is public so callers can point the service at a screen, but the
+    /// write is still a lock, so a reader never observes a half-written value or an
+    /// intermediate one that no code chose.
+    /// </para>
+    /// </summary>
+    public string ActiveDevice
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _activeDevice;
+            }
+        }
+
+        set
+        {
+            lock (_gate)
+            {
+                _activeDevice = value ?? string.Empty;
+            }
+        }
+    }
+
+    private string _activeDevice = string.Empty;
 
     public IReadOnlyList<string> Monitors
     {
@@ -151,6 +187,64 @@ public sealed class DisplayService
             }
 
             return list;
+        }
+    }
+
+    /// <summary>
+    /// Enumerates the attached displays and replaces the cached set with whatever
+    /// is there now.
+    /// <para>
+    /// <see cref="ScanMonitors"/> is the same work and has always cleared the cache
+    /// before filling it, so this is a name rather than new behaviour. It exists
+    /// because the callers that need a forced rescan - the display-change hook, the
+    /// refresh button - were reaching for ScanMonitors directly, which reads as
+    /// "enumerate" and gives no hint that it also throws away what was known. That
+    /// matters here because every other call site guards on
+    /// <c>Monitors.Count &gt; 0</c> and will therefore never call it again: a
+    /// docked laptop kept yesterday's display list for the rest of the session.
+    /// </para>
+    /// <para>
+    /// The remembered ramps are kept, deliberately. They are what the exit path
+    /// puts back, and they are keyed by device name - \\.\DISPLAY1 does not change
+    /// identity when a second screen appears, it is the same adapter - so
+    /// discarding them would lose the ability to restore a screen that has just
+    /// been unplugged and re-plugged.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> Rescan() => ScanMonitors();
+
+    /// <summary>
+    /// The device this service is currently writing to, for tests that need to
+    /// prove a scope survived or was widened by a re-scan.
+    /// <para>
+    /// Push refuses when this names a screen it cannot find, so the only way to
+    /// check the reconciliation without a monitor attached is to read it. Exposed
+    /// internally rather than publicly for the same reason the tests can see the
+    /// internals at all: this is a property of the bus's target, not an API the
+    /// app has any use for.
+    /// </para>
+    /// </summary>
+    internal string ActiveDeviceForTest => ActiveDevice;
+
+    /// <summary>
+    /// Points the service at a device without going through an apply.
+    /// <para>
+    /// A test-only seam. Apply writes a real gamma ramp to real hardware, which is
+    /// the one thing a unit test must not do, and there is no other route to the
+    /// scope - it is set as a side effect of Apply. This is that route.
+    /// </para>
+    /// </summary>
+    internal void ScopeToForTest(string device) => ActiveDevice = device ?? string.Empty;
+
+    /// <summary>How many displays this service holds an original ramp for.</summary>
+    internal int RememberedRampCountForTest
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _originalRamps.Count;
+            }
         }
     }
 
@@ -196,7 +290,101 @@ public sealed class DisplayService
             _monitorNames.AddRange(names);
         }
 
+        ReconcileActiveDevice(found);
         return found;
+    }
+
+    /// <summary>
+    /// Drops a target that is no longer attached, so the next push lands somewhere
+    /// rather than nowhere.
+    /// <para>
+    /// Push refuses outright when <see cref="ActiveDevice"/> names a screen it
+    /// cannot find, and reports "NO SUCH SCREEN". That is right when a user picks
+    /// a monitor that is not there - they made a mistake and should be told. It
+    /// is wrong for a dock: undocking the laptop renumbers \\.\DISPLAY2 away and
+    /// the preset that was scoped to it now matches nothing, so every subsequent
+    /// re-push refuses and the screen sits on whatever Windows put there.
+    /// </para>
+    /// <para>
+    /// So the scope is widened to all screens rather than refused. The curve being
+    /// applied is the one the user chose and it is still the right curve; losing it
+    /// because a cable moved is the worse of the two failures. The case is
+    /// deliberately narrow - an empty target, or one that is genuinely still
+    /// present, or one this device matches by suffix, are all left alone - so the
+    /// "NO SUCH SCREEN" path still does its job for a mistyped choice.
+    /// </para>
+    /// </summary>
+    private void ReconcileActiveDevice(IReadOnlyList<string> present)
+    {
+        // Checked and cleared as one locked operation rather than read-then-write.
+        // The read-decide-write pair was the race: a push could arrive between the
+        // test and the clear, or observe the cleared field and spread a scoped
+        // preset across every attached screen.
+        lock (_gate)
+        {
+            if (string.IsNullOrWhiteSpace(_activeDevice))
+            {
+                return;
+            }
+
+            foreach (string device in present)
+            {
+                if (DeviceMatches(device, _activeDevice))
+                {
+                    return;
+                }
+            }
+
+            TraceLog.Write("DISPLAY target " + _activeDevice + " is gone, applying to all screens instead");
+            _activeDevice = string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Reconciles the scope against a list of attached devices, for the tests.
+    /// <para>
+    /// The reconcile is the interesting part of 2.2 and there is no other way to
+    /// reach it: it runs inside <see cref="Rescan"/>, which needs real hardware. It
+    /// is exposed rather than the scan so a test can drive the check-and-clear
+    /// directly, including concurrently with readers, which is the whole question.
+    /// </para>
+    /// </summary>
+    internal void ReconcileForTest(IReadOnlyList<string> present) => ReconcileActiveDevice(present);
+
+    /// <summary>
+    /// Whether an attached device is the one a scope names.
+    /// <para>
+    /// Exact match, or a suffix match that has to land on a delimiter boundary.
+    /// The plain <c>EndsWith</c> this replaced had no boundary, so a stored
+    /// "DISPLAY2" claimed "DISPLAY20", "DISPLAY21" and every other display on a
+    /// machine with more than ten of them - and the failure was silent in the worst
+    /// direction, because the app reported a successful scoped push while writing
+    /// to a screen the user had never pointed it at.
+    /// </para>
+    /// <para>
+    /// Requiring the character immediately before the matched run to be a path
+    /// separator is what makes the leniency safe: it is true for the suffix forms
+    /// this was written for - "\\.\DISPLAY2" against a stored "DISPLAY2", or a full
+    /// path stored without its device prefix - and false for a partial hit inside a
+    /// longer name, which is the only case the leniency was ever at risk for.
+    /// </para>
+    /// </summary>
+    internal static bool DeviceMatches(string device, string wanted)
+    {
+        if (string.Equals(device, wanted, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (wanted.Length == 0
+            || device.Length <= wanted.Length
+            || !device.EndsWith(wanted, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        char before = device[device.Length - wanted.Length - 1];
+        return before == '.' || before == '\\';
     }
 
     private static string Label(DisplayDeviceInfo adapter, int ordinal, Dictionary<string, int> seen)
@@ -266,6 +454,46 @@ public sealed class DisplayService
         {
             double scaled = Math.Clamp(Curve(preset, i) / peak, 0.0, 1.0) * Math.Max(gain, 0.0);
             target[i] = (ushort)Math.Round(Math.Clamp(scaled, 0.0, 1.0) * 65535.0);
+        }
+    }
+
+    /// <summary>
+    /// The share of the input range each channel holds at full scale.
+    /// <para>
+    /// For the tests, and the only way to find out what a preset does to the top of
+    /// the range without putting it on a monitor and going outside to look at a
+    /// sky. Measured over the same <see cref="ushort"/> ramp that goes to the
+    /// hardware, so it counts exactly what the display will do rather than an
+    /// approximation of it.
+    /// </para>
+    /// <para>
+    /// Inputs zero to <c>RampSize - 2</c>, deliberately excluding the top entry:
+    /// that one is white in by construction and is not evidence of anything. What
+    /// is left is the number of inputs that came out white when they should not
+    /// have, and a per-channel answer rather than one average - a ramp whose three
+    /// channels flatten at different levels does not crush to white, it desaturates
+    /// and hue-shifts as the highlights come up, which is worse and much easier to
+    /// miss.
+    /// </para>
+    /// </summary>
+    internal static double[] HighlightFlattening(DisplayPreset preset)
+    {
+        Ramp ramp = BuildRamp(preset);
+        return new[] { Flattened(ramp.Red), Flattened(ramp.Green), Flattened(ramp.Blue) };
+
+        static double Flattened(ushort[] channel)
+        {
+            int count = 0;
+
+            for (int i = 0; i < RampSize - 1; i++)
+            {
+                if (channel[i] >= ushort.MaxValue)
+                {
+                    count++;
+                }
+            }
+
+            return count / (double)(RampSize - 1);
         }
     }
 
@@ -340,7 +568,7 @@ public sealed class DisplayService
         ActiveDevice = device ?? string.Empty;
         _dirty = true;
         bool ok = Push();
-        TraceLog.Write("DISPLAY APPLY " + preset.Name + " scope=" + (ActiveDevice.Length == 0 ? "ALL" : ActiveDevice)
+        TraceLog.Write("DISPLAY APPLY " + preset.Name + " scope=" + (string.IsNullOrEmpty(ActiveDevice) ? "ALL" : ActiveDevice)
             + " gamma=" + preset.Gamma.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)
             + " result=" + ok);
         if (ok)
@@ -365,19 +593,33 @@ public sealed class DisplayService
 
     public bool Push()
     {
+        // Scanned first when the list is empty, because the scan reconciles the
+        // scope and the scope has to be read after that or this pushes to a screen
+        // the scan has just learned is gone.
         IReadOnlyList<string> all = Monitors.Count > 0 ? Monitors : ScanMonitors();
-        List<string> targets = new();
-        if (!string.IsNullOrWhiteSpace(ActiveDevice))
+
+        // Scope and monitor list read as one pair. Read separately, they can be a
+        // monitor list from before a rescan and a scope that has since been cleared
+        // by the same rescan - which is a scoped preset spread across every screen,
+        // silently, on the gamma lock's own timer.
+        string scope;
+        lock (_gate)
         {
-            if (all.Contains(ActiveDevice, StringComparer.OrdinalIgnoreCase))
+            scope = _activeDevice;
+        }
+
+        List<string> targets = new();
+        if (!string.IsNullOrWhiteSpace(scope))
+        {
+            if (all.Contains(scope, StringComparer.OrdinalIgnoreCase))
             {
-                targets.Add(ActiveDevice);
+                targets.Add(scope);
             }
             else
             {
                 foreach (string device in all)
                 {
-                    if (device.EndsWith(ActiveDevice, StringComparison.OrdinalIgnoreCase))
+                    if (DeviceMatches(device, scope))
                     {
                         targets.Add(device);
                     }

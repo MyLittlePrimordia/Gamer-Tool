@@ -89,11 +89,23 @@ public partial class MainWindow : Window
         if (incoming is null)
         {
             TraceLog.Write("BACKUP IMPORT " + error);
+            // Three answers, not two. "FILE COULD NOT BE READ" is what a truncated,
+            // half-written or unreadable file comes back as, and it fell into the
+            // "not a Gamer Tool backup" branch - which is the wrong diagnosis for
+            // the most likely way a user reaches this: their own export, cut short
+            // by a crash or a full disk. Being told the file is the wrong kind of
+            // thing sends them looking for a different one.
             ShowResultModal(
-                "NOT A GAMER TOOL BACKUP",
+                error == "FILE NOT FOUND"
+                    ? "FILE NOT FOUND"
+                    : error == "FILE COULD NOT BE READ"
+                        ? "FILE COULD NOT BE READ"
+                        : "NOT A GAMER TOOL BACKUP",
                 error == "FILE NOT FOUND"
                     ? "That file is not there any more."
-                    : "That file is not a Gamer Tool backup, so there is nothing in it to restore.",
+                    : error == "FILE COULD NOT BE READ"
+                        ? "That file could not be read. It may be damaged, or still being written by something else."
+                        : "That file is not a Gamer Tool backup, so there is nothing in it to restore.",
                 failed: true,
                 "Pick another",
                 () => _ = PickAndRestoreAsync(),

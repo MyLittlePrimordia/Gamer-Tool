@@ -107,9 +107,17 @@
     <!-- All-caps micro label used for card headings. -->
     <Style x:Key="SectionHeader" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource Sans}" />
-        <Setter Property="FontSize" Value="9.5" />
-        <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="Foreground" Value="{StaticResource TextLow}" />
+<Setter Property="FontSize" Value="9.5" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <!-- TextMid, not TextLow. TextLow is #5E5E5E, which against this app's
+         near-black backgrounds is 3.1 to 3.2 : 1 - below the 4.5 : 1 that WCAG AA
+         asks of anything under 18pt, and 9.5 point semibold is not "large text"
+         under that rule. TextMid (#8E8E8E) measures 6.4 : 1 on the same ground
+         and is what every other small label in the theme already uses. The
+         headings were the last thing still on the dimmer colour, which is a
+         strange thing for a heading to be: it is the text a screen reader user
+         is most likely to be skimming for. -->
+    <Setter Property="Foreground" Value="{StaticResource TextMid}" />
     </Style>
 
     <Style x:Key="CardTitle" TargetType="TextBlock">
@@ -1177,6 +1185,17 @@
   <Style x:Key="OptionRow" TargetType="ui:OptionToggle">
     <Setter Property="Cursor" Value="Hand" />
     <Setter Property="Height" Value="40" />
+    <!-- The row's own name, from the same Label the visible text is bound to.
+         Without it every setting announced as an unnamed check box: the template
+         renders Label into a TextBlock, which is not the control's Content and so
+         is not what UI Automation reads as the name, and none of the nine
+         instances in MainWindow.xaml carried one either. A tooltip is HelpText,
+         which is not a name. -->
+    <Setter Property="AutomationProperties.Name">
+        <Setter.Value>
+            <Binding Path="Label" RelativeSource="{RelativeSource Self}" />
+        </Setter.Value>
+    </Setter>
     <!-- The gap between rows lives here rather than on each row in the list, so
          that every row is spaced identically by construction. It used to be set
          on the first two rows only, which left the third sitting flush against
@@ -1220,8 +1239,16 @@
                                  accent comes from Accent rather than being hardcoded,
                                  so this list can be a different colour from the
                                  standalone toggles if it ever needs to be. -->
+                            <!-- IsTabStop only. The nested switch is a ToggleButton, and ToggleButton
+                                  does not raise Click when it is not focusable - so
+                                  Focusable="False" here, added to remove the second
+                                  tab stop, made the switch graphic itself inert under
+                                  the mouse while the rest of the row still worked.
+                                  IsTabStop="False" removes it from the tab order and
+                                  leaves it clickable, which is what was wanted. -->
                             <ui:SwitchToggle Grid.Column="5" Style="{StaticResource SwitchTrack}"
                                               Accent="{StaticResource AccentSettings}"
+                                              IsTabStop="False"
                                               IsChecked="{Binding IsChecked, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}" />
                         </Grid>
                     </Border>

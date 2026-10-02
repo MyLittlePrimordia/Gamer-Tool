@@ -22,9 +22,13 @@
                             CornerRadius="0" UseAeroCaptionButtons="False" />
     </shell:WindowChrome.WindowChrome>
 
-    <Window.Resources>
-        <ui:InverseBoolToVisibilityConverter x:Key="InverseBool" />
-    </Window.Resources>
+    <!-- No resources declared here. There used to be an InverseBool converter
+         that nothing in this window ever referenced - the only consumer is
+         ThemeInverseBool inside the theme dictionary - and a declared key that
+         looks live is worse than no key, because the next person to need a
+         converter finds this one and uses it. XamlResourceTests checks that
+         every reference resolves; it cannot check the other direction, which is
+         exactly the direction that had drifted. -->
 
         <!-- The whole app is drawn as one rounded card floating inside a
              transparent window, so the frame, the tab switcher, the caption
@@ -82,12 +86,14 @@
 
                             <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
                                 <Button x:Name="CaptionMinButton" Style="{StaticResource CaptionButton}"
-                                        Click="OnCaptionMinClick" ToolTip="Hide">
+                                        Click="OnCaptionMinClick" ToolTip="Hide"
+                                        AutomationProperties.Name="Hide to the tray">
                                     <Path Data="M 0 0 L 10 0" StrokeThickness="1" HorizontalAlignment="Center" VerticalAlignment="Center"
                                           Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
                                 </Button>
                                 <Button x:Name="CaptionCloseButton" Style="{StaticResource CaptionClose}"
-                                        Click="OnCaptionCloseClick" ToolTip="Close">
+                                        Click="OnCaptionCloseClick" ToolTip="Close"
+                                        AutomationProperties.Name="Close Gamer Tool">
                                     <Path Data="M 0 0 L 9 9 M 9 0 L 0 9" StrokeThickness="1.1"
                                           HorizontalAlignment="Center" VerticalAlignment="Center"
                                           Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
@@ -177,6 +183,7 @@
                                                      scene on screen reads as one switch. -->
                                                 <Button x:Name="PreviewSceneButton" Grid.Column="1"
                                                         Style="{StaticResource PillTab}"
+                                                        AutomationProperties.Name="Change the preview scene"
                                                         Click="OnPreviewSceneClick" ToolTip="Day scene">
                                                     <ui:EmojiImage x:Name="PreviewSceneGlyph" Glyph="sun" Width="18" Height="18" />
                                                 </Button>
@@ -517,6 +524,19 @@
                                             VerticalAlignment="Center" HorizontalAlignment="Right">
                                     <Ellipse x:Name="ScreenLiveDot" Width="6" Height="6" Fill="{StaticResource Green}" VerticalAlignment="Center" Margin="0,0,8,0" />
                                     <TextBlock x:Name="ScreenLiveText" Style="{StaticResource CardSub}" VerticalAlignment="Center" />
+                                    <!-- Look for a screen now, rather than waiting for one
+                                         to be plugged in. The automatic hook covers the
+                                         common case; this covers the one it cannot see -
+                                         a screen attached to the other side of a KVM, or
+                                         a dock the OS did not report a topology change for
+                                         - and it is the same affordance the audio tab
+                                         already has beside its output picker. Beside the
+                                         live readout because that is where "is this screen
+                                         actually there" is already being answered. -->
+                                    <ui:IconButton x:Name="RescanScreensButton" Icon="{x:Static ui:Icons.Refresh}"
+                                                   Style="{StaticResource IconButton}" Margin="8,0,0,0"
+                                                   Click="OnRescanScreensClick" ToolTip="Find screens"
+                                                   AutomationProperties.Name="Look for attached screens again" />
                                 </StackPanel>
                             </Grid>
                         </Grid>
@@ -599,9 +619,11 @@
                                                      display preview, so the two boxes read the
                                                      same way. -->
                                                 <ui:IconButton x:Name="AudioPreviewButton" Grid.Column="1" Style="{StaticResource IconButton}"
-                                                              IconSize="15" Click="OnAudioPreviewClick" ToolTip="Play" />
+                                                              IconSize="15" Click="OnAudioPreviewClick" ToolTip="Play"
+                                                              AutomationProperties.Name="Play or pause the audio preview" />
                                                 <Button x:Name="PreviewTrackButton" Grid.Column="2" Style="{StaticResource PillTab}"
                                                         HorizontalAlignment="Right" Margin="0"
+                                                        AutomationProperties.Name="Change the preview track"
                                                         Click="OnPreviewTrackClick" ToolTip="Music">
                                                     <ui:EmojiImage x:Name="PreviewTrackGlyph" Glyph="gamepad" Width="18" Height="18" />
                                                 </Button>
@@ -1115,8 +1137,11 @@
                                 <Grid x:Name="SlotList" />
                             </ScrollViewer>
 
-                            <Border Grid.Row="2" Style="{StaticResource Hairline}" VerticalAlignment="Top" Margin="18,0" />
-                            <!-- No footer row. There used to be one holding a
+                            <!-- No footer row, so no hairline either. This border was left behind by the
+     footer it used to underline and pointed at Grid.Row="2" on a grid with two
+     rows, so WPF clamped it into the star row and drew the line straight across
+     the top of the slot list. -->
+                            <!-- There used to be one holding a
                                  twenty two word instruction, permanently, on
                                  every visit, explaining how to use the key box
                                  that already looks like a key and already says

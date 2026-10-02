@@ -185,9 +185,26 @@ public sealed class BrightnessReading
     public VcpCodeType CodeType { get; init; } = VcpCodeType.Unknown;
 
     /// <summary>0 to 1 against the monitor's own reported range, not against 0 to 100.</summary>
-    public double Normalised => Maximum > Minimum
-        ? Math.Clamp((Current - Minimum) / (double)(Maximum - Minimum), 0.0, 1.0)
-        : 0.0;
+    public double Normalised
+    {
+        get
+        {
+            if (Maximum <= Minimum)
+            {
+                return 0.0;
+            }
+
+            // Widened to double before the subtraction rather than after. These are
+            // uints, so Current - Minimum is unchecked uint arithmetic: a reading
+            // whose current sits below its own reported minimum wraps to about
+            // 4.29 billion, the ratio clamps to 1.0, and the row reports a monitor
+            // at full brightness that is reporting the opposite. uint is the right
+            // type for what the monitor said and the wrong one for doing maths on it.
+            double span = Maximum - Minimum;
+            double offset = (double)Current - Minimum;
+            return Math.Clamp(offset / span, 0.0, 1.0);
+        }
+    }
 
     public override string ToString() =>
         $"{Current} of {Maximum} (range {Minimum}-{Maximum}), {(Normalised * 100).ToString("0")}%"
@@ -297,6 +314,18 @@ public sealed class MonitorProbe
     /// and neither can do that from a reason string.
     /// </summary>
     public BusOutcome Outcome { get; set; } = BusOutcome.Failed;
+
+    /// <summary>
+    /// Whether this display was actually spoken to, as against skipped.
+    /// <para>
+    /// A separate question from <see cref="CanControlBacklight"/>, and the reason
+    /// it cannot be derived from it: that property is false both for a monitor
+    /// that declined and for one the bus was never free to reach. The retirement
+    /// policy needs to tell those apart, because only the first is evidence about
+    /// the hardware. Busy and TimedOut both mean the monitor was never asked.
+    /// </para>
+    /// </summary>
+    public bool WasAsked => Outcome is not (BusOutcome.Busy or BusOutcome.TimedOut);
 
     /// <summary>Win32 error from the failing call, with a name where one is known.</summary>
     public string? LastError { get; set; }
@@ -470,7 +499,15 @@ public static class HardwareBrightness
 
     /// <summary>
     /// A dropped first packet is normal on a lot of scalers, so one refusal is
-    /// never treated as final.
+    /// never treated as final. Total attempts, not retries after the first.
+    /// <para>
+    /// The write loop reads <c>attempt &lt; RetryAttempts</c> and the read loop
+    /// <c>attempt &lt;= RetryAttempts</c>, so the read was making four attempts
+    /// where the write made three and where the rest of the code - the refusal
+    /// copy in BacklightService, the log line, the notes on this constant - all
+    /// say three. Nothing depended on the difference, but the two loops were
+    /// meant to be the same policy written twice.
+    /// </para>
     /// </summary>
     private const int RetryAttempts = 3;
 
@@ -821,6 +858,18 @@ private static void LeaveBus()
         win32Error = 0;
         abandoned = null;
 
+        // The range comes off the monitor itself and has never been checked, and
+        // Math.Clamp throws ArgumentException when min is above max rather than
+        // quietly producing something. A monitor that reported its limits in the
+        // wrong order therefore turned a brightness drag into an exception on a
+        // pool thread, which the caller's discarded task swallowed whole: no log,
+        // no row, a slider that just stopped doing anything. Normalising the range
+        // first is the same answer the clamp would have given for a sane monitor.
+        if (minimum > maximum)
+        {
+            (minimum, maximum) = (maximum, minimum);
+        }
+
         uint clamped = Math.Clamp(value, minimum, maximum);
 
         // Callers debounce, so this rarely fires. It is here so that a burst from
@@ -845,8 +894,10 @@ private static void LeaveBus()
 
         Task<(bool Ok, int Error)> write = Task.Run<(bool Ok, int Error)>(() =>
         {
-            lock (Gate)
+            try
             {
+                lock (Gate)
+                {
                 if (!GetNumberOfPhysicalMonitorsFromHMONITOR(handle.Value, out uint count) || count == 0)
                 {
                     return (false, Marshal.GetLastWin32Error());
@@ -905,6 +956,21 @@ private static void LeaveBus()
                     DestroyPhysicalMonitors(count, buffer);
                     Marshal.FreeHGlobal(buffer);
                 }
+                }
+            }
+            catch (Exception ex)
+            {
+                // A P/Invoke that cannot be reached at all - dxva2.dll missing on a
+                // trimmed Windows image, EntryPointNotFound on an older one - or an
+                // SEHException from a monitor that took the process down with it.
+                // Task.Wait and .Result both rethrow a faulted task as an
+                // AggregateException, so without this the failure left WriteBrightness
+                // before it could say anything, and landed in a discarded task at the
+                // UI end. Nothing was logged, nothing was shown, and the row simply
+                // stopped responding. Reported as a refusal with the reason attached,
+                // which is what every other failure down here already does.
+                TraceLog.Write("DDC write", ex);
+                return (false, 0);
             }
         });
 
@@ -1068,8 +1134,10 @@ Task? abandoned = null;
 
         Task<BusResult> read = Task.Run(() =>
         {
-            lock (Gate)
+            try
             {
+                lock (Gate)
+                {
                 if (!GetNumberOfPhysicalMonitorsFromHMONITOR(hMonitor, out uint count))
                 {
                     return new BusResult
@@ -1150,8 +1218,11 @@ Task? abandoned = null;
                         // AUX packet and to be slow to answer, so a single refusal
                         // is not treated as final. Two short retries with a pause
                         // settle the difference between a dropped packet and a
-                        // monitor that genuinely does not implement the code.
-                        for (int attempt = 1; attempt <= RetryAttempts && !ok; attempt++)
+                        // monitor that genuinely does not implement the code -
+                        // three attempts in total, matching the write loop and
+                        // RetryAttempts, which is what this used to say while
+                        // making four.
+                        for (int attempt = 1; attempt < RetryAttempts && !ok; attempt++)
                         {
                             Thread.Sleep(RetryDelayMs);
                             RespectMinimumGap(monitor.hPhysicalMonitor);
@@ -1207,6 +1278,22 @@ Task? abandoned = null;
                     DestroyPhysicalMonitors(count, buffer);
                     Marshal.FreeHGlobal(buffer);
                 }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Same reasoning as the write side: Wait and Result both rethrow a
+                // faulted task, so an exception from the P/Invokes used to leave
+                // here without a BusResult at all and land in a discarded task. The
+                // probe then had nothing to record, so a monitor whose driver threw
+                // looked identical to one that had never been asked.
+                TraceLog.Write("DDC read", ex);
+                return new BusResult
+                {
+                    Outcome = BusOutcome.Failed,
+                    Why = "the driver call failed: " + ex.GetType().Name + " " + ex.Message,
+                    ElapsedMs = (int)started.ElapsedMilliseconds
+                };
             }
         });
 

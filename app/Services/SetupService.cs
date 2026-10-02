@@ -570,19 +570,32 @@ public sealed class SetupService
 
             long? total = response.Content.Headers.ContentLength;
             Stream source = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
-            await using FileStream target = new(InstallerPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true);
-            byte[] buffer = new byte[81920];
-            long read = 0;
-            int taken;
-            while ((taken = await source.ReadAsync(buffer, token).ConfigureAwait(false)) > 0)
+
+            // Scoped to a block, and that is the whole point of the braces. A
+            // using *declaration* disposes at the end of the enclosing block, which
+            // here is the whole try, so the file was still open - and still held
+            // FileShare.None - when the signature check and Process.Start below
+            // went to open it again. Both are ERROR_SHARING_VIOLATION: the
+            // signature reader swallowed it and reported "not signed by FxSound"
+            // for every download, so the direct install could never run at all,
+            // and only winget or a manual install was left. The block closes the
+            // handle before either of them is reached.
+            await using (FileStream target = new(InstallerPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true))
             {
-                await target.WriteAsync(buffer.AsMemory(0, taken), token).ConfigureAwait(false);
-                read += taken;
-                int percent = total.HasValue && total.Value > 0 ? (int)Math.Clamp(read * 100 / total.Value, 0, 100) : 0;
-                progress.Report(new SetupStage { Percent = percent, Text = "DOWNLOAD " + percent + "%" });
+                byte[] buffer = new byte[81920];
+                long read = 0;
+                int taken;
+                while ((taken = await source.ReadAsync(buffer, token).ConfigureAwait(false)) > 0)
+                {
+                    await target.WriteAsync(buffer.AsMemory(0, taken), token).ConfigureAwait(false);
+                    read += taken;
+                    int percent = total.HasValue && total.Value > 0 ? (int)Math.Clamp(read * 100 / total.Value, 0, 100) : 0;
+                    progress.Report(new SetupStage { Percent = percent, Text = "DOWNLOAD " + percent + "%" });
+                }
+
+                await target.FlushAsync(token).ConfigureAwait(false);
             }
 
-            await target.FlushAsync(token).ConfigureAwait(false);
             progress.Report(new SetupStage { Percent = 90, Text = "INSTALLING", Indeterminate = true });
             StatusChanged?.Invoke("INSTALLING FXSOUND");
 
@@ -682,7 +695,14 @@ public sealed class SetupService
         {
             string name = signer.GetNameInfo(X509NameType.SimpleName, forIssuer: false);
 
-            if (!name.Contains(publisher, StringComparison.OrdinalIgnoreCase))
+            // Equality, not a substring test. "Contains FxSound" is satisfied by
+            // CN=FxSound Impostor Ltd just as readily as by FxSound's own
+            // certificate, and this is the only thing standing between a download
+            // and code execution as this user with no window shown. The chain is
+            // deliberately not validated to a trusted root - see the note above -
+            // so the publisher name is the whole check, and a substring weakens it
+            // for nothing: the real name matches an equality test exactly.
+            if (!string.Equals(name, publisher, StringComparison.OrdinalIgnoreCase))
             {
                 TraceLog.Write("INSTALLER signed by " + name + ", not " + publisher);
                 return false;
@@ -774,10 +794,43 @@ public sealed class SetupService
         }
         catch (OperationCanceledException)
         {
+            // Killed, not merely abandoned. The winget path above already does this
+            // and the installer path did not, which left a /VERYSILENT installer
+            // running as this user with no window after the user cancelled. It keeps
+            // InstallerPath locked, the cleanup delete in the finally fails
+            // silently, and because the path is one name per run of the app rather
+            // than per attempt, every later install in this session then fails on
+            // the same lock. The winget path's own comment says a cancelled install
+            // is the one case that must not leave a child behind; that has to mean
+            // both of them.
+            KillInstaller(process);
             return false;
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Ends an installer that is still running, ignoring a process that has
+    /// already gone or that cannot be touched.
+    /// </summary>
+    private static void KillInstaller(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(5000);
+            }
+        }
+        catch (Exception ex)
+        {
+            // A child that exited on its own between the check and the kill, or one
+            // this user may not signal, is not something the caller can act on. The
+            // install is already reporting failure.
+            TraceLog.Write("INSTALLER cancel: " + ex.GetType().Name);
+        }
     }
 
     public static void StartEngine(AudioService audio)
