@@ -43,6 +43,18 @@ public class TraySlotMenuTests
         slots = DarkTrayMenuRenderer.Submenu("Slots");
         menu.Items.Add(slots);
         menu.Items.Add(DarkTrayMenuRenderer.Separator());
+
+        // The two toggles, between the slots and the resets. Hidden by default
+        // because Available is what Shape reads, and the effects line starts
+        // hidden - a machine without FxSound has nothing for it to do.
+        ToolStripMenuItem effects = DarkTrayMenuRenderer.CheckableItem(
+            "Sound effects", "Tick means the effects are OFF.", false, (s, e) => { });
+        effects.Visible = false;
+        menu.Items.Add(effects);
+        menu.Items.Add(DarkTrayMenuRenderer.CheckableItem(
+            "Night filter", "Warm the screen on a schedule", false, (s, e) => { }));
+
+        menu.Items.Add(DarkTrayMenuRenderer.Separator());
         menu.Items.Add(DarkTrayMenuRenderer.Item("Reset Display", (s, e) => { }));
         menu.Items.Add(DarkTrayMenuRenderer.Item("Reset Sound", (s, e) => { }));
         menu.Items.Add(DarkTrayMenuRenderer.Separator());
@@ -73,12 +85,17 @@ public class TraySlotMenuTests
         TrayService.ReplaceSlotLines(
             slots.DropDownItems, Slots(("a", "Gaming", false), ("b", "Cinema", false)), _ => { });
 
-        // The menu is a fixed six lines however many slots exist. A user who
+        // The menu is a fixed number of lines however many slots exist. A user who
         // makes their own can have twenty, and a menu that long either runs off
         // the bottom of the screen or moves Reset and Quit out from under the
         // cursor that was on its way to them.
+        //
+        // "Sound effects" is absent because BuildMenu hides it, which is what a
+        // machine without FxSound sees. "Night filter" is present because it has no
+        // such dependency - it is a question about whether the app watches the
+        // clock, not about an engine.
         Assert.Equal(
-            new[] { "Open", "-", "Slots", "-", "Reset Display", "Reset Sound", "-", "Quit" },
+            new[] { "Open", "-", "Slots", "-", "Night filter", "-", "Reset Display", "Reset Sound", "-", "Quit" },
             Shape(menu));
 
         Assert.Equal(
@@ -224,7 +241,7 @@ public class TraySlotMenuTests
         Assert.False(slots.Visible);
         Assert.False(rule.Visible);
         Assert.Equal(
-            new[] { "Open", "-", "Reset Display", "Reset Sound", "-", "Quit" },
+            new[] { "Open", "-", "Night filter", "-", "Reset Display", "Reset Sound", "-", "Quit" },
             Shape(menu));
     }
 

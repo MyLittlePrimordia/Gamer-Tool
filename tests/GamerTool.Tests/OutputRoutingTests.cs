@@ -18,17 +18,129 @@ namespace GamerTool.Tests;
 /// </summary>
 public class OutputRoutingTests
 {
+    private const int DisplayAudio = OutputRouting.DisplayAudioFormFactor;
+    private const int SpeakerForm = 1;
+    private const int UnknownForm = 10;
+
     private static AudioDeviceInfo Device(string id, string name) => new() { Id = id, Name = name };
 
-    private static readonly AudioDeviceInfo Monitor = Device("mon-1", "AG276QG Monitor");
-    private static readonly AudioDeviceInfo Speakers = Device("spk-1", "Realtek High Definition Audio");
-    private static readonly AudioDeviceInfo Headphones = Device("hp-1", "USB Headset");
+    /// <summary>An endpoint whose form factor was read.</summary>
+    private static AudioDeviceInfo Typed(string id, string name, int formFactor) =>
+        new() { Id = id, Name = name, FormFactor = formFactor };
+
+    /// <summary>
+    /// A monitor's audio over HDMI. The form factor is what identifies it; the name
+    /// is deliberately unremarkable so a test that passed was passing on the form
+    /// factor rather than on the word "Monitor".
+    /// </summary>
+    private static readonly AudioDeviceInfo Monitor = Typed("mon-1", "Audio Output", DisplayAudio);
+
+    private static readonly AudioDeviceInfo Speakers = Typed("spk-1", "Realtek High Definition Audio", SpeakerForm);
+
+    private static readonly AudioDeviceInfo Headphones = Typed("hp-1", "USB Headset", 3);
+
+    [Fact]
+    public void TheFormFactorIsWhatIdentifiesADisplayEndpoint()
+    {
+        // The whole point of the change. This endpoint says nothing about being a
+        // monitor in its name, and asking Windows is what settles it.
+        Assert.True(OutputRouting.IsDisplayAudio(Typed("d1", "Audio Output", DisplayAudio)));
+    }
+
+    [Fact]
+    public void ARealSpeakerIsNotDisplayAudioEvenWhenItsNameSaysMonitor()
+    {
+        // The bug this replaces. "Studio Monitor" is a speaker, it contains the word
+        // the old filter looked for, and being classified as display audio removed it
+        // from the candidate list - so the app reported no speakers on a machine that
+        // has them.
+        AudioDeviceInfo studioMonitor = Typed("sm-1", "Studio Monitor Speakers", SpeakerForm);
+
+        Assert.False(OutputRouting.IsDisplayAudio(studioMonitor));
+        Assert.Equal(
+            OutputRouting.Action.Switch,
+            OutputRouting.Decide(
+                savedOutputDeviceId: string.Empty,
+                selectedOutput: Monitor.Name,
+                defaultOutput: Monitor.Name,
+                endpoints: new[] { Monitor, studioMonitor },
+                engineKnownNames: new[] { studioMonitor.Name },
+                engineInstalled: true).Action);
+    }
+
+    [Fact]
+    public void AnOpticalOutputOnATelevisionIsNotASetOfSpeakers()
+    {
+        // Which is why "TV" survived as a whole word rather than being deleted. It is
+        // a real case, and getting it wrong would offer a TV's optical out as the
+        // thing to route game audio to.
+        Assert.True(OutputRouting.LooksLikeDisplayOutput("TV"));
+        Assert.True(OutputRouting.LooksLikeDisplayOutput("LG TV"));
+        Assert.True(OutputRouting.LooksLikeDisplayOutput("TV Optical"));
+    }
+
+    [Fact]
+    public void OneMonitorModelIsNoLongerAHardcodedRule()
+    {
+        // "AG276" was a specific monitor - the machine this was written on - shipped as
+        // a general filter. It did nothing on every other monitor and can only ever
+        // have been right about one.
+        Assert.False(OutputRouting.LooksLikeDisplayOutput("AG276QG Monitor"));
+    }
+
+    [Fact]
+    public void AMonitorWithAHeadphoneJackIsARealOutput()
+    {
+        // A display with a 3.5 mm jack reports Speakers, and it is genuinely one. The
+        // old "Monitor" hint could not tell that from a monitor with no jack at all.
+        AudioDeviceInfo monitorSpeakers = Typed("ms-1", "BenQ Monitor Speakers", SpeakerForm);
+
+        Assert.False(OutputRouting.IsDisplayAudio(monitorSpeakers));
+    }
+
+    [Fact]
+    public void AnUnknownFormFactorFallsBackToTheName()
+    {
+        // A driver that answers "unknown" has told us nothing, so the name is all
+        // there is. This is the path that keeps working on hardware whose property
+        // does not read.
+        AudioDeviceInfo unknown = new() { Id = "u-1", Name = "DisplayPort Output", FormFactor = 10 };
+
+        Assert.True(OutputRouting.IsDisplayAudio(unknown));
+    }
+
+    [Fact]
+    public void AFormFactorThatCouldNotBeReadFallsBackToTheName()
+    {
+        // Different from UnknownFormFactor and kept different: -1 means the property
+        // was never read, which is a failure worth logging, where 10 is the driver
+        // answering that it does not know. Both fall back, but only one is our bug.
+        Assert.True(OutputRouting.IsDisplayAudio(Device("r-1", "HDMI Output")));
+        Assert.False(OutputRouting.IsDisplayAudio(Device("r-2", "Realtek High Definition Audio")));
+    }
+
+    [Fact]
+    public void AnOutputTheEnumerationDidNotReturnIsNotGuessedAt()
+    {
+        // The engine can name an output the endpoint walk did not return. Treating
+        // that name as display audio would let a guess start the whole repair, which
+        // is the one outcome here that can send audio somewhere the user did not ask.
+        OutputRouting.Decision decision = OutputRouting.Decide(
+            savedOutputDeviceId: string.Empty,
+            selectedOutput: "Some Output The Enumeration Missed",
+            defaultOutput: "Another One We Never Saw",
+            endpoints: new[] { Monitor, Speakers },
+            engineKnownNames: new[] { Speakers.Name },
+            engineInstalled: true);
+
+        Assert.Equal(OutputRouting.Action.None, decision.Action);
+    }
 
     [Fact]
     public void MonitorNamesAreDetectedAsDisplays()
     {
-        // A display endpoint is silent no matter what is plugged into it.
-        Assert.True(OutputRouting.LooksLikeDisplayOutput("AG276QG (NVIDIA) Monitor"));
+        // A display endpoint is silent no matter what is plugged into it. Names only,
+        // because that is the fallback and it still has to work on its own.
         Assert.True(OutputRouting.LooksLikeDisplayOutput("LG ULTRAWIDE HDMI"));
         Assert.True(OutputRouting.LooksLikeDisplayOutput("Display Audio"));
         Assert.True(OutputRouting.LooksLikeDisplayOutput("AMD High Definition Audio Device"));
@@ -59,8 +171,8 @@ public class OutputRoutingTests
         // The user may have picked a capture device on purpose.
         OutputRouting.Decision decision = OutputRouting.Decide(
             savedOutputDeviceId: "Realtek High Definition Audio",
-            selectedOutput: "AG276QG Monitor",
-            defaultOutput: "AG276QG Monitor",
+            selectedOutput: Monitor.Name,
+            defaultOutput: Monitor.Name,
             endpoints: new[] { Monitor, Speakers },
             engineKnownNames: new[] { "Realtek High Definition Audio" },
             engineInstalled: true);
@@ -90,7 +202,7 @@ public class OutputRoutingTests
         // default is already correct. Repointing would be a change nobody asked for.
         OutputRouting.Decision decision = OutputRouting.Decide(
             savedOutputDeviceId: string.Empty,
-            selectedOutput: "AG276QG Monitor",
+            selectedOutput: Monitor.Name,
             defaultOutput: "Realtek High Definition Audio",
             endpoints: new[] { Monitor, Speakers },
             engineKnownNames: new[] { "Realtek High Definition Audio" },
@@ -104,8 +216,8 @@ public class OutputRoutingTests
     {
         OutputRouting.Decision decision = OutputRouting.Decide(
             savedOutputDeviceId: string.Empty,
-            selectedOutput: "AG276QG Monitor",
-            defaultOutput: "AG276QG Monitor",
+            selectedOutput: Monitor.Name,
+            defaultOutput: Monitor.Name,
             endpoints: new[] { Monitor, Speakers },
             engineKnownNames: new[] { "Realtek High Definition Audio" },
             engineInstalled: true);
@@ -120,8 +232,8 @@ public class OutputRoutingTests
         // FxSound present: the settings box is keyed by endpoint name.
         OutputRouting.Decision withEngine = OutputRouting.Decide(
             savedOutputDeviceId: string.Empty,
-            selectedOutput: "AG276QG Monitor",
-            defaultOutput: "AG276QG Monitor",
+            selectedOutput: Monitor.Name,
+            defaultOutput: Monitor.Name,
             endpoints: new[] { Monitor, Speakers },
             engineKnownNames: new[] { "Realtek High Definition Audio" },
             engineInstalled: true);
@@ -132,8 +244,8 @@ public class OutputRoutingTests
         // silently fall back to "System default".
         OutputRouting.Decision withoutEngine = OutputRouting.Decide(
             savedOutputDeviceId: string.Empty,
-            selectedOutput: "AG276QG Monitor",
-            defaultOutput: "AG276QG Monitor",
+            selectedOutput: Monitor.Name,
+            defaultOutput: Monitor.Name,
             endpoints: new[] { Monitor, Speakers },
             engineKnownNames: new[] { "Realtek High Definition Audio" },
             engineInstalled: false);
@@ -146,8 +258,8 @@ public class OutputRoutingTests
         // Choosing here could send game audio to a headset the user is not wearing.
         OutputRouting.Decision decision = OutputRouting.Decide(
             savedOutputDeviceId: string.Empty,
-            selectedOutput: "AG276QG Monitor",
-            defaultOutput: "AG276QG Monitor",
+            selectedOutput: Monitor.Name,
+            defaultOutput: Monitor.Name,
             endpoints: new[] { Monitor, Speakers, Headphones },
             engineKnownNames: new[] { "Realtek High Definition Audio", "USB Headset" },
             engineInstalled: true);
@@ -165,10 +277,10 @@ public class OutputRoutingTests
         // them to choose. Collapsing them into one message loses that.
         OutputRouting.Decision decision = OutputRouting.Decide(
             savedOutputDeviceId: string.Empty,
-            selectedOutput: "AG276QG Monitor",
-            defaultOutput: "AG276QG Monitor",
+            selectedOutput: Monitor.Name,
+            defaultOutput: Monitor.Name,
             endpoints: new[] { Monitor },
-            engineKnownNames: new[] { "AG276QG Monitor" },
+            engineKnownNames: new[] { Monitor.Name },
             engineInstalled: true);
 
         Assert.Equal(OutputRouting.Action.Warn, decision.Action);
@@ -183,8 +295,8 @@ public class OutputRoutingTests
         // which is silence with no explanation.
         OutputRouting.Decision decision = OutputRouting.Decide(
             savedOutputDeviceId: string.Empty,
-            selectedOutput: "AG276QG Monitor",
-            defaultOutput: "AG276QG Monitor",
+            selectedOutput: Monitor.Name,
+            defaultOutput: Monitor.Name,
             endpoints: new[] { Monitor, Speakers, Headphones },
             engineKnownNames: new[] { "Realtek High Definition Audio" },
             engineInstalled: true);
@@ -201,8 +313,8 @@ public class OutputRoutingTests
         // ambiguous warning every launch.
         OutputRouting.Decision decision = OutputRouting.Decide(
             savedOutputDeviceId: string.Empty,
-            selectedOutput: "AG276QG Monitor",
-            defaultOutput: "AG276QG Monitor",
+            selectedOutput: Monitor.Name,
+            defaultOutput: Monitor.Name,
             endpoints: new[]
             {
                 Monitor,
@@ -224,10 +336,10 @@ public class OutputRoutingTests
         foreach (OutputRouting.Decision decision in new[]
         {
             OutputRouting.Decide(
-                string.Empty, "AG276QG Monitor", "AG276QG Monitor",
-                new[] { Monitor }, new[] { "AG276QG Monitor" }, true),
+                string.Empty, Monitor.Name, Monitor.Name,
+                new[] { Monitor }, new[] { Monitor.Name }, true),
             OutputRouting.Decide(
-                string.Empty, "AG276QG Monitor", "AG276QG Monitor",
+                string.Empty, Monitor.Name, Monitor.Name,
                 new[] { Monitor, Speakers, Headphones },
                 new[] { "Realtek High Definition Audio", "USB Headset" }, true),
         })
@@ -250,8 +362,8 @@ public class OutputRoutingTests
 
         OutputRouting.Decision decision = OutputRouting.Decide(
             string.Empty,
-            "AG276QG Monitor",
-            "AG276QG Monitor",
+            Monitor.Name,
+            Monitor.Name,
             endpoints,
             known,
             engineInstalled: false);

@@ -79,10 +79,30 @@ public sealed class TrayService : IDisposable
         _slotsItem = DarkTrayMenuRenderer.Submenu("Slots");
         _slotsSeparator = DarkTrayMenuRenderer.Separator();
 
+        // CheckOnClick is off in CheckableItem, so the window owns the ticked state
+        // and these only report that the user asked. The tooltip says which way round
+        // the tick is, because a line called "Sound effects" with a tick beside it is
+        // genuinely ambiguous and getting it backwards means muting when the user
+        // asked to hear something.
+        _effectsItem = DarkTrayMenuRenderer.CheckableItem(
+            "Sound effects",
+            "Tick means the effects are OFF. FxSound must be installed.",
+            active: false,
+            (s, e) => EffectsToggleRequested?.Invoke());
+
+        _nightItem = DarkTrayMenuRenderer.CheckableItem(
+            "Night filter",
+            "Warm the screen on a schedule",
+            active: false,
+            (s, e) => NightToggleRequested?.Invoke());
+
         ContextMenuStrip menu = DarkTrayMenuRenderer.Menu();
         menu.Items.Add(show);
         menu.Items.Add(_slotsSeparator);
         menu.Items.Add(_slotsItem);
+        menu.Items.Add(DarkTrayMenuRenderer.Separator());
+        menu.Items.Add(_effectsItem);
+        menu.Items.Add(_nightItem);
         menu.Items.Add(DarkTrayMenuRenderer.Separator());
         menu.Items.Add(resetScreen);
         menu.Items.Add(resetSound);
@@ -98,6 +118,64 @@ public sealed class TrayService : IDisposable
         };
 
         _icon.DoubleClick += (s, e) => ShowRequested?.Invoke();
+
+        // Opening, not a state push from every place that changes it.
+        //
+        // The window owns both switches and there are five or six places that could
+        // change them - the Audio tab, the Settings tab, the bypass key, a slot
+        // applying, a profile restore. Pushing from each is how the tick and the
+        // switch end up disagreeing, and the tick is the one the user trusts. The
+        // menu can only be opened by the user, so reading the state as it is at that
+        // moment is both cheaper and the only version that cannot drift.
+        menu.Opening += (s, e) => MenuOpening?.Invoke();
+    }
+
+    /// <summary>
+    /// The two checkable lines, kept as fields because their ticked state is
+    /// written from <see cref="SetToggleStates"/> rather than by the click.
+    /// </summary>
+    private readonly ToolStripMenuItem _effectsItem;
+    private readonly ToolStripMenuItem _nightItem;
+
+    /// <summary>
+    /// Raised as the menu is about to show, so the window can push current state
+    /// into it before anything is drawn.
+    /// </summary>
+    public event Action? MenuOpening;
+
+    /// <summary>Raised when the user picks the sound effects line.</summary>
+    public event Action? EffectsToggleRequested;
+
+    /// <summary>Raised when the user picks the night filter line.</summary>
+    public event Action? NightToggleRequested;
+
+    /// <summary>
+    /// Puts the current state into the two toggles.
+    /// </summary>
+    /// <param name="effectsOn">Whether the bypass is engaged, so the effects are off.</param>
+    /// <param name="effectsAvailable">
+    /// Whether the engine is installed. The line is hidden rather than disabled when
+    /// it is not: a menu item that cannot work is a question the user has to ask the
+    /// answer to.
+    /// </param>
+    /// <param name="nightOn">Whether the night schedule is switched on.</param>
+    public void SetToggleStates(bool effectsOn, bool effectsAvailable, bool nightOn)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            _effectsItem.Visible = effectsAvailable;
+            _effectsItem.Checked = effectsOn;
+            _nightItem.Checked = nightOn;
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("TRAY", ex);
+        }
     }
 
     /// <summary>

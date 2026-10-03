@@ -121,11 +121,36 @@ public partial class MainWindow : Window
     private TextBox? _captureBox;
 
     /// <summary>
-    /// True while the panic keycap on the Settings tab is the one listening.
-    /// The panic key is not a slot, so capture has to be able to say which of the
-    /// two it is talking to.
+    /// Which non-slot keycap is listening, if one is.
+    /// <para>
+    /// An enum rather than a bool because there are now two non-slot keycaps - the
+    /// panic key and the bypass key - and a bool can only say one of them. A second
+    /// bool would work right up until a keypress asked "which one is this" and both
+    /// answered yes.
+    /// </para>
+    /// <para>
+    /// Slots are not in here. They are identified by <see cref="_captureSlotId"/>,
+    /// which is set and cleared independently, so <see cref="KeycapCapture.None"/>
+    /// plus a slot id is a third state that this does not have to describe.
+    /// </para>
     /// </summary>
-    private bool _capturingPanic;
+    private enum KeycapCapture
+    {
+        /// <summary>Nothing is listening.</summary>
+        None,
+
+        /// <summary>The panic key, on the Hotkeys tab.</summary>
+        Panic,
+
+        /// <summary>The bypass key, beside the panic key.</summary>
+        Bypass,
+    }
+
+    /// <summary>
+    /// Which non-slot keycap is currently listening. Null when the one listening is
+    /// a slot's.
+    /// </summary>
+    private KeycapCapture _capturingKeycap;
 
 
     private TrayService? _tray;
@@ -302,6 +327,7 @@ public partial class MainWindow : Window
         _watcher.ForegroundChanged += OnForegroundChanged;
         _watcher.TargetLaunched += OnTargetLaunched;
         _watcher.TargetExited += OnTargetExited;
+        _watcher.ForegroundLeft += OnForegroundLeft;
 
         PreviewKeyDown += OnPreviewKeyDown;
 
@@ -330,6 +356,7 @@ public partial class MainWindow : Window
         SetCaptionFocusable(true);
 
         WirePanicKeycap();
+        WireBypassKeycap();
         Closing += OnClosing;
         Loaded += OnWindowLoaded;
 
@@ -379,6 +406,41 @@ public partial class MainWindow : Window
         // happening - from a tray menu, where the window is not even on screen.
         _tray.ResetScreenRequested += () => Dispatcher.Invoke(GoScreenNeutral);
         _tray.ResetSoundRequested += () => _ = Dispatcher.InvokeAsync(async () => await GoSoundNeutralAsync());
+
+        // Both toggles go through the switch rather than the setting, so the tray
+        // and the Audio tab cannot disagree about what is bypassed. Flipping
+        // IsChecked runs the switch's own handler, which is the one place that sets
+        // the field, commits, queues the engine push and verifies it landed.
+        //
+        // The inversion is the switch's and is not second guessed: the box is
+        // labelled BYPASS, so IsChecked == true means the effects are OFF.
+        _tray.EffectsToggleRequested += () => Dispatcher.Invoke(() =>
+        {
+            if (!_audio.IsInstalled)
+            {
+                // Checked again here rather than only in SetToggleStates, because
+                // the line can be hidden in the window and re-shown by a state push
+                // between the click and this running.
+                return;
+            }
+
+            BypassBox.IsChecked = BypassBox.IsChecked != true;
+        });
+
+        // The night filter flips the same setting the Settings switch does, through
+        // that switch's handler. Night blue light is a schedule, not a preset, so
+        // there is nothing to apply - it is a question about whether the app is
+        // watching the clock.
+        _tray.NightToggleRequested += () => Dispatcher.Invoke(() =>
+            NightBox.IsChecked = NightBox.IsChecked != true);
+
+        // State is read as the menu opens rather than pushed from every place that
+        // changes it. There are half a dozen of those and a missed push leaves a
+        // tick beside a switch that says the opposite, which is worse than no tick.
+        _tray.MenuOpening += () => _tray.SetToggleStates(
+            effectsOn: BypassToggle.IsEngaged(_settings.EffectsEnabled),
+            effectsAvailable: _audio.IsInstalled,
+            nightOn: _settings.NightBlueLight);
 
         // The same dispatcher hop the two above use, and then ToggleSlot rather
         // than PlaySlot, so choosing a slot from the tray loads it the first
@@ -621,6 +683,7 @@ private void HideToTray()
         OsdBox.IsChecked = _settings.ShowOsd;
         AutoSwitchBox.IsChecked = _settings.AutoSwitch;
         AutoRevertBox.IsChecked = _settings.AutoRevertOnExit;
+        FocusPauseBox.IsChecked = _settings.AutoPauseOnFocusLoss;
         FxPromptBox.IsChecked = _settings.FxPromptDisabled;
         StartHiddenBox.IsChecked = _settings.StartHidden;
         CloseToTrayBox.IsChecked = _settings.CloseToTray;
@@ -1319,15 +1382,29 @@ private void HideToTray()
         _workAudio = audio.Copy();
 
         int count = audio.NumBands <= 0 ? AudioPreset.PresetBandCount : audio.NumBands;
-        if (_bandSliders.Count != count)
-        {
-            BuildBandStrip(count);
-            BandCountBox.SelectedItem = count;
-        }
 
+        // Guard covers the band-count rebuild below as well as the fader writes,
+        // which it did not used to.
+        //
+        // BuildBandStrip and BandCountBox.SelectedItem both raise change handlers,
+        // and they were being raised outside the guard. That was survivable while
+        // the handlers only redrew the page, but the audio handlers now push the
+        // working tune to the engine, so loading any tune fired a push for a tune
+        // nobody had chosen - a live update caused by nothing the user did, and one
+        // more engine process spawned for every preset the app opened at launch.
+        //
+        // The flag is set before either can raise anything rather than after, which
+        // is what makes the whole of LoadTune atomic from the handlers' point of
+        // view: they see no changes at all until it is finished.
         _updating = true;
         try
         {
+            if (_bandSliders.Count != count)
+            {
+                BuildBandStrip(count);
+                BandCountBox.SelectedItem = count;
+            }
+
             GammaSlider.Value = display.Gamma;
             ShadowSlider.Value = display.ShadowBoost;
             BrightSlider.Value = display.Brightness;

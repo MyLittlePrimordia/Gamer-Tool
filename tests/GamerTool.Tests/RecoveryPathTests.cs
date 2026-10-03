@@ -85,13 +85,13 @@ public class RecoveryPathTests
         string display = Read("app/MainWindow.Display.cs");
 
         Assert.Contains(
-            "StandDownScreen(restorePanel: true)",
-            Body(display, "public void GoScreenNeutral()"),
+            "StandDownScreen(restorePanel: true, emergency)",
+            Body(display, "public void GoScreenNeutral(bool emergency = false)"),
             StringComparison.Ordinal);
 
         Assert.Contains(
             "Backlight.RestoreAll()",
-            Body(display, "private void StandDownScreen(bool restorePanel)"),
+            Body(display, "private void StandDownScreen(bool restorePanel, bool emergency = false)"),
             StringComparison.Ordinal);
     }
 
@@ -104,8 +104,17 @@ public class RecoveryPathTests
         string slots = Read("app/MainWindow.Slots.cs");
         string body = Body(slots, "private async void OnHotkeyPressed");
 
-        Assert.Contains("GoScreenNeutral()", body, StringComparison.Ordinal);
+        Assert.Contains("GoScreenNeutral(emergency: true)", body, StringComparison.Ordinal);
         Assert.Contains("GoSoundNeutralAsync()", body, StringComparison.Ordinal);
+
+        // And the panic key has to be the one caller that says so. emergency: true is
+        // what stops the night filter being re-asserted on the one path where the user
+        // is saying the screen is wrong right now; a bare call would quietly put the
+        // evening filter back, which is the bug this argument was added to fix.
+        Assert.Contains(
+            "SuppressNightUntilNextWindow()",
+            body,
+            StringComparison.Ordinal);
 
         // And nothing on the panic path may reach for EmergencyReset, which also
         // powers the engine off. A panic key that turned the engine off would be a

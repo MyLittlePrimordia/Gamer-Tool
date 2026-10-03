@@ -184,7 +184,14 @@ public partial class MainWindow : Window
     /// </summary>
     private DisplayPreset EffectiveDisplay()
     {
-        return DisplayPreset.WithBlueLight(_workDisplay, ActiveBlueLightLevel);
+        // The strength is passed here as well as in ApplyDisplay, and that is the
+        // point of the pairing. This is the preview and that is the write, and if
+        // only one of them knew about the fade the thumbnail would show the filter
+        // at full strength all evening while the monitor ramped in - so a user
+        // tuning the blue light slider would be told the wrong thing about the
+        // picture they are actually looking at.
+        return DisplayPreset.WithBlueLight(
+            _workDisplay, ActiveBlueLightLevel, ActiveBlueLightStrength);
     }
 
 
@@ -402,7 +409,8 @@ public partial class MainWindow : Window
     /// </summary>
     private bool ApplyDisplay(DisplayPreset preset, string monitorDevice, bool announce)
     {
-        DisplayPreset effective = DisplayPreset.WithBlueLight(preset, ActiveBlueLightLevel);
+        DisplayPreset effective = DisplayPreset.WithBlueLight(
+            preset, ActiveBlueLightLevel, ActiveBlueLightStrength);
         if (!_display.Apply(effective, monitorDevice))
         {
             // The service has already logged what the driver said. This says the
@@ -651,10 +659,18 @@ public partial class MainWindow : Window
     /// leaving the panel dim while the ramp went flat is the failure the panic key
     /// exists to undo.
     /// </para>
+    /// <para>
+    /// <paramref name="emergency"/> is true for the panic key only, and it is the one
+    /// thing that separates "put the screen back" from "put the screen back and
+    /// leave it there". Everybody else gets the night filter re-asserted, because a
+    /// reset taken in passing - the tray, the reset button - should not quietly end
+    /// the evening's filter too. The panic key is the one control a user reaches for
+    /// when the picture is already wrong, so it answers in full.
+    /// </para>
     /// </summary>
-    public void GoScreenNeutral()
+    public void GoScreenNeutral(bool emergency = false)
     {
-        StandDownScreen(restorePanel: true);
+        StandDownScreen(restorePanel: true, emergency);
     }
 
 
@@ -687,7 +703,12 @@ public partial class MainWindow : Window
     /// preset asked for. True for the paths where the user is explicitly asking for
     /// a full reset.
     /// </param>
-    private void StandDownScreen(bool restorePanel)
+    /// <param name="emergency">
+    /// True only for the panic key. Every other path leaves the night filter to be
+    /// re-asserted below, because standing a game preset down is the app tidying up
+    /// while the evening filter is still what the user asked for.
+    /// </param>
+    private void StandDownScreen(bool restorePanel, bool emergency = false)
     {
         // The apply debounce, cleared here and nowhere else.
         //
@@ -780,6 +801,24 @@ public partial class MainWindow : Window
         _watcher.ForgetUnbound(_autoWildcardProcess);
         _autoWildcardProcess = string.Empty;
 
+        // Any pending or completed focus pause, for the same reason. The pause
+        // remembers a slot id and a process precisely so the exit path can still
+        // find them after this method has emptied _autoSlotId - and every one of
+        // those callers is the user taking over from the app. Left set, the user's
+        // own reset would be undone by the paused game's exit a moment later.
+        //
+        // On the pause's own path this is a no-op in effect: the pause calls this
+        // method to do the standing down, and clearing the record here would lose
+        // what the exit path needs. So it is not cleared unconditionally - the
+        // pause records itself again after this returns.
+        if (_focusPause is not null)
+        {
+            // Armed but not fired: the user got back in time, or pressed something.
+            CancelFocusPause();
+            _pausedSlotId = string.Empty;
+            _pausedProcess = string.Empty;
+        }
+
         // Nothing owns the panel any more. Only cleared once the restore above has
         // had its answer, so a stand-down that skipped the restore because the
         // preset had no backlight does not also lose the memory of that, and a
@@ -790,6 +829,26 @@ public partial class MainWindow : Window
         RefreshPresetBoxes();
         UpdateLiveLabels();
         UpdateScreenLabels(_workDisplay);
+
+        // The warm tint has just been reset along with everything else.
+        //
+        // _display.Reset() puts the ORIGINAL ramp back, not a neutral one, so it took
+        // the night filter's trim with it - and _nightApplied was left true, so
+        // EvaluateNightSchedule's equality check believed the filter was still on and
+        // never re-pushed it. The screen then sat un-tinted until the next schedule
+        // edge, which for a 20:00 to 07:00 window meant until seven in the morning.
+        // Quitting a game at ten at night silently cancelled the evening filter.
+        //
+        // Flat plus the schedule's own level is the correct neutral state while the
+        // schedule is running, and ApplyDisplay is where that level gets folded in -
+        // the same path the schedule itself uses. Called before the Commit below so
+        // the write at the end of this method describes what is actually on screen;
+        // ApplyDisplay commits too, so the profile is written twice on this path.
+        if (ShouldReassertNightAfterStandDown(_nightApplied, _nightSuppressed, emergency))
+        {
+            TraceLog.Write("NIGHT re-asserting the filter after a stand-down");
+            ApplyDisplay(DisplayPreset.Flat(), string.Empty, false);
+        }
 
         // The write, once the UI agrees with it. Committing before the labels are
         // repainted would be harmless, but the point of the field above is that the

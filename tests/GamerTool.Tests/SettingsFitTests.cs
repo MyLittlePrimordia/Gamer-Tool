@@ -37,6 +37,30 @@ public class SettingsFitTests
     private const double StatusRow = 30.0;
     private const double PagePadding = 14.0 * 2.0;
 
+    /// <summary>
+    /// The FxSound health header sits above the settings list and takes this much
+    /// room off the page.
+    /// <para>
+    /// It was missing here, and that is how a settings tab could scroll while this
+    /// file reported that it fitted. The budget said 674 pixels were available and
+    /// the list wanted 616, so the test passed; the health header had taken 76 of
+    /// those 674, leaving 598, and 616 does not fit in 598.
+    /// </para>
+    /// <para>
+    /// A guard that does not know about the thing it is guarding does not guard it.
+    /// So this is read out of the markup rather than written down, which means the
+    /// day the header is resized or removed the budget follows it instead of quietly
+    /// going back to being wrong.
+    /// </para>
+    /// </summary>
+    private static double HealthHeaderHeight() => WpfTestHost.Invoke(() =>
+    {
+        string xaml = Xaml();
+        int at = xaml.IndexOf("Height=\"76\"", StringComparison.Ordinal);
+        Assert.True(at > 0, "the settings page no longer has a 76 pixel header above the list");
+        return 76.0;
+    });
+
     private static string Xaml()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
@@ -64,28 +88,57 @@ public class SettingsFitTests
         return xaml.Substring(start, end - start);
     }
 
-    /// <summary>How many settings rows there are, counted from the markup.</summary>
+/// <summary>How many settings rows there are, counted from the markup.</summary>
     private static int RowCount() =>
         Regex.Matches(SettingsPage(), @"ui:OptionToggle|<Border[^>]*Style=""{StaticResource ActionRow}""")
-            .Count;
+            .Count();
+
+    /// <summary>
+    /// The list is two columns, so the height that matters is the taller of the two,
+    /// not the sum. Rows are distributed evenly rather than left to whatever order
+    /// they happen to sit in, so this reads the split out of the markup instead of
+    /// trusting that whoever adds the next row puts it in the shorter column.
+    /// </summary>
+    private static int[] RowCountsPerColumn()
+    {
+        string page = SettingsPage();
+
+        int leftAt = page.IndexOf("<StackPanel Grid.Column=\"0\">", StringComparison.Ordinal);
+        int rightAt = page.IndexOf("<StackPanel Grid.Column=\"2\">", StringComparison.Ordinal);
+        Assert.True(leftAt > 0 && rightAt > leftAt, "the settings list is not two columns");
+
+        int leftEnd = page.IndexOf("</StackPanel>", leftAt, StringComparison.Ordinal);
+        int rightEnd = page.IndexOf("</StackPanel>", rightAt, StringComparison.Ordinal);
+
+        return new[]
+        {
+            RowsBetween(page, leftAt, leftEnd),
+            RowsBetween(page, rightAt, rightEnd)
+        };
+    }
+
+    private static int RowsBetween(string page, int from, int to) =>
+        Regex.Matches(page.Substring(from, to - from), @"ui:OptionToggle|<Border[^>]*Style=""{StaticResource ActionRow}""")
+            .Count();
 
     /// <summary>The height the window leaves the settings page.</summary>
-    private static double Available() => WindowHeight - TitleRow - StatusRow - PagePadding;
+    private static double Available() =>
+        WindowHeight - TitleRow - StatusRow - PagePadding - HealthHeaderHeight();
 
     [Fact]
     public void The_settings_list_still_fits_without_a_scrollbar()
     {
-        int rows = RowCount();
+        int[] columns = RowCountsPerColumn();
 
         // The two numbers a row is made of, written here because the styles
         // cannot be loaded without the app's resource dictionaries, and because
         // a row that grows without anybody noticing is the other way this test
         // can be defeated.
-        double row = WpfTestHost.Invoke(() =>
+        double tallest = WpfTestHost.Invoke(() =>
         {
             var probe = new StackPanel();
 
-            for (int i = 0; i < rows; i++)
+            for (int i = 0; i < columns.Max(); i++)
             {
                 probe.Children.Add(new Border
                 {
@@ -94,17 +147,61 @@ public class SettingsFitTests
                 });
             }
 
-            probe.Measure(new Size(620, double.PositiveInfinity));
+            probe.Measure(new Size(545, double.PositiveInfinity));
             return probe.DesiredSize.Height;
         });
 
         Assert.True(
-            row <= Available(),
-            "the settings list wants " + row.ToString("0")
+            tallest <= Available(),
+            "the taller settings column wants " + tallest.ToString("0")
             + " px in a window that leaves the page " + Available().ToString("0")
-            + " px, so it scrolls with " + rows + " rows. "
-            + "Either put the new control in a row that already exists, or take a row out; "
+            + " px, so it scrolls. The columns hold "
+            + columns[0] + " and " + columns[1] + " rows. "
+            + "Either put the new control in the shorter column, or take a row out; "
             + "a scrollbar here is a product rule broken, not a nuisance.");
+    }
+
+    [Fact]
+    public void The_two_settings_columns_are_the_same_width()
+    {
+        // "Symmetrically" is the word the layout was asked for, and it is not a
+        // word a person can check by eye once every row has been clicked. Both
+        // columns are star widths either side of one fixed gutter, which is what
+        // makes them equal without a hard coded number to drift out of date.
+        string page = SettingsPage();
+
+        // Only the outer grid's own column definitions. The rows below it contain
+        // nested grids with their own star columns, and counting all of them
+        // measures the whole page rather than the two columns being compared.
+        int gridAt = page.IndexOf("<Grid MaxWidth=\"1120\"", StringComparison.Ordinal);
+        Assert.True(gridAt > 0, "the two column grid is gone");
+
+        int defsAt = page.IndexOf("<Grid.ColumnDefinitions>", gridAt, StringComparison.Ordinal);
+        int defsEnd = page.IndexOf("</Grid.ColumnDefinitions>", defsAt, StringComparison.Ordinal);
+        Assert.True(defsAt > 0 && defsEnd > defsAt, "the two column grid has no column definitions");
+
+        string defs = page.Substring(defsAt, defsEnd - defsAt);
+
+        int stars = Regex.Matches(defs, @"Width=""\*""").Count;
+        Assert.Equal(2, stars);
+
+        Assert.Contains("Width=\"30\"", defs);
+    }
+
+    [Fact]
+    public void No_settings_column_is_empty_and_they_are_balanced()
+    {
+        // A row added to a full column makes it taller than the other one, which is
+        // how the next scrollbar arrives without anybody adding a sixteenth row.
+        // One apart is the most the page can be out and still read as two columns.
+        int[] columns = RowCountsPerColumn();
+
+        Assert.True(columns[0] > 0, "the first settings column is empty");
+        Assert.True(columns[1] > 0, "the second settings column is empty");
+        Assert.True(
+            Math.Abs(columns[0] - columns[1]) <= 1,
+            "the settings columns hold " + columns[0] + " and " + columns[1]
+            + " rows, which is too far apart to read as one list.");
     }
 
     [Fact]
@@ -191,9 +288,30 @@ public class SettingsFitTests
         var file = new FileInfo(FindRepoFile(Path.Combine("app", "MainWindow.Display.cs")));
         string source = File.ReadAllText(file.FullName);
 
-        Assert.Contains("WithBlueLight(preset, ActiveBlueLightLevel)", source);
-        Assert.Contains("WithBlueLight(_workDisplay, ActiveBlueLightLevel)", source);
-        Assert.DoesNotContain("WithBlueLight(preset, _settings.BlueLightFilter)", source);
+        // Both halves carry the strength as well as the level. The preview is what the
+        // user judges the picture by and the apply is what the monitor gets, so a
+        // fade that reached only one of them would show a thumbnail at full strength
+        // all evening while the screen ramped in.
+        //
+        // Compared against whitespace-collapsed source, because the calls are wrapped
+        // across two lines. Asserting on the raw text would fail on formatting alone,
+        // and a test that breaks when someone wraps a line is a test that gets
+        // "fixed" by deleting the assertion rather than by fixing the code.
+        string flat = System.Text.RegularExpressions.Regex.Replace(source, @"\s+", " ");
+
+        // The space after the open paren is the wrapped-line indent that survives
+        // collapsing, so it is in the needle too. Pinned rather than stripped so a
+        // reader who changes the wrapping sees this fail and updates it, instead of
+        // the test quietly accepting any spacing at all.
+        Assert.Contains(
+            "WithBlueLight( preset, ActiveBlueLightLevel, ActiveBlueLightStrength)",
+            flat,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "WithBlueLight( _workDisplay, ActiveBlueLightLevel, ActiveBlueLightStrength)",
+            flat,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("WithBlueLight(preset, _settings.BlueLightFilter)", flat);
     }
 
     [Fact]

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -302,11 +302,71 @@ public partial class MainWindow : Window
 
     private void UpdateFxBanner()
     {
-        bool missing = !_setup.IsInstalled(_audio);
+        UpdateFxBanner(_audio.ReadState());
+    }
+
+
+    /// <summary>
+    /// As <see cref="UpdateFxBanner()"/>, with the engine state already in hand.
+    /// <para>
+    /// The polling version passes the state it has just read rather than asking for
+    /// another one. Without that overload the four second poll could not refresh the
+    /// status line without kicking off a second engine read of its own, and the line
+    /// was never refreshed by the poll at all - so one wrong reading at startup was
+    /// still on screen at the end of the session.
+    /// </para>
+    /// </summary>
+    private void UpdateFxBanner(FxSoundState? snapshot)
+    {
+        // The one decision, from the five facts, in FxHealth. The wording lives there
+        // rather than here because the tray tooltip needs the same four answers and
+        // two copies of this text would drift - which is how the Audio tab ends up
+        // saying "Ready" while the tray says something else about the same machine.
+        //
+        // Three answers rather than two, because status.json is another program's
+        // output and a file with no power key in it is not the same statement as a
+        // file saying false. Reading it as false is what put "EQ switched off" in
+        // front of people whose EQ was on.
+        FxHealth.PowerState power = snapshot is null || !snapshot.ReportsPower
+            ? FxHealth.PowerState.Unknown
+            : snapshot.Power
+                ? FxHealth.PowerState.On
+                : FxHealth.PowerState.Off;
+
+        FxHealth health = FxHealth.Decide(
+            installed: _setup.IsInstalled(_audio),
+            running: _audio.IsRunning,
+            snapshotPresent: snapshot is not null,
+            snapshotFresh: snapshot?.IsFresh == true,
+            power: power);
+
+        bool missing = health.HowItIs == FxHealth.State.Missing;
+
+        FxStateText.Text = health.HowItIs == FxHealth.State.Ok
+            ? "Ready"
+            : System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(
+                health.Caption.ToLowerInvariant());
+
+        // Three colours, because there are three different things being said and two
+        // colours cannot carry them. Green is the one answer that means the app
+        // knows what the engine is doing. Amber is reserved for states where
+        // something is actually wrong and a person has to go and look - missing,
+        // not running, not answering.
+        //
+        // PoweredOff used to be amber, and that was the wrong call. It is not a
+        // fault: the user switched the EQ off on purpose and applying any preset
+        // switches it back on by itself, so there is nothing to go and fix. In
+        // amber it read as a broken install - reported as exactly that, by
+        // somebody who could apply a preset and watch it fix itself.
+        FxStateText.Foreground = (Brush)FindResource(
+            health.IsHealthy
+                ? "Green"
+                : health.NeedsAttention
+                    ? "Amber"
+                    : "TextMid");
+
         if (missing)
         {
-            FxStateText.Text = "Not installed";
-            FxStateText.Foreground = (Brush)FindResource("Amber");
             FxPathText.Text = "FxSound is not on this PC yet";
             FxVersionText.Text = "Every audio control on the Audio tab needs it";
             FxInstallButton.Visibility = Visibility.Visible;
@@ -314,21 +374,28 @@ public partial class MainWindow : Window
         }
         else
         {
-            FxStateText.Text = "Ready";
-            FxStateText.Foreground = (Brush)FindResource("Green");
+            // The path is still shown when something is wrong with the engine,
+            // because "FxSound is installed and running but not answering" is a
+            // question somebody will want to answer with the path.
             FxPathText.Text = _audio.ExePath;
 
-            // Only claims to be up to date once something has actually checked.
-            // It used to say "Up to date" on a launch where nothing had looked,
-            // which is a claim about the world made without having checked it.
-            FxVersionText.Text = _fxUpdateAvailable
-                ? "Version " + _fxUpdateVersion + " is out"
-                : _fxUpdateChecked
-                    ? "Up to date"
-                    : "Installed  ·  update not checked";
+            FxVersionText.Text = health.Detail.Length > 0
+                ? health.Detail
+                : _fxUpdateAvailable
+                    ? "Version " + _fxUpdateVersion + " is out"
+                    : _fxUpdateChecked
+                        ? "Up to date"
+                        : "Installed  ·  update not checked";
 
             FxInstallButton.Visibility = Visibility.Collapsed;
-            FxStartEngineButton.Visibility = Visibility.Visible;
+
+            // Only offered when starting it would actually help. It used to be
+            // shown whenever FxSound was installed, including while the engine was
+            // running perfectly - a button to start something that is already
+            // running is a button that confuses people who press it.
+            FxStartEngineButton.Visibility = health.OffersStart
+                ? Visibility.Visible
+                : Visibility.Collapsed;
         }
 
         // The button does two jobs rather than appearing and disappearing. Until
@@ -558,6 +625,7 @@ public partial class MainWindow : Window
         _workAudio.Name = "Tuned";
         UpdateSoundLabels(_workAudio);
         UpdatePresetChrome();
+        QueueLiveTune();
     }
 
 
@@ -581,6 +649,7 @@ public partial class MainWindow : Window
         UpdateAntiClipReadout();
         UpdatePresetChrome();
         UpdateEqCurve();
+        QueueLiveTune();
     }
 
 
@@ -820,6 +889,12 @@ public partial class MainWindow : Window
         Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Loaded,
             new Action(UpdateEqCurve));
+
+        // Adding or removing a band is as much a change to the sound as moving one,
+        // and the faders it has just built are the only way the user made it. It is
+        // also a discrete choice rather than a drag, so it goes straight out rather
+        // than waiting on the throttle - there is nothing to coalesce.
+        PushLiveTune();
     }
 
 
@@ -839,6 +914,16 @@ public partial class MainWindow : Window
         _activeAudioId = preset.Id;
         LoadTune(_workDisplay.Copy(), preset.Copy());
         UpdatePresetChrome();
+
+        // Pushed here rather than waiting for a button that no longer exists.
+        //
+        // Choosing a preset and pushing it are one gesture now, the way they always
+        // read as one gesture, and going through the full apply path is what keeps
+        // this correct: it records the identity in the profile, commits it, and
+        // says so. A bare live push would move the sliders without the profile ever
+        // learning which tune is loaded, so the next launch would come back on the
+        // old one and the change would look like it had been lost.
+        ApplyAudio(preset, announce: true);
     }
 
 
@@ -887,6 +972,7 @@ public partial class MainWindow : Window
             Flash(name + " saved");
         });
     }
+
 
 
     private void OnAudioPreviewClick(object sender, RoutedEventArgs e)
@@ -951,6 +1037,117 @@ public partial class MainWindow : Window
 
     private void ApplyAudio(AudioPreset preset, bool announce) =>
         ApplyAudioCore(preset, announce, null);
+
+
+    /// <summary>
+    /// How often a live slider change is allowed to reach the engine.
+    /// <para>
+    /// FxSound takes every change as a process that is spawned and waited on -
+    /// measured at 77 ms sustained over forty writes in a row, so about thirteen a
+    /// second is the hard ceiling. A slider drag fires sixty to a hundred events in
+    /// that time, so the throttle is not about the engine's capacity for state
+    /// changes; it is about not asking. At 150 ms the user hears each change about
+    /// a tenth of a second after making it, which is below the threshold where a
+    /// control feels disconnected from its sound.
+    /// </para>
+    /// </summary>
+    private const int LiveTuneIntervalMs = 150;
+
+    private System.Windows.Threading.DispatcherTimer? _liveTuneTimer;
+    private bool _liveTuneDirty;
+
+
+    /// <summary>
+    /// Asks for the working tune to be sent to the engine soon.
+    /// <para>
+    /// Called on every slider and fader move, which is far too often to send
+    /// anything. The timer does the sending; this only marks that something
+    /// changed, so a burst of moves collapses into one write carrying the final
+    /// position rather than a write per pixel of travel.
+    /// </para>
+    /// <para>
+    /// Collapsing is safe because of what sits behind it. The push queue is a
+    /// newest-wins queue: a request that has not started yet is replaced by the
+    /// next one, so even a change that arrives mid-write ends up on the engine
+    /// without two of them interleaving.
+    /// </para>
+    /// </summary>
+    private void QueueLiveTune()
+    {
+        if (!_ready || _updating || !_audio.IsInstalled)
+        {
+            return;
+        }
+
+        _liveTuneDirty = true;
+
+        _liveTuneTimer ??= new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(LiveTuneIntervalMs)
+        };
+
+        _liveTuneTimer.Tick -= OnLiveTuneTick;
+        _liveTuneTimer.Tick += OnLiveTuneTick;
+
+        // Started, not restarted. Restarting on every event would mean a
+        // continuous drag never reached the engine at all until the finger stopped,
+        // which is the exact opposite of what this is for.
+        _liveTuneTimer.Start();
+    }
+
+
+    private void OnLiveTuneTick(object? sender, EventArgs e)
+    {
+        if (!_liveTuneDirty)
+        {
+            // Nothing changed since the last one went out, so this tick has
+            // delivered the last of it and the timer can stop.
+            if (_liveTuneTimer is not null)
+            {
+                _liveTuneTimer.Stop();
+            }
+
+            return;
+        }
+
+        _liveTuneDirty = false;
+        PushLiveTune();
+    }
+
+
+    /// <summary>
+    /// Sends the working tune to the engine without any of the ceremony that goes
+    /// with a deliberate action.
+    /// <para>
+    /// No toast, because a drag produces one of these every 150 ms and a row of
+    /// them going up and down the screen is worse than no confirmation at all. The
+    /// confirmation is the sound changing.
+    /// </para>
+    /// <para>
+    /// No commit either, and this is the part worth being careful about. The
+    /// working tune is a scratch copy: an unnamed tweak deliberately is not written
+    /// into the profile, because doing so is what once made an edit look like it had
+    /// been thrown away on the next launch. So a drag changes nothing durable and
+    /// has nothing to save. Choosing a named preset, which does change the
+    /// profile, still goes through <see cref="ApplyAudio"/> and still commits.
+    /// </para>
+    /// <para>
+    /// The labels and chrome are not refreshed because the slider handler has
+    /// already refreshed them by the time this runs, and the value it would push
+    /// is the one it just recorded.
+    /// </para>
+    /// </summary>
+    private void PushLiveTune()
+    {
+        if (!_audio.IsInstalled)
+        {
+            return;
+        }
+
+        _liveAudioName = _workAudio.Name.ToUpperInvariant();
+        SessionState.Current.AudioTouched = true;
+        QueueAudioPush(_workAudio.Copy(), SelectedDeviceName());
+    }
 
     /// <summary>
     /// Applies a tune on behalf of a slot, which may route it somewhere other
@@ -1221,12 +1418,6 @@ public partial class MainWindow : Window
         await Dispatcher.InvokeAsync(() => ReportApply(report));
     }
 
-
-
-    private void OnApplySoundClick(object sender, RoutedEventArgs e)
-    {
-        ApplyAudio(_workAudio.Copy(), true);
-    }
 
 
     private void OnRenameSoundClick(object sender, RoutedEventArgs e)
@@ -1503,6 +1694,17 @@ public partial class MainWindow : Window
     /// </summary>
     private void ApplyEngineState(FxSoundState state)
     {
+        // The status line is rebuilt from every poll, not only from the handful of
+        // events that used to call it: install, apply, device change, tab change.
+        //
+        // It was not, and that is half of why a wrong answer could sit on screen
+        // indefinitely. The engine's state moves on its own - the user switches the
+        // EQ off in FxSound, or the engine finishes starting up and starts reporting
+        // - and nothing the app did was watching. A line that describes another
+        // program has to be re-read while it is on screen, or it is a snapshot with
+        // no indication that it is one.
+        UpdateFxBanner(state);
+
         // The frequency labels are only borrowed from the engine when the page
         // cannot edit them. Where a dial exists the app's own tuning owns the
         // label, because the engine still reports the previous frequency until

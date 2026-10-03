@@ -6,6 +6,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 using GamerTool.Models;
 using GamerTool.Services;
 using GamerTool.UI;
@@ -697,6 +698,30 @@ public partial class MainWindow : Window
     /// Pulls launcher icons for the real app targets. Only files that exist are
     /// touched, and IconFactory caches per path so each app is read once.
     /// </summary>
+    /// <summary>
+    /// Fills in the icon on any row that does not have one yet.
+    /// <para>
+    /// Cache first, then read from disk if it is not there. That order is the fix,
+    /// and the second half is not optional.
+    /// </para>
+    /// <para>
+    /// A version of this only looked in the cache, on the theory that a background
+    /// pass had already filled it. Measured against a cold cache: no row got an icon,
+    /// and every one of them had one available. Anything that opened a picker
+    /// before that background pass finished saw an empty list, and there was no
+    /// recovery, because the picker had no way of getting an icon on its own. The
+    /// running-games entries were the worst of it - they are added as the dropdown
+    /// opens and were never in the pass at all, so the games actually being played
+    /// were permanently blank.
+    /// </para>
+    /// <para>
+    /// Reading here is what the original code did and it worked, so it stays as the
+    /// floor: the picker can always get its own icons. The background pass is kept
+    /// because it is what stops that floor from costing anything - when it has
+    /// finished, which is the usual case by the time a user opens a picker, every
+    /// row below is a dictionary hit.
+    /// </para>
+    /// </summary>
     private static void ResolveAppIcons(List<AppCandidate> candidates)
     {
         foreach (AppCandidate candidate in candidates)
@@ -716,7 +741,176 @@ public partial class MainWindow : Window
                 continue;
             }
 
-            candidate.Icon = IconFactory.ExtractAppIcon(candidate.ExePath);
+            if (IconFactory.TryGetCachedAppIcon(candidate.ExePath, IconFactory.WarmSize, out var icon))
+            {
+                candidate.Icon = icon;
+                continue;
+            }
+
+            // Not warmed yet. Read it now rather than leaving the row blank: this is
+            // the original behaviour, it is slower, and it is the reason the picker
+            // shows icons at all rather than depending on a race it does not control.
+            candidate.Icon = IconFactory.ExtractAppIcon(candidate.ExePath, IconFactory.WarmSize);
+        }
+    }
+
+
+    /// <summary>
+    /// Fills in icons on a background thread and reports back to the dispatcher.
+    /// <para>
+    /// For rows that arrive after the scan, which the warm pass cannot have seen.
+    /// There are only ever a handful - the programs running right now - so unlike
+    /// the library-wide pass this is not competing with anything, and it is worth
+    /// moving off the dispatcher anyway so a slow icon cannot hold the list the user
+    /// is looking at.
+    /// </para>
+    /// </summary>
+    private static async System.Threading.Tasks.Task ResolveIconsOffThreadAsync(IReadOnlyList<AppCandidate> candidates)
+    {
+        foreach (AppCandidate candidate in candidates)
+        {
+            if (candidate.Icon is not null || candidate.ExePath.Length == 0)
+            {
+                continue;
+            }
+
+            string path = candidate.ExePath;
+            System.Windows.Media.Imaging.BitmapSource? icon =
+                await System.Threading.Tasks.Task.Run(
+                    () => IconFactory.ExtractAppIcon(path, IconFactory.WarmSize));
+
+            if (icon is null)
+            {
+                continue;
+            }
+
+            // Back on the dispatcher, which is where the setter's change
+            // notification has to be raised from.
+            candidate.Icon = icon;
+            await System.Threading.Tasks.Task.Yield();
+        }
+    }
+
+
+    /// <summary>
+    /// Reads every icon in the library into the cache, on a background thread.
+    /// <para>
+    /// Fired once a scan has settled and never awaited. Every slot's dropdown is
+    /// built from the same <see cref="AppCandidate"/> objects this list holds rather
+    /// than copies of them, so one pass here is enough for every picker in the app -
+    /// and because it only fills a dictionary, it does not matter that the lists are
+    /// already bound and that nothing is told about it.
+    /// </para>
+    /// <para>
+    /// About a second of disk reads for a large library, on a thread that is not the
+    /// one drawing anything.
+    /// </para>
+    /// </summary>
+    private void WarmAppIcons()
+    {
+        List<AppCandidate> warming = _appList;
+
+        _ = System.Threading.Tasks.Task.Run(() =>
+            IconFactory.WarmAppIcons(
+                warming
+                    .Where(c => c.ExePath.Length > 0
+                        && c.ExePath != SelfMarker
+                        && c.ExePath != BrowseMarker
+                        && c.ExePath != AnyGameMarker)
+                    .Select(c => c.ExePath)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)));
+    }
+
+
+    /// <summary>
+    /// Puts the currently running programs into an open dropdown, above the
+    /// installed ones.
+    /// <para>
+    /// Binding a slot to a game is only as good as the path it was bound to, and
+    /// scanning the registry and the Steam library is a guess at it. This asks the
+    /// machine instead, which is how a game installed somewhere unusual, or behind
+    /// a launcher, is found at all.
+    /// </para>
+    /// <para>
+    /// Above the installed list because a game the user can see running is the one
+    /// they are trying to bind, and it is the entry they would otherwise have to
+    /// recognise in a list of several hundred names. Before the "Browse" line and
+    /// after the two modes, so the row order the selection code depends on - modes
+    /// first, games from index 3 - is unchanged.
+    /// </para>
+    /// </summary>
+    private async System.Threading.Tasks.Task AddRunningAppsAsync(
+        ComboBox box, List<AppCandidate> choices, HotkeySlot slot)
+    {
+        // Guarded rather than done once. DropDownOpened fires every time the list is
+        // opened, and without this the list would grow by one copy of every running
+        // program each time.
+        choices.RemoveAll(c => c.Source == "RUNNING");
+
+        if (_quitting)
+        {
+            return;
+        }
+
+        IReadOnlyList<AppCandidate> running;
+        try
+        {
+            // Off the dispatcher. This walks every process on the machine and reads
+            // an image path for each one with a window, which is enough to be felt
+            // as a hitch if it ran on the thread the dropdown is drawing on.
+            running = await System.Threading.Tasks.Task.Run(() => _library.ScanRunning());
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("RUNNING", ex);
+            return;
+        }
+
+        if (_quitting || running.Count == 0)
+        {
+            return;
+        }
+
+        // Whatever the dropdown is currently showing is preserved, because it is
+        // rebuilt underneath the open list. Without this, opening the dropdown
+        // cleared a selection the user had already made.
+        object? wasSelected = box.SelectedItem;
+        int wasIndex = box.SelectedIndex;
+
+        int insertAt = choices.Count(c => c.Source is "NONE" or "SELF" or "ANY");
+        choices.InsertRange(insertAt, running);
+
+        // Icons for these, off the dispatcher, before they go on screen.
+        //
+        // They are the rows a user is most likely to want - the game they have
+        // open right now - and they are the one set the scan-time warm pass never
+        // sees, because they do not exist until this moment. They were left to the
+        // dropdown's own resolve, which for a while could only read a cache it had
+        // no reason to be warm for, so the games actually being played came up
+        // blank while the installed ones did not.
+        _ = ResolveIconsOffThreadAsync(running);
+
+        box.Items.Refresh();
+
+        // Re-found by path rather than by index, because inserting the running
+        // programs shifts every index below the insertion point - and the code that
+        // reads the selection by index would then pick the wrong game.
+        if (wasSelected is AppCandidate previous)
+        {
+            foreach (object item in box.Items)
+            {
+                if (item is AppCandidate candidate
+                    && candidate.Source == previous.Source
+                    && string.Equals(candidate.ExePath, previous.ExePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    box.SelectedItem = candidate;
+                    break;
+                }
+            }
+        }
+        else if (wasIndex >= 0)
+        {
+            box.SelectedIndex = wasIndex < insertAt ? wasIndex : wasIndex + running.Count;
         }
     }
 
@@ -756,8 +950,18 @@ public partial class MainWindow : Window
         // closed box scrolls rather than clipping.
         MarqueeBox.SetAllowMarquee(box, true);
 
-        // Icons are pulled the first time the list is actually opened, not on startup.
+        // Icons are pulled the first time the list is actually opened, not on startup,
+        // and off the dispatcher so the drop is not held up by it. By this point
+        // the scan has usually already warmed them, so there is nothing to do and
+        // the list opens complete.
         box.DropDownOpened += (_, _) => ResolveAppIcons(choices);
+
+        // The running games are put in as the dropdown opens, not baked into the
+        // list when the slot row was built. What is running changes minute to
+        // minute, and a list that showed the programs open at the time the Hotkeys
+        // tab was last built would be the wrong answer by the time the user looked
+        // for their game.
+        box.DropDownOpened += (_, _) => _ = AddRunningAppsAsync(box, choices, slot);
 
         // Index 2 is the wildcard, so the installed games start at 3. Hard-coded
         // rather than counted, because a count would silently shift every index
@@ -829,6 +1033,22 @@ public partial class MainWindow : Window
     /// threading a counter through.
     /// </summary>
     private const int EmergencyHotkeyId = 1000;
+
+
+    /// <summary>
+    /// Identifies the bypass key inside the hotkey service. Same shape as
+    /// <see cref="EmergencyTargetId"/> and for the same reason: "slot:" plus a slot
+    /// id is the only other thing the service is ever asked about, so any other
+    /// string is safe.
+    /// </summary>
+    private const string BypassTargetId = "bypass";
+
+
+    /// <summary>
+    /// Registration id for the bypass key. One above the panic key's, which is
+    /// arbitrary but leaves room if a third non-slot binding ever appears.
+    /// </summary>
+    private const int BypassHotkeyId = 1001;
 
 
     private static bool SameTarget(HotkeySlot a, HotkeySlot b)
@@ -1195,6 +1415,10 @@ public partial class MainWindow : Window
                     break;
                 }
             }
+
+            // In the background, and only once the scan has settled. This is the
+            // pass that makes the dropdowns open with their icons already on them.
+            WarmAppIcons();
         }
         finally
         {
@@ -1236,7 +1460,14 @@ public partial class MainWindow : Window
     }
 
 
-    private void PlaySlot(HotkeySlot slot, bool announce)
+    /// <param name="screenOnly">
+    /// Push the screen only and leave the sound alone. Used when the screen is being
+    /// restored from a focus pause: the sound was never taken down, so pushing it
+    /// again would spawn the engine and re-apply a tune that is already loaded, on
+    /// every return from the pause - and a return is every time the user alt-tabs
+    /// back to check something.
+    /// </param>
+    private void PlaySlot(HotkeySlot slot, bool announce, bool screenOnly = false)
     {
         DisplayPreset? display = FindDisplay(slot.DisplayPresetId);
         AudioPreset? audio = FindAudio(slot.AudioPresetId);
@@ -1259,7 +1490,28 @@ public partial class MainWindow : Window
             screenTookIt = ApplyDisplay(display.Copy(), slot.MonitorDevice, false);
         }
 
-        if (audio is not null)
+        // Announced before the slow half, not after it.
+        //
+        // Everything this toast reports as done happens above and below this line:
+        // a gamma ramp, a DDC/CI call that takes its time over I2C, and a profile
+        // write to disk. The plate used to go up once all of that had finished, so
+        // a slot key did nothing visible for a beat and then the toast appeared -
+        // which reads as the keypress having been missed rather than as the app
+        // answering it. Saying it up front means the confirmation lands inside the
+        // same gesture.
+        //
+        // It is a claim, not a report, and it is corrected below if the screen
+        // refuses. The correction is a second toast rather than a retraction
+        // because there is no way to unsay the first one, and an amber plate
+        // arriving a moment after a grey one says "that did not work" in a way the
+        // user is already used to reading.
+        RailStatus.Text = slot.Name.ToUpperInvariant();
+        if (announce)
+        {
+            Flash(slot.Name + " loaded");
+        }
+
+        if (audio is not null && !screenOnly)
         {
             ApplyAudioToDevice(audio.Copy(), false, slot);
         }
@@ -1270,14 +1522,11 @@ public partial class MainWindow : Window
         // changes is only what gets claimed afterwards: the rail and the toast
         // describe the whole slot, so they say the screen did not take it rather
         // than reporting a clean load for something half of which is missing.
-        RailStatus.Text = screenTookIt ? slot.Name.ToUpperInvariant() : "SCREEN BLOCKED";
-        if (announce)
+        if (!screenTookIt)
         {
-            if (screenTookIt)
-            {
-                Flash(slot.Name + " loaded");
-            }
-            else
+            RailStatus.Text = "SCREEN BLOCKED";
+
+            if (announce)
             {
                 Flash(slot.Name + " loaded, screen did not take it", true);
             }
@@ -1291,6 +1540,12 @@ public partial class MainWindow : Window
         {
             return;
         }
+
+        // Back on something real, so any pending pause is off. Before the match,
+        // because the returning window may be a different program entirely - a
+        // browser rather than the game - and a pause armed by the last alt-tab
+        // must not survive the user coming back to read a message.
+        CancelFocusPause();
 
         // A specific match always wins over the wildcard. The wildcard is a
         // fallback for a game nobody remembered to bind, not a competitor - if it
@@ -1348,7 +1603,243 @@ public partial class MainWindow : Window
             }
         }
 
-        PlaySlot(slot, true);
+        // The screen is coming back rather than being applied fresh. Without this
+        // the sound would be pushed again on every return from a pause, and a return
+        // is not a rare event - it is every time the user alt-tabs back to check
+        // something.
+        bool resuming = string.Equals(_pausedSlotId, slot.Id, StringComparison.OrdinalIgnoreCase);
+
+        if (resuming)
+        {
+            TraceLog.Write("AUTO FOCUS resume " + slot.Name);
+        }
+
+        PlaySlot(slot, true, screenOnly: resuming);
+
+        if (resuming)
+        {
+            ClearFocusPause();
+        }
+    }
+
+    /// <summary>
+    /// Arms the screen pause, if a pause is warranted at all.
+    /// </summary>
+    /// <remarks>
+    /// Called from two places: a real window taking the foreground, and the watcher
+    /// saying the shell has it. The two differ because the first can also be
+    /// <em>back</em> to the game, and returning is not leaving - which is why the
+    /// match is on the foreground process name rather than merely "somebody else is
+    /// in front".
+    /// </remarks>
+    private void ConsiderFocusPause(string foregroundProcess)
+    {
+        if (!_settings.AutoSwitch || !_settings.AutoPauseOnFocusLoss)
+        {
+            return;
+        }
+
+        if (!ShouldPauseForFocusLoss(
+                enabled: true,
+                autoSwitch: true,
+                autoSlotId: _autoSlotId,
+                wildcardProcess: _autoWildcardProcess,
+                autoProcess: _autoProcess,
+                foregroundProcess: foregroundProcess))
+        {
+            CancelFocusPause();
+            return;
+        }
+
+        if (_focusPause is not null)
+        {
+            // Already armed. Not restarted: a timer that restarted on every tick
+            // would never fire while the user sat still, which is the one case the
+            // pause is for.
+            return;
+        }
+
+        _focusPause = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(AppSettings.FocusPauseGraceSeconds)
+        };
+
+        _focusPause.Tick += OnFocusPauseTick;
+        _focusPause.Start();
+    }
+
+    /// <summary>
+    /// Whether the screen should be paused because something other than the game is
+    /// in front.
+    /// </summary>
+    /// <remarks>
+    /// Pure, so the whole decision can be tested without a desktop, a display or a
+    /// timer. Three of the six conditions are exclusions that each prevent a
+    /// specific wrong answer:
+    /// <para>
+    /// No auto-slot means nothing of ours is loaded, so there is nothing to pause.
+    /// </para>
+    /// <para>
+    /// A wildcard process means the existing wildcard revert owns this case. It
+    /// already reverts on focus loss, on its own terms, and arming a second
+    /// mechanism alongside it would have two answers to one question.
+    /// </para>
+    /// <para>
+    /// The same process name means the user is still in the game - another window
+    /// of it, or a second instance. Pausing then would suspend the boost for
+    /// looking at the game's own launcher.
+    /// </para>
+    /// </remarks>
+    internal static bool ShouldPauseForFocusLoss(
+        bool enabled,
+        bool autoSwitch,
+        string autoSlotId,
+        string wildcardProcess,
+        string autoProcess,
+        string foregroundProcess)
+    {
+        if (!enabled || !autoSwitch)
+        {
+            return false;
+        }
+
+        if (autoSlotId.Length == 0)
+        {
+            return false;
+        }
+
+        if (wildcardProcess.Length > 0)
+        {
+            return false;
+        }
+
+        // Empty is "nothing real in front", not "the user went somewhere else". Read
+        // returns null in several cases that are not the desktop - a process that
+        // would not hand over its image path, an exception in the read itself - and
+        // pausing on any of those would suspend a boost for no reason at all.
+        if (foregroundProcess.Length == 0)
+        {
+            return false;
+        }
+
+        return !string.Equals(foregroundProcess, autoProcess, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The slot whose screen was paused, so it can be told apart from the slot the
+    /// app is currently applying.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <c>_autoSlotId</c> rather than reusing it, because the pause
+    /// stands the screen down and <c>StandDownScreen</c> clears <c>_autoSlotId</c> on
+    /// its way through. Storing it here is what lets the exit path still find the
+    /// slot after a pause, which is the case that would otherwise leave the sound
+    /// boosted once the game closed.
+    /// </remarks>
+    private string _pausedSlotId = string.Empty;
+
+    /// <summary>Which process the paused slot was loaded for.</summary>
+    private string _pausedProcess = string.Empty;
+
+    /// <summary>One shot, armed by leaving and fired by still being away.</summary>
+    private DispatcherTimer? _focusPause;
+
+    /// <summary>
+    /// The grace period ran out and the user is still not in the game.
+    /// </summary>
+    private void OnFocusPauseTick(object? sender, EventArgs e)
+    {
+        CancelFocusPause();
+
+        if (_quitting || _autoSlotId.Length == 0)
+        {
+            // Quitting, or already stood down by something else in the meantime.
+            // _autoSlotId is the authority rather than the armed slot id, because
+            // it is the field the app itself set and the question is whether
+            // anything of ours is still loaded.
+            return;
+        }
+
+        HotkeySlot? slot = _settings.Slots.FirstOrDefault(s =>
+            string.Equals(s.Id, _pausedSlotId, StringComparison.OrdinalIgnoreCase));
+
+        if (slot is null)
+        {
+            // Deleted or disabled while paused. Nothing to pause and nothing to say.
+            ClearFocusPause();
+            return;
+        }
+
+// Taken into locals first. StandDownScreen empties _autoSlotId AND
+        // _autoProcess on its way through, so reading them after the call to
+        // restore them would store the empty strings - and the exit path would
+        // then fail to match the paused game's process, which is the one thing
+        // this record exists for.
+        string slotId = _autoSlotId;
+        string process = _autoProcess;
+
+        _pausedSlotId = slotId;
+        _pausedProcess = process;
+
+        GoScreenStandDown();
+
+        // Restored afterwards, because StandDownScreen also clears a pause that is
+        // still armed - correct for every other caller, since a user taking the
+        // screen back means the pause is over, but here it would take the record
+        // this path depends on.
+        _pausedSlotId = slotId;
+        _pausedProcess = process;
+
+        TraceLog.Write("AUTO FOCUS paused " + slot.Name + " after "
+            + AppSettings.FocusPauseGraceSeconds + "s away");
+        Flash(slot.Name + " paused while you are away");
+    }
+
+    /// <summary>Disarms a pending pause. Does not un-pause an already paused screen.</summary>
+    private void CancelFocusPause()
+    {
+        if (_focusPause is null)
+        {
+            return;
+        }
+
+        _focusPause.Stop();
+        _focusPause.Tick -= OnFocusPauseTick;
+        _focusPause = null;
+    }
+
+    /// <summary>Forgets the pause entirely, used when the screen is back.</summary>
+    private void ClearFocusPause()
+    {
+        CancelFocusPause();
+        _pausedSlotId = string.Empty;
+        _pausedProcess = string.Empty;
+    }
+
+    /// <summary>
+    /// The watcher says the desktop or the shell has the foreground.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="OnForegroundChanged"/> because that one is never
+    /// called for this at all - the shell processes are filtered out of
+    /// <c>Read()</c>, which is why <c>ForegroundLeft</c> exists.
+    /// </remarks>
+    private void OnForegroundLeft(string shell)
+    {
+        if (!_settings.AutoSwitch || !_settings.AutoPauseOnFocusLoss)
+        {
+            return;
+        }
+
+        // Nothing of ours loaded, or the wildcard owns this case already.
+        if (_autoSlotId.Length == 0 || _autoWildcardProcess.Length > 0)
+        {
+            return;
+        }
+
+        _pausedSlotId = _autoSlotId;
+        TraceLog.Write("AUTO FOCUS left to " + shell + ", arming the pause");
+        ConsiderFocusPause(shell);
     }
 
     /// <summary>
@@ -1466,6 +1957,31 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnTargetExited(string processName)
     {
+        // The paused case, and it has to come first. A focus pause stands the
+        // screen down, and StandDownScreen clears _autoSlotId on its way through -
+        // so by the time a paused game's process exits, MatchProcessName finds the
+        // slot but the guard at the bottom ("this is the slot the app applied")
+        // does not, because _autoSlotId is empty. The exit would be ignored and the
+        // SOUND would stay boosted for whatever the user runs next, which is the
+        // one thing the whole exit path exists to prevent.
+        //
+        // Sound only: the screen is already neutral, so pushing it again would be
+        // doing work that is not needed.
+        if (_pausedSlotId.Length > 0
+            && string.Equals(_pausedProcess, processName, StringComparison.OrdinalIgnoreCase))
+        {
+            TraceLog.Write("AUTO EXIT while paused " + processName);
+            ClearFocusPause();
+
+            if (_settings.AutoRevertOnExit && !_quitting)
+            {
+                _ = GoSoundNeutralAsync();
+                Flash("Game closed, back to normal");
+            }
+
+            return;
+        }
+
         if (!_settings.AutoRevertOnExit || _quitting)
         {
             return;
@@ -1605,6 +2121,36 @@ public partial class MainWindow : Window
             }
         }
 
+        // The bypass key is offered to Windows after the panic key and before any slot,
+        // so a contested chord goes to the panic key first and then to the bypass
+        // key, and only a slot ever gives way. The ordering is the whole rule and it
+        // is here rather than in a helper because "which of these three wins" is
+        // only ever asked in one place.
+        if (!string.IsNullOrWhiteSpace(_settings.BypassHotkey))
+        {
+            string bypassKey = HotkeyService.Normalise(_settings.BypassHotkey);
+
+            // Claimed only on success, as the panic key above does. Claiming it
+            // first and releasing it on failure skips the slot holding it and then
+            // reports the bypass key as having taken it, which is false and is the
+            // bug the panic key's own comment describes.
+            if (taken.Add(bypassKey))
+            {
+                if (!_hotkeys.Register(BypassHotkeyId, BypassTargetId, _settings.BypassHotkey))
+                {
+                    taken.Remove(bypassKey);
+                    refusedKeys.Add(_settings.BypassHotkey);
+                }
+            }
+            else
+            {
+                // The panic key already has this chord. Reported as its own case
+                // rather than silently dead, because BindBypassHotkey refuses to
+                // create this state and a restored profile can still arrive with it.
+                skipped.Add(new HotkeySlot { Name = "bypass key" });
+            }
+        }
+
         foreach (HotkeySlot slot in _settings.Slots)
         {
             if (!string.IsNullOrWhiteSpace(slot.Hotkey) && slot.Enabled)
@@ -1681,16 +2227,50 @@ public partial class MainWindow : Window
     /// </summary>
     private async void OnHotkeyPressed(HotkeyBinding binding)
     {
+        if (string.Equals(binding.TargetId, BypassTargetId, StringComparison.OrdinalIgnoreCase))
+        {
+            // Through the switch rather than through the setting. BypassToggle's
+            // handler is the one place that sets EffectsEnabled, commits, queues the
+            // engine push and verifies the result landed - four things that all have
+            // to happen together or the switch and the engine disagree.
+            //
+            // The inversion is BypassToggle's own and must not be second guessed here:
+            // the switch is labelled BYPASS, so IsChecked == true means the effects
+            // are OFF. AppSettings.EffectsEnabled says the same thing the other way
+            // round, and the two disagreeing by design is documented there.
+            if (!_audio.IsInstalled)
+            {
+                Flash("Sound needs FxSound first", true);
+                return;
+            }
+
+            BypassBox.IsChecked = BypassBox.IsChecked != true;
+            Flash(BypassBox.IsChecked == true ? "Sound effects off" : "Sound effects on");
+            TraceLog.Write("BYPASS key pressed, effects "
+                + (BypassBox.IsChecked == true ? "off" : "on"));
+            return;
+        }
+
         if (string.Equals(binding.TargetId, EmergencyTargetId, StringComparison.OrdinalIgnoreCase))
         {
             // The same neutral path a slot takes when it is switched off, so the
             // panic key lands in exactly the state quitting would have left, and
             // there is only one definition of "back to normal" in the app.
-            GoScreenNeutral();
+            //
+            // emergency: true is what makes this the one path that answers in full.
+            // The panic key exists for a screen that is already wrong and a user who
+            // cannot click anything, so "the night filter is still scheduled" has to
+            // lose to "I can see what is happening". Every other stand-down - the
+            // tray, the reset button, a game closing - leaves the filter alone.
+            GoScreenNeutral(emergency: true);
+            SuppressNightUntilNextWindow();
             await GoSoundNeutralAsync();
             RailStatus.Text = "PANIC RESET";
-            Flash("Screen and sound reset");
-            TraceLog.Write("PANIC key pressed, screen and sound reset");
+            Flash(_nightSuppressed && _settings.NightBlueLight
+                ? "Screen and sound reset, night filter paused"
+                : "Screen and sound reset");
+            TraceLog.Write("PANIC key pressed, screen and sound reset, night filter "
+                + (_nightSuppressed ? "suppressed" : "untouched"));
             return;
         }
 
@@ -1780,6 +2360,66 @@ public partial class MainWindow : Window
 
 
     /// <summary>
+    /// One of the two keycaps that are not a slot's, wired for capture.
+    /// <para>
+    /// The panic key and the bypass key behave identically apart from which
+    /// setting they write to and what they are called in a message, so they share
+    /// this rather than having a bind and a clear and a focus pair each. A third
+    /// keycap later is one line here.
+    /// </para>
+    /// <para>
+    /// Both keycaps set the shared capture state to themselves, which is what stops
+    /// two of them being armed at once: a keycap only starts listening when it has
+    /// keyboard focus, and only one control can.
+    /// </para>
+    /// </summary>
+    /// <param name="box">The keycap, declared in the page.</param>
+    /// <param name="which">Which of the two this is.</param>
+    private void WireKeycap(TextBox box, KeycapCapture which)
+    {
+        Func<string> read = () => which == KeycapCapture.Panic
+            ? _settings.EmergencyHotkey
+            : _settings.BypassHotkey;
+
+        Describe(box, read());
+
+        box.GotKeyboardFocus += (s, e) =>
+        {
+            _capturingKeycap = which;
+            _captureSlotId = null;
+            _captureBox = box;
+            box.Text = "PRESS A KEY";
+            box.ToolTip = "Esc cancels  ·  Backspace clears  ·  F1 to F24 bind on their own";
+        };
+        box.LostKeyboardFocus += (s, e) =>
+        {
+            if (!ReferenceEquals(_captureBox, box))
+            {
+                return;
+            }
+
+            // Clicked away without choosing anything, so it keeps what it had.
+            Describe(box, read());
+            _captureBox = null;
+            _capturingKeycap = KeycapCapture.None;
+        };
+    }
+
+    /// <summary>The name a keycap uses in a message.</summary>
+    private static string LabelOf(KeycapCapture which) =>
+        which == KeycapCapture.Panic ? "Panic key" : "Bypass key";
+
+    /// <summary>
+    /// What a non-slot keycap shows when it is not listening.
+    /// <para>
+    /// Goes through <see cref="ShowSlotKey"/> rather than a second implementation,
+    /// because the two keycaps and every slot keycap have to read the same way and a
+    /// copy of this is a copy that will drift.
+    /// </para>
+    /// </summary>
+    private static void Describe(TextBox box, string hotkey) => ShowSlotKey(box, hotkey);
+
+    /// <summary>
     /// Points the panic key at a new combo, taking it off any slot that held it.
     /// The steal is the same rule the slots use, the thing you are pointing at
     /// wins, because a slot quietly keeping a chord the user has just given away
@@ -1788,6 +2428,17 @@ public partial class MainWindow : Window
     private void BindPanicHotkey(string text)
     {
         string wanted = HotkeyService.Normalise(text);
+
+        // The bypass key gives way rather than the panic key. The panic key is the
+        // one binding whose entire job is to still work when something else has gone
+        // wrong, and a bypass is a convenience - so this is the same precedence
+        // RegisterHotkeys applies, kept in one place so the two cannot disagree.
+        if (string.Equals(HotkeyService.Normalise(_settings.BypassHotkey), wanted, StringComparison.Ordinal))
+        {
+            _settings.BypassHotkey = string.Empty;
+            Flash("Panic key took it from the bypass key");
+        }
+
         HotkeySlot? clash = _settings.Slots.FirstOrDefault(s =>
             s.Enabled
             && string.Equals(HotkeyService.Normalise(s.Hotkey), wanted, StringComparison.Ordinal));
@@ -1808,6 +2459,51 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>
+    /// Points the bypass key at a new combo, taking it off any slot that held it.
+    /// <para>
+    /// Same rule as the panic key, and deliberately weaker: the bypass key wins
+    /// against a slot because the user is pointing at it, and loses against the
+    /// panic key because the panic key has to keep working when something has gone
+    /// wrong. It is refused outright if it is already the panic key's, rather than
+    /// taking it - two controls bound to one chord is the state this whole method
+    /// exists to prevent.
+    /// </para>
+    /// </summary>
+    private void BindBypassHotkey(string text)
+    {
+        string wanted = HotkeyService.Normalise(text);
+
+        if (string.Equals(HotkeyService.Normalise(_settings.EmergencyHotkey), wanted, StringComparison.Ordinal))
+        {
+            // Refused rather than bound. Stealing it here would leave the bypass
+            // keycap showing a chord that does nothing, and the user would have no
+            // way to tell which of the two keycaps is lying.
+            EndCapture(restore: true);
+            Flash("That is the panic key already", true);
+            return;
+        }
+
+        HotkeySlot? clash = _settings.Slots.FirstOrDefault(s =>
+            s.Enabled
+            && string.Equals(HotkeyService.Normalise(s.Hotkey), wanted, StringComparison.Ordinal));
+
+        if (clash is not null)
+        {
+            clash.Hotkey = string.Empty;
+            Flash("Bypass key took it from " + clash.Name);
+        }
+
+        _settings.BypassHotkey = text;
+        EndCapture(restore: false);
+        Commit();
+        ShowSlotKey(BypassKeyBox, text);
+        BuildSlots();
+        RegisterHotkeys();
+        Flash("Bypass key set to " + text);
+    }
+
+
     /// <summary>Backspace or Delete on the panic keycap drops the binding.</summary>
     private void ClearPanicHotkey()
     {
@@ -1824,6 +2520,22 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>Backspace or Delete on the bypass keycap drops the binding.</summary>
+    private void ClearBypassHotkey()
+    {
+        if (!string.IsNullOrWhiteSpace(_settings.BypassHotkey))
+        {
+            _settings.BypassHotkey = string.Empty;
+            Flash("Bypass key cleared");
+        }
+
+        EndCapture(restore: false);
+        Commit();
+        ShowSlotKey(BypassKeyBox, _settings.BypassHotkey);
+        RegisterHotkeys();
+    }
+
+
     /// <summary>
     /// Gives the panic keycap the same behaviour as a slot keycap: click to
     /// listen, Esc cancels, Backspace clears, never free text. Wired once here
@@ -1832,27 +2544,14 @@ public partial class MainWindow : Window
     /// </summary>
     private void WirePanicKeycap()
     {
-        ShowSlotKey(PanicKeyBox, _settings.EmergencyHotkey);
+        WireKeycap(PanicKeyBox, KeycapCapture.Panic);
+    }
 
-        PanicKeyBox.GotKeyboardFocus += (s, e) =>
-        {
-            _capturingPanic = true;
-            _captureSlotId = null;
-            _captureBox = PanicKeyBox;
-            PanicKeyBox.Text = "PRESS A KEY";
-            PanicKeyBox.ToolTip = "Esc cancels  ·  Backspace clears  ·  F1 to F24 bind on their own";
-        };
-        PanicKeyBox.LostKeyboardFocus += (s, e) =>
-        {
-            if (!ReferenceEquals(_captureBox, PanicKeyBox))
-            {
-                return;
-            }
 
-            ShowSlotKey(PanicKeyBox, _settings.EmergencyHotkey);
-            _captureBox = null;
-            _capturingPanic = false;
-        };
+    /// <summary>The bypass keycap, which is the panic keycap with another target.</summary>
+    private void WireBypassKeycap()
+    {
+        WireKeycap(BypassKeyBox, KeycapCapture.Bypass);
     }
 
 

@@ -103,7 +103,7 @@ public static class IconFactory
         return System.Drawing.Icon.FromHandle(handle);
     }
 
-    private static readonly Dictionary<string, BitmapSource?> AppIconCache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, BitmapSource?> AppIconCache = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Launcher icon for an executable, cached per path. Returns null when the file
@@ -153,6 +153,72 @@ public static class IconFactory
 
     private static string SelfExe =>
         System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName ?? string.Empty;
+
+
+    /// <summary>
+    /// Fills the cache for a whole list of executables without binding to anything.
+    /// <para>
+    /// The point of this is that it does not touch any
+    /// <see cref="AppCandidate"/>. Reading an icon is 2.8 ms of disk and shell
+    /// lookup, which is why the dropdown could not afford to do it on the
+    /// dispatcher, but the result is a plain frozen bitmap in a dictionary that any
+    /// thread can read.
+    /// </para>
+    /// <para>
+    /// So the slow half runs here, off the dispatcher and in one tight loop with no
+    /// yield per row, and the dropdown's own pass becomes a run of cache hits that
+    /// costs nothing. That is the difference between a list that opens complete and
+    /// a list that opens empty and fills itself in while it is being read - which is
+    /// what a blank icon in a game picker is.
+    /// </para>
+    /// <para>
+    /// Call it from a background thread. It deliberately returns nothing and
+    /// deliberately does not raise change notifications: at scan time every slot
+    /// list is already bound, and a PropertyChanged raised from here would arrive on
+    /// a thread that is not the one WPF wants drawing it.
+    /// </para>
+    /// </summary>
+    public static void WarmAppIcons(IEnumerable<string> exePaths)
+    {
+        foreach (string path in exePaths)
+        {
+            if (string.IsNullOrWhiteSpace(path) || path == SelfExe)
+            {
+                continue;
+            }
+
+            // Same size the dropdown asks for, so this is the same cache entry and
+            // the dropdown's lookup is a hit rather than a second read.
+            ExtractAppIcon(path, WarmSize);
+        }
+    }
+
+    /// <summary>The size the game picker draws its icons at.</summary>
+    public const int WarmSize = 20;
+
+
+    /// <summary>
+    /// The cached icon for an executable, without touching the disk.
+    /// <para>
+    /// Returns false when the entry is not in the cache yet. Callers that must show
+    /// an icon immediately want this rather than a read, because a read is what
+    /// blocks; callers that can afford to wait call
+    /// <see cref="ExtractAppIcon"/> instead.
+    /// </para>
+    /// </summary>
+    public static bool TryGetCachedAppIcon(string exePath, int size, out BitmapSource? icon)
+    {
+        icon = null;
+
+        if (string.IsNullOrWhiteSpace(exePath))
+        {
+            return false;
+        }
+
+        return AppIconCache.TryGetValue(
+            exePath + "|" + size.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            out icon);
+    }
 
     private static BitmapSource Resize(BitmapSource source, int size)
     {

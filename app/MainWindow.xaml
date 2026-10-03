@@ -532,8 +532,20 @@
                                          - and it is the same affordance the audio tab
                                          already has beside its output picker. Beside the
                                          live readout because that is where "is this screen
-                                         actually there" is already being answered. -->
-                                    <ui:IconButton x:Name="RescanScreensButton" Icon="{x:Static ui:Icons.Refresh}"
+                                         actually there" is already being answered.
+
+                                         A magnifier rather than the refresh arrow that
+                                         was here. Two buttons at the same size, in the
+                                         same row, in the same accent, both drawn as a
+                                         circular arrow, is a picture that does not
+                                         distinguish itself from Reset six inches to
+                                         the left. The tooltip said which was which and
+                                         the icon did not, which is the wrong way round:
+                                         a tooltip is not read until it is hovered, by
+                                         which point the glyph has already been judged.
+                                         This one looks for something, so it looks like
+                                         a magnifier. -->
+                                    <ui:IconButton x:Name="RescanScreensButton" Icon="{x:Static ui:Icons.Search}"
                                                    Style="{StaticResource IconButton}" Margin="8,0,0,0"
                                                    Click="OnRescanScreensClick" ToolTip="Find screens"
                                                    AutomationProperties.Name="Look for attached screens again" />
@@ -574,6 +586,18 @@
                                               HorizontalContentAlignment="Center" SelectionChanged="OnAudioPresetSelected"
                                               ToolTip="Sound preset" />
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <!-- A "save what FxSound is doing now" button used to sit here,
+                                             first in this row, next to Save. It copied the engine's
+                                             live state into a preset of the user's own.
+
+                                             Removed as bloat. It is the only control in the app
+                                             that requires the user to understand that there are
+                                             two things named "preset" - the app's, and
+                                             FxSound's - and to work out which one a button
+                                             next to "Save Preset" is talking about. The other
+                                             three buttons here all act on the app's own tunes,
+                                             so the row had a word in it that meant something
+                                             else. -->
                                         <ui:IconButton x:Name="AudioSaveButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Plus}"
                                                        Margin="0,0,6,0" Click="OnSaveAsSoundClick" ToolTip="Save Preset" AutomationProperties.Name="Save this sound preset" />
                                         <ui:IconButton x:Name="AudioRenameButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Pencil}"
@@ -1066,13 +1090,36 @@
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Button Content="Apply" Style="{StaticResource PrimaryButtonAudio}" MinWidth="116"
-                                    Click="OnApplySoundClick" ToolTip="Apply" AutomationProperties.Name="Apply the sound preset" />
-                                    <ui:IconButton Icon="{x:Static ui:Icons.Refresh}" Style="{StaticResource IconButton}" Margin="10,0,0,0"
-                                                   Click="OnResetSoundClick" ToolTip="Reset" AutomationProperties.Name="Reset the sound to normal" />
-                                    <Button x:Name="SaveToFxSoundButton" Content="Save in FxSound" Style="{StaticResource GhostButton}" Margin="10,0,0,0"
-                                            Click="OnSaveInFxSoundClick" ToolTip="Save in FxSound" />
+<StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <!-- There was an Apply button here until the audio tab stopped
+                                     needing one.
+
+                                     It was the right control for the Display tab and the wrong
+                                     one here, and the difference is what each engine can
+                                     do. The screen takes a gamma ramp the moment it is
+                                     asked, so a preview and a commit are two genuinely
+                                     different things and the button earns its place. FxSound
+                                     takes a change as a process that is spawned and waited
+                                     on, which is why this tab used to need a button to
+                                     push at all - and why every fader move had to be
+                                     followed by a second, separate act to hear it.
+
+                                     Those faders now push themselves as they move, so the
+                                     row is left with the two acts that are still
+                                     deliberate: reset it, or save it. A "Live" badge sat
+                                     here briefly to explain the absence and was itself
+                                     one more control-shaped thing to read; the sound
+                                     changing is the explanation.
+
+                                     Save in FxSound comes before Reset, which is the
+                                     opposite of the order they were in and the same
+                                     order the Display tab uses. Two tabs with the same
+                                     shape should not disagree about which end the
+                                     round arrow goes on. -->
+                                <Button x:Name="SaveToFxSoundButton" Content="Save in FxSound" Style="{StaticResource GhostButton}"
+                                        Click="OnSaveInFxSoundClick" ToolTip="Save in FxSound" />
+                                <ui:IconButton Icon="{x:Static ui:Icons.Refresh}" Style="{StaticResource IconButton}" Margin="10,0,0,0"
+                                               Click="OnResetSoundClick" ToolTip="Reset" AutomationProperties.Name="Reset the sound to normal" />
                                 </StackPanel>
                             </Grid>
                         </Grid>
@@ -1116,6 +1163,22 @@
                                     <TextBox x:Name="PanicKeyBox" Style="{StaticResource KeyCap}"
                                              Width="112" MinWidth="112" Height="26"
                                              AutomationProperties.Name="Panic key" />
+
+                                    <!-- Beside the panic key rather than in the settings
+                                         list, for the same reason that one is here: it is
+                                         a hotkey, and this is where hotkeys live. The
+                                         bypass key turns the sound on and off without
+                                         leaving the game, which is the one thing a
+                                         player wants mid-match. Empty by default, so
+                                         the keycap reads NOT SET until the user picks
+                                         something. -->
+                                    <Border Width="18" Background="Transparent" />
+                                    <TextBlock Text="Bypass key" VerticalAlignment="Center" Margin="0,0,8,0"
+                                               FontFamily="{StaticResource Sans}" FontSize="12"
+                                               Foreground="{StaticResource TextMid}" />
+                                    <TextBox x:Name="BypassKeyBox" Style="{StaticResource KeyCap}"
+                                             Width="112" MinWidth="112" Height="26"
+                                             AutomationProperties.Name="Bypass key" ToolTip="Turn the sound on and off without leaving the game" />
                                 </StackPanel>
 
                                 <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
@@ -1264,7 +1327,42 @@
                                  up unreachable. Top lets the scroll viewer do the
                                  centring when the list fits and simply scroll when
                                  it does not. -->
-                            <StackPanel MaxWidth="620" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="18,0">
+                            <!-- Two columns rather than one long one.
+
+                                 Fourteen rows in a single column is 616 pixels of
+                                 list, and the FxSound health header above this one
+                                 left the page 598. Eighteen pixels short, which is a
+                                 scrollbar.
+
+                                 The fit test did not catch that, and the reason is
+                                 worth recording: the test measured the list against
+                                 a budget that predates the health header. It never
+                                 subtracted those 76 pixels, so it reported the page
+                                 fitting while the page scrolled. A guard that does
+                                 not know about the thing it is guarding is not a
+                                 guard, so the budget now subtracts the header it is
+                                 actually sitting under, and the layout below is two
+                                 columns so the next row added does not land the tab
+                                 back in a scrollbar either.
+
+                                 Column one is the screen and the games. Column two
+                                 is the app itself and the user's data. Reading down
+                                 a column rather than across a row keeps a group
+                                 together instead of interleaving two unrelated
+                                 settings on the same line, and it is why the two
+                                 columns are not simply the first seven rows and the
+                                 last seven: the two widest rows, the night schedule
+                                 and the sound output picker, sit in different
+                                 columns on purpose, because putting them on one line
+                                 would have been the one row that did not fit. -->
+                            <Grid MaxWidth="1120" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="18,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="30" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0">
 
                                 <!-- No "SETTINGS" header over this list any more.
 
@@ -1427,6 +1525,22 @@
                                                  Glyph="refresh" Label="Auto-revert on game exit"
                                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
                                                  ToolTip="Auto Revert" />
+                                <!-- Screen only, and that is the point rather than a
+                                     limitation. Every sound change spawns the engine
+                                     and powers it off and on again, so doing it on
+                                     every alt-tab would click on the way to a browser.
+                                     A warm screen on Discord is mildly wrong; silence
+                                     every time somebody checks a message is worse.
+                                     The sound stays loaded either way, so the user
+                                     still hears their game. -->
+                                <ui:OptionToggle x:Name="FocusPauseBox" Style="{StaticResource OptionRow}"
+                                                 Glyph="moon" Label="Pause screen when I leave the game"
+                                                 Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                                 ToolTip="Screen only. The sound keeps playing." />
+                                </StackPanel>
+
+                                <!-- The app's own settings and the user's data. -->
+                                <StackPanel Grid.Column="2">
                                 <ui:OptionToggle x:Name="CloseToTrayBox" Style="{StaticResource OptionRow}"
                                                  Glyph="folder" Label="Close to tray"
                                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
@@ -1623,6 +1737,7 @@
                                                TextWrapping="Wrap" MaxHeight="60" />
                                 </StackPanel>
                                 </StackPanel>
+                            </Grid>
                             </ScrollViewer>
                         </Grid>
                     </Border>

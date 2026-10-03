@@ -51,6 +51,25 @@ public sealed class FxSoundState
 
     public bool Power { get; set; }
 
+    /// <summary>
+    /// Whether <see cref="Power"/> was in the file at all.
+    /// <para>
+    /// Added because <see cref="Power"/> cannot tell "the engine says the EQ is off"
+    /// from "the engine did not say", and this app used to conflate them.
+    /// </para>
+    /// <para>
+    /// <c>Power</c> is a plain bool defaulting to false, and status.json is another
+    /// program's output that changes shape between versions. A file without a
+    /// <c>power</c> key therefore reads as powered-off, which the status line then
+    /// reported as fact - "EQ switched off" while the EQ was on, for a machine that
+    /// was answering perfectly well.
+    /// </para>
+    /// <para>
+    /// So the two cases are separated at the only place that can tell them apart.
+    /// </para>
+    /// </summary>
+    public bool ReportsPower { get; set; }
+
     public string SelectedPreset { get; set; } = string.Empty;
 
     public string SelectedOutput { get; set; } = string.Empty;
@@ -125,10 +144,14 @@ public sealed class FxSoundState
 
             state.Version = ReadString(root, "version");
 
-            if (root.TryGetProperty("power", out JsonElement power) && power.ValueKind == JsonValueKind.True)
-            {
-                state.Power = true;
-            }
+if (root.TryGetProperty("power", out JsonElement power))
+        {
+            // Both facts recorded: what it said, and that it said it. Only the
+            // second one makes the first trustworthy, because a missing key used to
+            // be indistinguishable from a false one.
+            state.ReportsPower = true;
+            state.Power = power.ValueKind == JsonValueKind.True;
+        }
 
             state.SelectedPreset = ReadString(root, "selected_preset");
             state.SelectedOutput = ReadString(root, "selected_output");

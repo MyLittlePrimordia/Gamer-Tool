@@ -109,6 +109,56 @@ public sealed class AppSettings
     public string EmergencyHotkey { get; set; } = "CTRL+ALT+F12";
 
     /// <summary>
+    /// Put the screen back to neutral when the user alt-tabs out of a game the
+    /// app loaded, and bring it back when they return.
+    /// <para>
+    /// Screen only, and that is the whole design decision rather than a
+    /// limitation. Every FxSound call spawns a process and
+    /// <c>ResetSoundAsync</c> powers the engine off and on again with settle delays,
+    /// so doing that on every alt-tab means audible gaps and pops on the way to a
+    /// browser. A shadow-boosted screen on Discord is mildly wrong; a click of
+    /// silence every time somebody checks a message is worse.
+    /// </para>
+    /// <para>
+    /// Off by default because it changes behaviour for somebody who wants the
+    /// picture to stay as it is. The sound staying loaded is why this is tolerable
+    /// once it is on: the user still hears their game, only the screen goes
+    /// ordinary.
+    /// </para>
+    /// </summary>
+    public bool AutoPauseOnFocusLoss { get; set; }
+
+    /// <summary>
+    /// How long the user has to be away from the game before the screen is
+    /// paused, in seconds.
+    /// <para>
+    /// Not a setting. A notification, an overlay flashing up, or the brief moment
+    /// an alt-tab passes through another window would each flick the screen if the
+    /// answer were instant, and a filter that pulses on every notification is one
+    /// people switch off. Two seconds is long enough to walk the mouse somewhere
+    /// else and short enough that nobody reads the pause as lag.
+    /// </para>
+    /// </summary>
+    internal const int FocusPauseGraceSeconds = 2;
+
+    /// <summary>
+    /// Optional key that throws the sound bypass, for A/B-ing a tune without
+    /// leaving the game.
+    /// <para>
+    /// Empty by default, and that is deliberate where the panic key is not. The
+    /// panic key defaults to a chord because a safety net that has to be configured
+    /// before it works is not one. This is a convenience, and a convenience that
+    /// claimed a chord nobody chose would take it away from whatever the user
+    /// actually uses it for. The tray is the discoverable way in.
+    /// </para>
+    /// <para>
+    /// Global rather than per slot, like the bypass setting itself: someone who
+    /// wants to compare two games wants to throw the same switch in both.
+    /// </para>
+    /// </summary>
+    public string BypassHotkey { get; set; } = string.Empty;
+
+    /// <summary>
     /// Auto preamp: trims master gain by the largest EQ boost so boosted bands
     /// cannot hit 0 dBFS and hard-clip.
     /// </summary>
@@ -224,6 +274,24 @@ public sealed class AppSettings
     public int NightStartMinutes { get; set; } = NightSchedule.DefaultStartMinutes;
 
     public int NightEndMinutes { get; set; } = NightSchedule.DefaultEndMinutes;
+
+    /// <summary>
+    /// How long the filter takes to reach full strength at the start of the
+    /// window, and to fade back out at the end of it.
+    /// <para>
+    /// Zero means no fade: the filter arrives all at once, which is what this did
+    /// before the fade existed and what makes turning the feature off a complete
+    /// return to the old behaviour rather than an approximation of it.
+    /// </para>
+    /// <para>
+    /// A setting rather than a control on purpose. The app's rule is that a
+    /// preference nobody asks for does not get a row, and a fade length is a
+    /// preference almost nobody has an opinion about - thirty minutes is right for
+    /// everyone or close enough. It is here so a profile that wants a different one,
+    /// or none, can say so in settings.json.
+    /// </para>
+    /// </summary>
+    public int NightFadeMinutes { get; set; } = NightFade.DefaultFadeMinutes;
 
     /// <summary>
     /// Set once the user has been offered the FxSound install on launch. Stops a

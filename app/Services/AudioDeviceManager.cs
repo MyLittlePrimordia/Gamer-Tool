@@ -10,6 +10,35 @@ public sealed class AudioDeviceInfo
     public string Id { get; set; } = string.Empty;
 
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// What Windows says this endpoint physically is, from
+    /// <c>PKEY_AudioEndpoint_FormFactor</c>. -1 when the property could not be read.
+    /// <para>
+    /// Carried rather than resolved so the decision about what to do with it can
+    /// happen in <see cref="OutputRouting"/>, which is pure and testable. Reading the
+    /// property needs a device, and a test cannot have one.
+    /// </para>
+    /// <para>
+    /// -1 rather than a default of 10 (UnknownFormFactor) because those two are not
+    /// the same claim. A driver that answers "unknown" has told us it does not know,
+    /// which is worth nothing; a property that could not be read at all is a failure
+    /// we may be able to distinguish and log. Both end up falling back to the name
+    /// hints, so the difference is only visible in the log, but conflating them would
+    /// hide the difference permanently.
+    /// </para>
+    /// </summary>
+    public int FormFactor { get; set; } = -1;
+
+    /// <summary>
+    /// True only when Windows has positively said this is display audio.
+    /// <para>
+    /// False is not the same as "not a display": <see cref="FormFactor"/> of -1 means
+    /// nobody asked. Callers that need to tell those apart must check the number
+    /// rather than read this as an answer.
+    /// </para>
+    /// </summary>
+    public bool IsDisplayAudio => FormFactor == OutputRouting.DisplayAudioFormFactor;
 }
 
 public sealed class AudioDeviceManager
@@ -83,6 +112,7 @@ public sealed class AudioDeviceManager
                             Name = string.IsNullOrWhiteSpace(name)
                                 ? "OUTPUT " + (devices.Count + 1).ToString()
                                 : name,
+                            FormFactor = ReadFormFactor(device),
                         });
                     }
                     catch (Exception ex)
@@ -99,6 +129,56 @@ public sealed class AudioDeviceManager
         }
 
         return devices;
+    }
+
+    /// <summary>
+    /// What Windows says this endpoint physically is, or -1 when it will not say.
+    /// <para>
+    /// Read as <c>PKEY_AudioEndpoint_FormFactor</c>, which is the answer to the
+    /// question the old name-based filter was guessing at: whether this is a monitor's
+    /// HDMI audio, which is silent because there are no speakers behind it. Verified
+    /// against mmdeviceapi.h - the GUID is
+    /// <c>{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E}</c> and DigitalAudioDisplayDevice is
+    /// 9 - and against a real machine, where a monitor endpoint answered 9 and every
+    /// set of speakers answered 1.
+    /// </para>
+    /// <para>
+    /// Three separate failures all mean "ask the name instead", and they are handled
+    /// as one because from here they are indistinguishable and act the same way: the
+    /// property being absent from an endpoint's store (some virtual drivers do not
+    /// publish it), the indexer throwing, and the value arriving as something other
+    /// than a <c>uint</c>. The last is not hypothetical - the property is documented
+    /// as VT_UI4 but the COM marshalling decides what actually arrives in the box, so
+    /// this reads it as a uint and treats anything else as no answer rather than
+    /// casting whatever turned up.
+    /// </para>
+    /// </summary>
+    private static int ReadFormFactor(MMDevice device)
+    {
+        try
+        {
+            PropertyStore store = device.Properties;
+
+            // Contains first, because the indexer is documented to throw rather than
+            // return nothing, and "the driver does not publish this" is a normal
+            // answer rather than an exceptional one.
+            if (!store.Contains(PropertyKeys.PKEY_AudioEndpoint_FormFactor))
+            {
+                return -1;
+            }
+
+            return store[PropertyKeys.PKEY_AudioEndpoint_FormFactor].Value is uint value
+                ? (int)value
+                : -1;
+        }
+        catch (Exception ex)
+        {
+            // Debug only, not TraceLog. This runs for every endpoint on every launch,
+            // and a driver with no form factor would otherwise fill the log with a
+            // line the user cannot act on. The failure is already carried by the -1.
+            Debug.WriteLine(ex.Message);
+            return -1;
+        }
     }
 
     public string GetDefaultOutputName()

@@ -147,19 +147,59 @@ RedGain = double.IsFinite(RedGain) ? Math.Clamp(RedGain, ChannelGainMin, Channel
         return this;
     }
 
-    public static DisplayPreset WithBlueLight(DisplayPreset source, int level)
+    /// <summary>
+    /// The source preset with the blue light trim folded in.
+    /// </summary>
+    /// <param name="source">The preset to trim. Never modified.</param>
+    /// <param name="level">0 for off, 1 for warm, 2 for extra warm.</param>
+    /// <param name="strength">
+    /// How much of the trim to apply, 0 to 1. The default of 1 is exactly the
+    /// behaviour that existed before this parameter did.
+    /// <para>
+    /// Interpolating toward 1.0 rather than applying the trim outright is what lets
+    /// the night filter fade in. The alternative - scaling the preset's own gains -
+    /// would change what a game's preset looks like at half strength instead of
+    /// only how warm it is, which is not what a fading filter is supposed to do.
+    /// </para>
+    /// <para>
+    /// A strength of 0 returns the source untouched rather than a preset with its
+    /// gains divided back out, because multiplying and then dividing is not the same
+    /// as not multiplying: it rounds, and it would drag a preset's own colour
+    /// toward neutral by a fraction of a step every time the schedule ticked.
+    /// </para>
+    /// </summary>
+    public static DisplayPreset WithBlueLight(DisplayPreset source, int level, double strength = 1.0)
     {
         DisplayPreset result = source.Copy();
         result.Id = source.Id;
-        if (level <= 0 || level > 2)
+        if (level <= 0 || level > 2 || strength <= 0.0)
         {
             return result;
         }
 
+        double amount = Math.Clamp(strength, 0.0, 1.0);
         double[] trim = level == 1 ? BlueLightWarm : BlueLightExtraWarm;
-        result.RedGain = Math.Clamp(result.RedGain * trim[0], 0.0, 2.0);
-        result.GreenGain = Math.Clamp(result.GreenGain * trim[1], 0.0, 2.0);
-        result.BlueGain = Math.Clamp(result.BlueGain * trim[2], 0.0, 2.0);
+
+        if (amount >= 1.0)
+        {
+            // At full strength this is exactly the multiplication every existing
+            // preset was built with. Not an algebraic rearrangement of it: the two
+            // forms agree at strength 1 and disagree below it, so the case that
+            // must not change colour is spelled as the expression it always was.
+            result.RedGain = Math.Clamp(result.RedGain * trim[0], 0.0, 2.0);
+            result.GreenGain = Math.Clamp(result.GreenGain * trim[1], 0.0, 2.0);
+            result.BlueGain = Math.Clamp(result.BlueGain * trim[2], 0.0, 2.0);
+            return result;
+        }
+
+        // Below full strength the gains move toward the trim by a fraction of the
+        // distance rather than being multiplied by a fraction of the trim. Scaling
+        // the trim instead would pull the preset's own gains toward 1.0 - and so
+        // toward neutral colour - as the filter faded in, so a preset would lose
+        // its own colour on the way to being warm and get it back at full strength.
+        result.RedGain = Math.Clamp(result.RedGain + ((trim[0] - 1.0) * amount), 0.0, 2.0);
+        result.GreenGain = Math.Clamp(result.GreenGain + ((trim[1] - 1.0) * amount), 0.0, 2.0);
+        result.BlueGain = Math.Clamp(result.BlueGain + ((trim[2] - 1.0) * amount), 0.0, 2.0);
         return result;
     }
 

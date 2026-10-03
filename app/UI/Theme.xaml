@@ -637,19 +637,6 @@
         <Setter Property="BorderBrush" Value="#2A9D92" />
     </Style>
 
-    <!-- The same button in the audio accent.
-         A style cannot be parameterised, so a second style is the only way to
-         give one tab its own colour here without putting a pink button on the
-         display tab. The fills are the audio accent knocked back for a large
-         block of colour sitting on black, which is the same treatment the
-         accent itself gets further up, rather than the full accent at button
-         size, which would be far too hot. -->
-    <Style x:Key="PrimaryButtonAudio" TargetType="Button" BasedOn="{StaticResource PrimaryButton}">
-        <Setter Property="Background" Value="#6B1729" />
-        <Setter Property="Foreground" Value="#FCEFF2" />
-        <Setter Property="BorderBrush" Value="#A8223B" />
-    </Style>
-
     <Style x:Key="GhostButton" TargetType="Button" BasedOn="{StaticResource BaseButton}">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{StaticResource TextMid}" />

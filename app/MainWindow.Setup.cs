@@ -44,6 +44,7 @@ public partial class MainWindow : Window
         _settings.ShowOsd = OsdBox.IsChecked == true;
         _settings.AutoSwitch = AutoSwitchBox.IsChecked == true;
         _settings.AutoRevertOnExit = AutoRevertBox.IsChecked == true;
+        _settings.AutoPauseOnFocusLoss = FocusPauseBox.IsChecked == true;
         _settings.FxPromptDisabled = FxPromptBox.IsChecked == true;
         _settings.StartHidden = StartHiddenBox.IsChecked == true;
         _settings.CloseToTray = CloseToTrayBox.IsChecked == true;
@@ -314,9 +315,13 @@ public partial class MainWindow : Window
                 return;
 
             case HotkeyCapture.Clear:
-                if (_capturingPanic)
+                if (_capturingKeycap == KeycapCapture.Panic)
                 {
                     ClearPanicHotkey();
+                }
+                else if (_capturingKeycap == KeycapCapture.Bypass)
+                {
+                    ClearBypassHotkey();
                 }
                 else
                 {
@@ -346,9 +351,16 @@ public partial class MainWindow : Window
 
         // Checked before the slot id, because the panic keycap deliberately has
         // no slot behind it.
-        if (_capturingPanic)
+        if (_capturingKeycap == KeycapCapture.Panic)
         {
             BindPanicHotkey(text);
+            e.Handled = true;
+            return;
+        }
+
+        if (_capturingKeycap == KeycapCapture.Bypass)
+        {
+            BindBypassHotkey(text);
             e.Handled = true;
             return;
         }
@@ -401,9 +413,13 @@ public partial class MainWindow : Window
     {
         if (restore && _captureBox is not null)
         {
-            if (_capturingPanic)
+            if (_capturingKeycap == KeycapCapture.Panic)
             {
                 ShowSlotKey(_captureBox, _settings.EmergencyHotkey);
+            }
+            else if (_capturingKeycap == KeycapCapture.Bypass)
+            {
+                ShowSlotKey(_captureBox, _settings.BypassHotkey);
             }
             else if (_captureSlotId is not null)
             {
@@ -414,7 +430,7 @@ public partial class MainWindow : Window
 
         _captureSlotId = null;
         _captureBox = null;
-        _capturingPanic = false;
+        _capturingKeycap = KeycapCapture.None;
         Keyboard.ClearFocus();
     }
 

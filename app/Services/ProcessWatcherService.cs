@@ -81,6 +81,57 @@ public sealed class WatchedWindow
 
     public event Action<WatchedWindow>? ForegroundChanged;
 
+    /// <summary>
+    /// Raised when the foreground moves to the desktop or the shell from something
+    /// that was not already there.
+    /// <para>
+    /// Exists because <see cref="ForegroundChanged"/> cannot report this transition
+    /// at all. <see cref="Read"/> returns null for the shell processes - they are
+    /// filtered out deliberately, because they are not "the app the user is in" -
+    /// and <see cref="OnTick"/> only raises for a non-null window. So alt-tabbing
+    /// from a game to the desktop raised nothing, and coming back raised nothing
+    /// either, because <c>_lastKey</c> still held the game's.
+    /// </para>
+    /// <para>
+    /// Not raised for this app's own window. Opening Gamer Tool to look at a preset
+    /// is not leaving the game in the sense this event means, and raising it there
+    /// would suspend the boost on the way to the one place it can be turned off.
+    /// </para>
+    /// </summary>
+    public event Action<string>? ForegroundLeft;
+
+    /// <summary>
+    /// Processes that mean "the user is looking at the desktop", as opposed to an
+    /// application.
+    /// <para>
+    /// The same names <see cref="Read"/> refuses to return a window for. Listed
+    /// again rather than shared because they answer different questions: Read is
+    /// asking "is this something a slot could bind to" and this is asking "did the
+    /// user just leave the game", and the two overlap but are not the same. Taskbar
+    /// and Start are the shell; a chat app is neither, and is handled as a normal
+    /// foreground change.
+    /// </para>
+    /// </summary>
+    private static readonly string[] ShellProcessNames =
+    {
+        "explorer", "SearchHost", "ShellExperienceHost", "StartMenuExperienceHost",
+        "TextInputHost", "SearchApp", "ShellExperienceBroker",
+    };
+
+    /// <summary>
+    /// Whether a tick that found nothing should report the foreground having left.
+    /// <para>
+    /// Pure, so the transition can be tested without a desktop. The last clause is
+    /// the one that matters: <c>_lastKey</c> being empty means nothing was ever
+    /// foreground, so there is nothing to have left, and a monitor with no windows
+    /// open would otherwise raise this on every tick forever.
+    /// </para>
+    /// </summary>
+    /// <param name="shellName">The foreground process name, or empty for none/unreadable.</param>
+    /// <param name="lastKey">What the last real foreground window was.</param>
+    internal static bool ShouldRaiseLeft(string shellName, string lastKey) =>
+        shellName.Length > 0 && lastKey.Length > 0;
+
     public event Action<WatchedWindow>? TargetLaunched;
 
     /// <summary>
@@ -208,6 +259,24 @@ public sealed class WatchedWindow
                     ForegroundChanged?.Invoke(window);
                 }
             }
+            else
+            {
+                // The desktop, the taskbar or the Start menu. Read refuses to
+                // return a window for these, so without this branch the tick
+                // silently does nothing and the transition is invisible.
+                string shell = ReadShellForeground();
+
+                if (ShouldRaiseLeft(shell, _lastKey))
+                {
+                    // Cleared as well as raised, and the clearing is the half that
+                    // matters. Coming back to the game compares its key against
+                    // _lastKey, which still holds the game's, so ForegroundChanged
+                    // would not fire and nothing would re-apply. Emptying it here
+                    // is what makes the return visible.
+                    _lastKey = string.Empty;
+                    ForegroundLeft?.Invoke(shell);
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -218,6 +287,64 @@ public sealed class WatchedWindow
         if (_processTick % 2 == 0)
         {
             ScanForLaunches();
+        }
+    }
+
+    /// <summary>
+    /// The name of the foreground process when it is one of the shell processes,
+    /// or empty for anything else.
+    /// </summary>
+    /// <remarks>
+    /// Mirrors the first half of <see cref="Read"/> and reuses the same P/Invokes,
+    /// rather than trying to make Read answer a different question. Read returns a
+    /// whole window with a title and a fullscreen flag, and builds none of that
+    /// here.
+    /// <para>
+    /// The shell is excluded by name rather than by process id, because <c>explorer</c>
+    /// is what the taskbar and the desktop are and there is no id that survives a
+    /// restart to compare against.
+    /// </para>
+    /// </remarks>
+    private static string ReadShellForeground()
+    {
+        try
+        {
+            IntPtr hwnd = GetForegroundWindow();
+
+            // Zero briefly during an alt-tab, and on a locked or minimized desktop.
+            // "I do not know" and "the user is on the desktop" are different, and
+            // only the second one should raise anything.
+            if (hwnd == IntPtr.Zero)
+            {
+                return string.Empty;
+            }
+
+            _ = GetWindowThreadProcessId(hwnd, out uint processId);
+            if (processId == 0)
+            {
+                return string.Empty;
+            }
+
+            using Process process = Process.GetProcessById((int)processId);
+            string name = process.ProcessName;
+
+            foreach (string shell in ShellProcessNames)
+            {
+                if (string.Equals(name, shell, StringComparison.OrdinalIgnoreCase))
+                {
+                    return name;
+                }
+            }
+
+            return string.Empty;
+        }
+        catch (Exception ex)
+        {
+            // A process that exited between the window being read and the name being
+            // asked for is ordinary rather than exceptional, and it must not be
+            // reported as leaving.
+            TraceLog.Write("FOREGROUND", ex);
+            return string.Empty;
         }
     }
 
@@ -401,13 +528,23 @@ public sealed class WatchedWindow
 
             using Process process = Process.GetProcessById((int)processId);
             string name = process.ProcessName;
-            if (name.Equals("GamerTool", StringComparison.OrdinalIgnoreCase)
-                || name.Equals("explorer", StringComparison.OrdinalIgnoreCase)
-                || name.Equals("SearchHost", StringComparison.OrdinalIgnoreCase)
-                || name.Equals("ShellExperienceHost", StringComparison.OrdinalIgnoreCase)
-                || name.Equals("StartMenuExperienceHost", StringComparison.OrdinalIgnoreCase))
+
+            // Gamer Tool is excluded here and deliberately NOT part of
+            // ShellProcessNames. Opening this window is not the user leaving the
+            // game - it is the user coming to the one place the boost can be turned
+            // off - so ForegroundLeft must not fire for it, while Read must still
+            // refuse to report it as the foreground app.
+            if (name.Equals("GamerTool", StringComparison.OrdinalIgnoreCase))
             {
                 return null;
+            }
+
+            foreach (string shell in ShellProcessNames)
+            {
+                if (name.Equals(shell, StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
             }
 
             string path = ReadImagePath(processId);

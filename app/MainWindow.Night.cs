@@ -74,6 +74,49 @@ public partial class MainWindow
     private bool _nightSuppressed;
 
     /// <summary>
+    /// Whether the night filter has to be put back after a stand-down.
+    /// <para>
+    /// Pure, so the three-way answer can be tested without standing up a window,
+    /// a display and a timer. The question is genuinely three-way rather than a
+    /// pair of checks, because the panic key is the case that must differ: every
+    /// other stand-down is the app tidying up and the filter is still wanted,
+    /// while the panic key is the user saying the screen is wrong right now.
+    /// </para>
+    /// </summary>
+    /// <param name="nightApplied">Whether the schedule believes the filter is on.</param>
+    /// <param name="suppressed">Whether the user has overridden it for this window.</param>
+    /// <param name="emergency">Whether this stand-down came from the panic key.</param>
+    internal static bool ShouldReassertNightAfterStandDown(
+        bool nightApplied, bool suppressed, bool emergency) =>
+        nightApplied && !suppressed && !emergency;
+
+    /// <summary>
+    /// Stands the night filter down for good, until the schedule's window next
+    /// changes state.
+    /// <para>
+    /// Only the panic key uses this. Every other stand-down path leaves the filter
+    /// alone, because standing the screen down to take a game preset off is the
+    /// app tidying up after itself, and the evening filter is still what the user
+    /// asked for.
+    /// </para>
+    /// </summary>
+    private void SuppressNightUntilNextWindow()
+    {
+        if (!_nightApplied)
+        {
+            _nightSuppressed = true;
+            return;
+        }
+
+        // EndNightFilter first, so _nightApplied and _nightSuppressed agree. Setting
+        // the flag and letting the next tick notice would leave a window where the
+        // flag says the filter is off while the screen is still warm, and the tick's
+        // equality check would then do nothing at all.
+        EndNightFilter();
+        _nightSuppressed = true;
+    }
+
+    /// <summary>
     /// Whether the app already had a gamma ramp of its own on screen when the
     /// schedule put the filter on.
     /// <para>
@@ -102,6 +145,30 @@ public partial class MainWindow
     /// </summary>
     private int ActiveBlueLightLevel =>
         NightSchedule.EffectiveLevel(_nightApplied, _settings.BlueLightFilter);
+
+    /// <summary>
+    /// How far into its ramp the night filter currently is, 0 to 1.
+    /// <para>
+    /// 1 whenever the filter is not running, so this is only ever consulted for a
+    /// filter the schedule is holding on. That is what keeps the whole fade
+    /// contained inside the night schedule: outside its window nothing here changes,
+    /// and the trim is applied at full strength exactly as it always was.
+    /// </para>
+    /// </summary>
+    private double ActiveBlueLightStrength =>
+        _nightApplied ? _nightStrength : 1.0;
+
+    /// <summary>
+    /// Where the fade has got to, as a fraction of full strength.
+    /// <para>
+    /// Kept rather than recomputed on demand because the quiet push below needs to
+    /// know whether the tint has moved enough to be worth another write to the
+    /// monitor. A ramp over thirty minutes sampled every fifteen seconds produces a
+    /// change of about one percent a tick, and writing the ramp that often is
+    /// pointless I/O against hardware that cannot show the difference.
+    /// </para>
+    /// </summary>
+    private double _nightStrength;
 
     /// <summary>
     /// Fills the schedule row from the profile.
@@ -249,13 +316,36 @@ public partial class MainWindow
 
         bool shouldBeOn = wanted && !_nightSuppressed;
 
+        // Where the fade has got to right now. Zero when suppressed, which is what
+        // makes a manual override an instant turn-off rather than a fade back down:
+        // somebody who has just picked a level by hand wants it now.
+        double strength = _nightSuppressed
+            ? 0.0
+            : NightFade.Strength(
+                _settings.NightBlueLight,
+                _settings.NightStartMinutes,
+                _settings.NightEndMinutes,
+                DateTime.Now.TimeOfDay,
+                _settings.NightFadeMinutes);
+
         if (shouldBeOn == _nightApplied)
         {
+            // Already in the state the schedule wants, but the tint has probably
+            // moved. Nudged rather than reapplied, and only once it has moved enough
+            // to be worth a write - see PushBlueLightQuiet for why the threshold is
+            // what it is.
+            if (shouldBeOn && Math.Abs(strength - _nightStrength) >= QuietPushThreshold)
+            {
+                _nightStrength = strength;
+                PushBlueLightQuiet();
+            }
+
             return;
         }
 
         if (shouldBeOn)
         {
+            _nightStrength = strength;
             StartNightFilter();
         }
         else
@@ -264,10 +354,30 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// How far the fade has to move before another ramp is worth writing.
+    /// <para>
+    /// Two percent, which on the extra warm trim is about a single step of blue
+    /// channel - below what the eye picks out on a screen that is mostly dark. Over a
+    /// thirty minute fade sampled every fifteen seconds, that is one push roughly
+    /// every six ticks rather than every tick.
+    /// </para>
+    /// <para>
+    /// Not free-thresholded, because a change small enough that nobody can see it
+    /// still has to be decided against. This is the number.
+    /// </para>
+    /// </summary>
+    private const double QuietPushThreshold = 0.02;
+
     private void StartNightFilter()
     {
         _nightRampWasOurs = _display.IsEnabled;
         _nightApplied = true;
+
+        // Full strength for a profile with no fade set, and for the first push of a
+        // window whose fade has already elapsed - a machine asleep across the start
+        // of the window should not wake up to a half-warm screen.
+        _nightStrength = 1.0;
 
         PushBlueLight();
         Flash("Night blue light on");
@@ -302,6 +412,11 @@ public partial class MainWindow
     private void EndNightFilter()
     {
         _nightApplied = false;
+
+        // Cleared rather than left at whatever the ramp had reached, so a window that
+        // opens again starts by asking the fade where it is rather than comparing the
+        // new ramp against the last one from hours ago.
+        _nightStrength = 0.0;
 
         // The user's own level is already sitting in the profile untouched, so
         // there is nothing to put back there. This is only about the screen.
@@ -357,6 +472,13 @@ public partial class MainWindow
     /// announce, because a screen that warmed itself should not also shout
     /// "applied" over the top of a game.
     /// </para>
+    /// <para>
+    /// Not used for the intermediate steps of a fade. This path saves the profile,
+    /// repaints the labels and announces the apply, which is right when the filter
+    /// switches and wrong every half minute for half an hour - a toast repeating is
+    /// worse than no fade at all. Those go through <see cref="PushBlueLightQuiet"/>
+    /// instead.
+    /// </para>
     /// </summary>
     private void PushBlueLight()
     {
@@ -394,6 +516,55 @@ public partial class MainWindow
             // or the end-of-window branch acts on a ramp that was never written.
             _nightApplied = false;
             TraceLog.Write("NIGHT the screen refused the filter, so the schedule will try again");
+        }
+    }
+
+    /// <summary>
+    /// Moves the tint along without announcing it, saving it or repainting a label.
+    /// </summary>
+    /// <remarks>
+    /// This is the path every intermediate step of a fade takes, and it deliberately
+    /// does none of the three things <see cref="PushBlueLight"/> does.
+    /// <para>
+    /// No toast, because over a thirty minute fade that is one every few seconds and
+    /// a filter that keeps announcing itself is worse than one that does not fade. No
+    /// profile write, because the strength is derived from the clock rather than
+    /// stored - saving it would write the same file twenty times an evening to record
+    /// something that will be different next time. No label change, because the
+    /// dropdown shows the level and the level is not what is moving.
+    /// </para>
+    /// <para>
+    /// <c>SetWorking</c> before <c>Push</c> because the gamma lock re-pushes whatever
+    /// is in Working, and pushing without setting it would write this step and then
+    /// let the lock put the previous step straight back on the next tick.
+    /// </para>
+    /// <para>
+    /// Refuses when there is nothing to push onto, for the same reason
+    /// <see cref="PushBlueLight"/> does: writing over a screen the user has already
+    /// put right themselves is worse than not fading.
+    /// </para>
+    /// </remarks>
+    private void PushBlueLightQuiet()
+    {
+        if (!_display.IsEnabled)
+        {
+            return;
+        }
+
+        DisplayPreset? active = FindDisplay(_activeDisplayId);
+        if (active is null)
+        {
+            TraceLog.Write("NIGHT the active screen preset is gone, so the fade stopped");
+            return;
+        }
+
+        DisplayPreset effective = DisplayPreset.WithBlueLight(
+            active.Copy(), ActiveBlueLightLevel, ActiveBlueLightStrength);
+
+        _display.SetWorking(effective);
+        if (!_display.Push())
+        {
+            TraceLog.Write("NIGHT a fade step was refused by the display");
         }
     }
 

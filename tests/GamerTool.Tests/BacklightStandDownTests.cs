@@ -119,7 +119,12 @@ public class BacklightStandDownTests
         string slots = Source("MainWindow.Slots.cs");
         string body = BodyAfter(slots, "private async void OnHotkeyPressed");
 
-        AssertUses(body, "GoScreenNeutral()");
+        // Named, not bare: the panic key is the one caller that passes
+        // emergency: true, which is what stops the night filter being re-asserted on
+        // the one path where the user is saying the screen is wrong right now. Asserted
+        // on the argument rather than the method because a bare call here would be the
+        // same test passing while the filter came back on.
+        AssertUses(body, "GoScreenNeutral(emergency: true)");
         Assert.DoesNotContain("GoScreenStandDown()", body, StringComparison.Ordinal);
     }
 
@@ -193,8 +198,11 @@ public class BacklightStandDownTests
         // and fixed in only one of them.
         string display = Source("MainWindow.Display.cs");
 
-        Assert.Equal(1, Count(display, "private void StandDownScreen(bool restorePanel)"));
-        Assert.Equal(1, Count(display, "public void GoScreenNeutral()"));
+        // Full signatures, not prefixes. Both gained an emergency argument since this was
+        // first written, and a prefix match on the old text would have quietly gone
+        // to zero matches rather than failing.
+        Assert.Equal(1, Count(display, "private void StandDownScreen(bool restorePanel, bool emergency = false)"));
+        Assert.Equal(1, Count(display, "public void GoScreenNeutral(bool emergency = false)"));
         Assert.Equal(1, Count(display, "public void GoScreenStandDown()"));
     }
 

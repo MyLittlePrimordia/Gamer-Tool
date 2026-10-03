@@ -444,6 +444,14 @@ public sealed class ProfileManager
             settings.EmergencyHotkey = string.Empty;
         }
 
+        // A fade longer than NightFade.MaxFadeMinutes is a fade that never reaches
+        // full strength inside a normal night's window, so it stops being a fade and
+        // becomes "the filter is always slightly on". Clamped here rather than in
+        // NightFade so the stored value is the one that will actually be used, and a
+        // profile that heals itself rather than carrying a number nothing reads.
+        settings.NightFadeMinutes = Math.Clamp(
+            settings.NightFadeMinutes, 0, NightFade.MaxFadeMinutes);
+
 
 settings.CustomDisplayPresets ??= new List<DisplayPreset>();
         settings.CustomAudioPresets ??= new List<AudioPreset>();

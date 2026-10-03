@@ -449,6 +449,11 @@ public sealed class DisplayLink
     /// is, because neither API hands out a shared identifier: the dxva2 side
     /// knows the monitor as \\.\DISPLAYx and the compositor side knows it as a
     /// friendly name. A miss is harmless, it only leaves the link unreported.
+    /// <para>
+    /// Carried as a separate assertion because it is not what the rest of this
+    /// class can do, not because it is right. Adding <c>GdiDeviceName</c> to a link
+    /// would let it be answered properly; that is 2.3, not here.
+    /// </para>
     /// </summary>
     public bool Matches(string deviceName, string friendlyName) =>
         (FriendlyName.Length > 0
@@ -905,12 +910,15 @@ private static void LeaveBus()
 
                 int stride = Marshal.SizeOf<PHYSICAL_MONITOR>();
                 IntPtr buffer = Marshal.AllocHGlobal(stride * (int)count);
+                bool filled = false;
                 try
                 {
                     if (!GetPhysicalMonitorsFromHMONITOR(handle.Value, count, buffer))
                     {
                         return (false, Marshal.GetLastWin32Error());
                     }
+
+                    filled = true;
 
                     int lastError = 0;
 
@@ -953,7 +961,24 @@ private static void LeaveBus()
                 }
                 finally
                 {
-                    DestroyPhysicalMonitors(count, buffer);
+                    // Only when the fill actually succeeded. AllocHGlobal does not
+                    // zero, so on the failure path above the buffer is whatever
+                    // was in that heap block, and DestroyPhysicalMonitors issues
+                    // a CloseHandle on every hPhysicalMonitor it reads out of it.
+                    // That closes handles this process does not own, and Windows
+                    // recycles a closed handle to the next allocation - so the
+                    // damage lands on some unrelated component later, with
+                    // nothing in this log to connect it back to here.
+                    //
+                    // A handle leaking is the price. The documented behaviour is
+                    // all-or-nothing, so on a refusal there is nothing valid in
+                    // the buffer to release, and guessing at a partial fill would
+                    // mean guessing which entries are real.
+                    if (filled)
+                    {
+                        DestroyPhysicalMonitors(count, buffer);
+                    }
+
                     Marshal.FreeHGlobal(buffer);
                 }
                 }
@@ -1166,6 +1191,7 @@ Task? abandoned = null;
                 // hand is the only version of this that actually works.
                 int stride = Marshal.SizeOf<PHYSICAL_MONITOR>();
                 IntPtr buffer = Marshal.AllocHGlobal(stride * (int)count);
+                bool filled = false;
                 try
                 {
                     if (!GetPhysicalMonitorsFromHMONITOR(hMonitor, count, buffer))
@@ -1178,6 +1204,8 @@ Task? abandoned = null;
                             ElapsedMs = (int)started.ElapsedMilliseconds
                         };
                     }
+
+                    filled = true;
 
                     List<string> declined = new();
                     int lastError = 0;
@@ -1275,7 +1303,14 @@ Task? abandoned = null;
                 }
                 finally
                 {
-                    DestroyPhysicalMonitors(count, buffer);
+                    // Same reason as the write side: the buffer is uninitialised
+                    // until the fill succeeds, and there is no destroying handles
+                    // that were never ours to destroy.
+                    if (filled)
+                    {
+                        DestroyPhysicalMonitors(count, buffer);
+                    }
+
                     Marshal.FreeHGlobal(buffer);
                 }
                 }
@@ -1464,7 +1499,14 @@ if (!read.Wait(ProbeTimeoutMs))
     /// compositor.
     /// </para>
     /// </summary>
-    private static IReadOnlyList<DisplayLink> ReadDisplayLinks()
+    /// <remarks>
+    /// Internal rather than private so the struct layout can be asserted by a test.
+    /// The size of this struct is load-bearing - it goes into the header that Windows
+    /// validates - and nothing in a normal build notices when it is wrong. It was 28
+    /// bytes instead of 32 for exactly that reason, and every advanced colour query
+    /// silently failed as a result.
+    /// </remarks>
+    internal static IReadOnlyList<DisplayLink> ReadDisplayLinks()
     {
         List<DisplayLink> links = new();
 
@@ -1523,28 +1565,23 @@ if (!read.Wait(ProbeTimeoutMs))
                     }
                 };
 
-                bool hdrActive = false;
                 bool advancedKnown = DisplayConfigGetAdvancedColorInfo(ref colour) == 0;
-
-                if (advancedKnown)
-                {
-                    // colorEncoding is DISPLAYCONFIG_COLOR_ENCODING_INTENSITY, the
-                    // SDR value. Anything else means the compositor is driving the
-                    // panel through an HDR encoding.
-                    hdrActive = colour.colorEncoding != 0;
-                }
+                AdvancedColorFlags flags = advancedKnown
+                    ? AdvancedColorFlags.Decode(colour.value)
+                    : default;
 
                 links.Add(new DisplayLink
                 {
                     FriendlyName = friendly,
                     Connection = ConnectionNameOf(path.targetInfo.videoOutputTechnology),
-                    HdrActive = hdrActive,
+                    HdrActive = flags.HdrOn,
                     HdrKnown = advancedKnown,
 
-                    // The OS only answers this for a target it considers advanced
-                    // colour capable, so a successful answer is the strongest
-                    // statement available here without a bus transaction.
-                    HdrSupported = advancedKnown
+                    // What the display can do, as distinct from what is switched on.
+                    // These were the same question before, and answering "yes, this
+                    // supports HDR" with a value that only means "we got an answer" is
+                    // what made the log claim a capable display was merely unknown.
+                    HdrSupported = flags.Supported
                 });
             }
         }
@@ -1632,7 +1669,12 @@ if (!read.Wait(ProbeTimeoutMs))
                     RefreshDenominator = path.targetInfo.refreshRate.Denominator,
                     TargetModeInfoIdx = path.targetInfo.modeInfoIdx,
                     ModeCount = availableModes,
-                    SourceModeInfoOutOfRange = path.sourceModeInfoIdx >= availableModes,
+                    // sourceInfo.modeInfoIdx, not path.sourceModeInfoIdx: the field belongs to the
+                // source union, where it is valid unless the path is virtual-aware. The
+                // value it used to read was the source struct's statusFlags shifted by the
+                // four bytes the phantom field added, so the answer was always "out of
+                // range" and the log reported a mode problem on a perfectly normal path.
+                SourceModeInfoOutOfRange = path.sourceInfo.modeInfoIdx >= availableModes,
                     TargetNameRefused = !targetNameOk,
                     TargetInfoRefused = !targetInfoOk,
                     AdvancedColorRefused = !advancedOk,
@@ -1693,6 +1735,13 @@ if (!read.Wait(ProbeTimeoutMs))
     };
 
 
+    /// <remarks>
+    /// The advanced colour query, kept separate from the link read that
+    /// <see cref="ReadDisplayLinks"/> does. Same call, different purpose: this one
+    /// exists to tell "the driver will not describe this target at all" apart from
+    /// "the driver described it and it is an ordinary SDR panel", which is what
+    /// <see cref="TargetHealthProbe"/> needs and what a log line benefits from.
+    /// </remarks>
     private static DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO AdvancedColorRequest(in DISPLAYCONFIG_PATH_INFO path) => new()
     {
         header = new DISPLAYCONFIG_DEVICE_INFO_HEADER
@@ -1730,6 +1779,16 @@ if (!read.Wait(ProbeTimeoutMs))
     private const uint SourceNameType = 1;
     private const uint TargetNameType = 2;
     private const uint TargetInfoType = 1;
+    /// <summary>
+    /// DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO, which is 9.
+    /// <para>
+    /// Checked against the wingdi.h enum rather than trusted, because the
+    /// neighbouring entries look like a continuation: GET_SDR_WHITE_LEVEL is 11, and
+    /// the newer GET_ADVANCED_COLOR_INFO_2 is 14. Reading 35 off the SDK struct name
+    /// and "fixing" this line to match would make every query fail while looking
+    /// like a correction.
+    /// </para>
+    /// </summary>
     private const uint AdvancedColorInfoType = 9;
 
 
@@ -2198,35 +2257,40 @@ if (!read.Wait(ProbeTimeoutMs))
 
 
     /// <summary>
-    /// The missing field here is not a detail. DISPLAYCONFIG_PATH_INFO is 76
-    /// bytes, and it carries a UINT32 sourceModeInfoIdx between the source and
-    /// the target. Declared without it the struct is 72, and because the two
-    /// sub-structs are laid out sequentially every field of targetInfo is then
-    /// read four bytes early, so the adapter id, the target id and
-    /// videoOutputTechnology are all somebody else's fields.
+    /// 72 bytes, and the size is the whole point of the struct.
     /// <para>
-    /// Measured on a real machine, reading the same buffer both ways: the correct
-    /// layout gives videoOutputTechnology 1 and an adapter id of Low 0 High 264,
-    /// and this one gave 10 and Low 0x0000D9CD High 0. Ten happens to be
-    /// DISPLAYPORT_EXTERNAL, so the bug produced a plausible looking answer
-    /// rather than an obvious one, and the log has been printing
-    /// "DisplayPort, HDR unknown" for every display on every machine as a result.
-    /// The garbage adapter id is the worse half: it is what the request packets
-    /// are built from, so DisplayConfigGetDeviceInfo fails with
-    /// ERROR_INVALID_PARAMETER for a target that exists, which is why HDR has
-    /// read as unknown on every single probe rather than occasionally.
+    /// There is NO <c>sourceModeInfoIdx</c> member here. That field belongs to the
+    /// unions inside <see cref="DISPLAYCONFIG_PATH_SOURCE_INFO"/> and
+    /// <see cref="DISPLAYCONFIG_PATH_TARGET_INFO"/> - <c>desktopModeInfoIdx</c> and
+    /// <c>targetModeInfoIdx</c>, added in Windows 10 for virtual-aware paths - and
+    /// not to the path itself.
     /// </para>
     /// <para>
-    /// The field is never used, and it is declared anyway: leaving it out does not
-    /// make the struct any smaller, it moves everything after it.
+    /// A previous version of this file declared one anyway, between the source and
+    /// the target, on the reasoning that leaving it out "does not make the struct
+    /// any smaller". That reasoning was right about the arithmetic and wrong about
+    /// everything else: it made the struct 76 bytes, which pushed every field of
+    /// targetInfo four bytes late. So the adapter id read here was somebody else's
+    /// number, and because the request packets are built from that adapter id,
+    /// <c>DisplayConfigGetDeviceInfo</c> returned ERROR_INVALID_PARAMETER for
+    /// targets that exist.
+    /// </para>
+    /// <para>
+    /// That is why advanced colour read as unknown on every machine rather than
+    /// occasionally, and why the log printed a connection type it had no business
+    /// reporting. Measured on a real machine, reading one buffer through both
+    /// declarations: the 76 byte one gave adapter id 0x00000000/264, target id 0
+    /// and output technology 1; the correct one gives 0x0000D23D/0, target id 264
+    /// and output technology 10 (DisplayPort external). Ten is a real, plausible
+    /// answer, which is why this never looked obviously broken. The corrected
+    /// adapter id is the one that makes
+    /// <see cref="DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO"/> come back rc=0.
     /// </para>
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     private struct DISPLAYCONFIG_PATH_INFO
     {
         public DISPLAYCONFIG_PATH_SOURCE_INFO sourceInfo;
-
-        public uint sourceModeInfoIdx;
 
         public DISPLAYCONFIG_PATH_TARGET_INFO targetInfo;
 
@@ -2267,21 +2331,13 @@ if (!read.Wait(ProbeTimeoutMs))
 
 
     /// <summary>
-    /// The layout has to match the SDK exactly, and the sizes are measured on a
-    /// real machine rather than assumed: the header is 20 bytes, this one 48 and
-    /// the advanced colour block 16.
+    /// The layout has to match the SDK exactly. Sizes are measured on a real
+    /// machine rather than assumed: the header is 20 bytes, this one 404, the path
+    /// 72 and the advanced colour block 32.
     /// <para>
     /// The header is 20 and not 24, because LUID is two 32 bit fields and so
     /// aligns to 4; adding Pack = 8 does not change that, because Pack caps
-    /// alignment rather than raising it. The one that was actually wrong is on
-    /// <see cref="DISPLAYCONFIG_PATH_INFO"/>: it was declared at 72 when the real
-    /// size is 76, which put every target field four bytes out.
-    /// </para>
-    /// <para>
-    /// The query still fails on some driver and build combinations, returning
-    /// ERROR_INVALID_PARAMETER, which is why HDR is reported as a tri-state and
-    /// never guessed at. dxdiag remains the fallback for that question, and it is
-    /// far too slow to call per probe.
+    /// alignment rather than raising it.
     /// </para>
     /// </summary>
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -2297,10 +2353,35 @@ if (!read.Wait(ProbeTimeoutMs))
     }
 
 
+    /// <summary>
+    /// The compositor's answer about a display's advanced colour support.
+    /// <para>
+    /// 32 bytes, and the size matters: the header's own size field is filled from
+    /// <c>Marshal.SizeOf</c> of this struct and Windows rejects the call when it
+    /// does not match what it expects. The anonymous union between the header and
+    /// colorEncoding was missing from this declaration, which made the struct 28
+    /// bytes and meant every call failed with ERROR_INVALID_PARAMETER - so
+    /// <see cref="DisplayLink.HdrKnown"/> was false on every machine and the log
+    /// always read "HDR unknown".
+    /// </para>
+    /// <para>
+    /// That union is four bit flags and a plain value word in the same four bytes.
+    /// Without it, the field that <c>value</c> names was being read as
+    /// <c>colorEncoding</c>, so the old check was asking whether a colour encoding
+    /// was non-zero while actually asking whether any advanced colour flag was set -
+    /// including "supported", which is true of a display merely being capable.
+    /// </para>
+    /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     private struct DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO
     {
         public DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+
+        /// <summary>
+        /// Advanced colour flags. Decoded by <see cref="AdvancedColorFlags.Decode"/>,
+        /// which is where the bit meanings are defined.
+        /// </summary>
+        public uint value;
 
         public uint colorEncoding;
 
