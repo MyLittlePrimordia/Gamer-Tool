@@ -82,6 +82,105 @@ public class BacklightConcurrencyTests
         }
     }
 
+    /// <summary>
+    /// A bus that swaps the profile out from under the probe, from inside the one
+    /// call the probe makes between reading its inputs and writing its result.
+    /// <para>
+    /// This is what lets the test below need no sleeping and no repetition. A
+    /// rebind racing a probe from another thread is a race, so a test built on one
+    /// either passes every run and proves nothing, or fails some runs and is a
+    /// nuisance. Doing the swap from inside <see cref="ProbeAll"/> puts it at a
+    /// point the service chooses, so the interleaving is the same every time.
+    /// </para>
+    /// </summary>
+    private sealed class RebindingBus : IBacklightBus
+    {
+        public BacklightService? Service { get; set; }
+
+        public AppSettings? Incoming { get; set; }
+
+        /// <summary>The exclusion list the probe was actually handed, to check whose it was.</summary>
+        public IReadOnlyCollection<string>? ExcludedSeen { get; private set; }
+
+        public IReadOnlyList<MonitorProbe> ProbeAll(IReadOnlyCollection<string>? excluded)
+        {
+            ExcludedSeen = excluded;
+
+            Service?.Rebind(Incoming!);
+
+            // A display that was asked and said no. One that answered would reset
+            // the round counter to zero and write nothing back, which would leave
+            // the test asserting nothing at all.
+            return new[]
+            {
+                new MonitorProbe
+                {
+                    DeviceName = Device,
+                    FriendlyName = "Test Monitor",
+                    Edid = new EdidReading { Manufacturer = "TST", Verdict = EdidVerdict.Plausible },
+                    Outcome = BusOutcome.Refused,
+                    Brightness = null,
+                }
+            };
+        }
+
+        public BusOutcome TrySetBrightness(string deviceName, uint value, uint min, uint max, out string? why, out int win32Error)
+        {
+            why = null;
+            win32Error = 0;
+            return BusOutcome.Ok;
+        }
+    }
+
+    /// <summary>
+    /// A restore replaces the whole profile object while a probe is running on a
+    /// worker, so the service is reading and writing a reference it can replace.
+    /// Binding that reference once per block is what keeps one profile's gate from
+    /// ending up guarding another profile's collections.
+    /// <para>
+    /// What this test actually pins is the state-level consequence: an interrupted
+    /// probe must not lose its round, must not record it twice, and must not throw.
+    /// A round written to neither profile is the failure that matters, because the
+    /// rule retiring the feature after two rounds would then never reach two.
+    /// </para>
+    /// <para>
+    /// It does not, and cannot, isolate the instruction window itself - the few
+    /// steps between the field being read to choose the lock and the body reading it
+    /// again. There is no seam inside a locked block to drive that from, and adding
+    /// one for a window this narrow would be more machinery than the defect. So
+    /// this test also passes against the unfixed service, and the fix rests on the
+    /// invariant being right rather than on this being a reproduction.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void A_rebind_during_a_probe_accounts_for_the_round_on_exactly_one_profile()
+    {
+        AppSettings before = new() { HardwareBrightnessEnabled = true };
+        AppSettings after = new() { HardwareBrightnessEnabled = true };
+        before.ExcludedDdcMonitors.Add(Device);
+        after.ExcludedDdcMonitors.Add(@"\\.\DISPLAY9");
+
+        var bus = new RebindingBus();
+        BacklightService service = new(before, bus);
+        bus.Service = service;
+        bus.Incoming = after;
+
+        service.Probe();
+
+        // The probe was started under 'before', so that is the profile whose
+        // exclusions it must have handed to the bus. Reading the incoming one's
+        // would mean the probe and the profile it began under have come apart.
+        Assert.Same(before.ExcludedDdcMonitors, bus.ExcludedSeen);
+
+        bool beforeCarries = before.HardwareBrightnessFailedRounds != 0;
+        bool afterCarries = after.HardwareBrightnessFailedRounds != 0;
+        Assert.True(
+            beforeCarries ^ afterCarries,
+            "the round was recorded on neither profile, or on both: before="
+            + before.HardwareBrightnessFailedRounds.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + " after=" + after.HardwareBrightnessFailedRounds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
     [Fact]
     public async Task Repainting_the_rows_while_a_probe_runs_does_not_throw()
     {

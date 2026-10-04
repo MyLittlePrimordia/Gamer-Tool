@@ -100,6 +100,27 @@ public sealed class FxSoundState
         }
     }
 
+
+    /// <summary>
+    /// The engine's own settings file, which is a different file from
+    /// <see cref="StatusPath"/> and is not written by the same thing.
+    /// <para>
+    /// This is the one FxSound's own window writes when the user changes anything in
+    /// it, including the power toggle. <see cref="StatusPath"/> is only rewritten
+    /// when something runs the command line, which is why a power button pressed in
+    /// FxSound could be invisible to a reader of the status file until the next
+    /// command happened to run.
+    /// </para>
+    /// </summary>
+    public static string SettingsPath
+    {
+        get
+        {
+            string root = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            return Path.Combine(root, "FxSound", "FxSound.settings");
+        }
+    }
+
     public static FxSoundState? TryRead()
     {
         try
@@ -144,8 +165,8 @@ public sealed class FxSoundState
 
             state.Version = ReadString(root, "version");
 
-if (root.TryGetProperty("power", out JsonElement power))
-        {
+            if (root.TryGetProperty("power", out JsonElement power))
+            {
             // Both facts recorded: what it said, and that it said it. Only the
             // second one makes the first trustworthy, because a missing key used to
             // be indistinguishable from a false one.
@@ -254,13 +275,12 @@ if (root.TryGetProperty("power", out JsonElement power))
     /// </summary>
     private static string ReadShared(string path)
     {
-        using FileStream stream = new(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete);
-        using StreamReader reader = new(stream);
-        return reader.ReadToEnd();
+        // Capped for the same reason, and it matters more here than anywhere else:
+        // the engine rewrites this file continuously and the app reads it on a
+        // timer, so the read races a writer rather than following one. A read that
+        // lands mid-rewrite fails on the JSON, which is handled - a read that lands
+        // on a file that has somehow grown is not.
+        return BoundedRead.AllText(path);
     }
 
     /// <summary>

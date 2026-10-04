@@ -49,8 +49,37 @@ public sealed class LoopbackSampleFeed : ISampleFeed
     /// </summary>
     private const int StaleMs = 150;
 
+    /// <summary>
+    /// Shortest gap between two reopen attempts, in milliseconds.
+    /// <para>
+    /// The quiet test is already enough to stop this being a per-frame loop, and
+    /// that is worth being precise about rather than crediting this with it:
+    /// <see cref="Note"/> clears <see cref="IsLive"/> while the capture is being
+    /// replaced, and <see cref="Open"/> restarts the grace period, so a reopen
+    /// cannot happen on consecutive frames however fast they arrive.
+    /// </para>
+    /// <para>
+    /// What that leaves is one attempt per <see cref="StaleMs"/>, which for a
+    /// capture that opens cleanly and then never delivers a buffer is under seven
+    /// a second, each one writing a log line and re-checking the log folder - for
+    /// as long as the machine is in that state. A capture that cannot be made to
+    /// deliver is not going to start delivering four times a second, so the
+    /// attempts are spaced out to something nobody would notice.
+    /// </para>
+    /// <para>
+    /// Two seconds rather than something longer because the same gate covers a
+    /// genuine default-device change, and a spectrum that takes noticeably long to
+    /// come back after a headset is plugged in reads as broken. Two seconds is well
+    /// inside what a person watches for and well outside the retry rate.
+    /// </para>
+    /// </summary>
+    private const int MinReopenGapMs = 2000;
+
     private readonly float[] _ring = new float[RingSamples];
     private readonly object _ringGate = new();
+
+    /// <summary>When a reopen was last attempted, so retries are spaced out.</summary>
+    private long _lastReopenAt;
 
     /// <summary>
     /// When a buffer last arrived, so a capture that has gone quiet can be told
@@ -103,9 +132,6 @@ public sealed class LoopbackSampleFeed : ISampleFeed
     /// </para>
     /// </summary>
     private WaveFormat? _format;
-
-    /// <summary>Raised when the endpoint is gone, so the log can say so once.</summary>
-    public event Action<string>? CaptureLost;
 
     public bool IsLive { get; private set; }
 
@@ -257,11 +283,22 @@ public sealed class LoopbackSampleFeed : ISampleFeed
             return 0;
         }
 
+        // Both reopen paths below are gated on this, so the spacing is one rule rather
+        // than one per call site. Cheap enough to ask first: when it says no, the
+        // default-endpoint query below - which opens and closes a COM enumerator
+        // every frame - is skipped as well.
+        bool mayReopen = ReopenDue();
+
         // Checked here rather than only on the capture event, because that event
         // is not the first thing to notice. The default endpoint can change while
         // everything still looks healthy, and the test is free.
-        if (IsLive && DefaultEndpointChanged())
+        if (mayReopen && IsLive && DefaultEndpointChanged())
         {
+            // Stamped before the attempt rather than after, so a reopen that throws
+            // still counts against the gap. Otherwise a capture that cannot be
+            // opened retries as fast as the frames arrive, which is the case this
+            // exists for.
+            Interlocked.Exchange(ref _lastReopenAt, Environment.TickCount64);
             Note("default audio device changed, reopening capture");
             Close();
             Open();
@@ -272,8 +309,9 @@ public sealed class LoopbackSampleFeed : ISampleFeed
         // ever arrives again. Left alone that is the frozen spectrum described on
         // this method: the same window, redrawn sixty times a second, looking for
         // all the world like a meter stuck on a peak.
-        if (IsLive && CaptureHasGoneQuiet())
+        if (mayReopen && IsLive && CaptureHasGoneQuiet())
         {
+            Interlocked.Exchange(ref _lastReopenAt, Environment.TickCount64);
             Note("loopback stopped delivering audio, reopening capture");
             Close();
             Open();
@@ -311,6 +349,21 @@ public sealed class LoopbackSampleFeed : ISampleFeed
     /// and then never delivers anything at all.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Whether enough time has passed since the last reopen attempt.
+    /// <para>
+    /// Interlocked rather than locked because this is asked on every frame of the
+    /// spectrum and the ring lock is held sixty times a second elsewhere. A plain
+    /// long read is atomic here anyway on the platforms this runs on; the
+    /// interlocked is so that is stated rather than assumed.
+    /// </para>
+    /// </summary>
+    private bool ReopenDue()
+    {
+        long last = Interlocked.Read(ref _lastReopenAt);
+        return last == 0 || Environment.TickCount64 - last >= MinReopenGapMs;
+    }
+
     private bool CaptureHasGoneQuiet()
     {
         long last = Interlocked.Read(ref _lastDataAt);
@@ -446,10 +499,13 @@ public sealed class LoopbackSampleFeed : ISampleFeed
 
     private void Note(string reason)
     {
+        // Was also raising an event nothing anywhere subscribed to, so the one
+        // piece of information the class produced for anybody watching it went to
+        // nobody. LastFailure and the log line are what the app actually reads,
+        // and the reason is on both.
         IsLive = false;
         LastFailure = reason;
         TraceLog.Write("SPECTRUM loopback: " + reason);
-        CaptureLost?.Invoke(reason);
     }
 
     /// <summary>

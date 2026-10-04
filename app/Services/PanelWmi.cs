@@ -51,13 +51,41 @@ public static class PanelWmi
     /// <summary>What the panel is called on screen.</summary>
     public const string FriendlyName = "Laptop screen";
 
+
+    /// <summary>
+    /// How long any one of the queries below is given before it is abandoned.
+    /// <para>
+    /// The default is infinite, and that is the whole problem. A WMI provider that
+    /// stops answering - a laptop resuming, a driver half-loaded, the service busy
+    /// under load - turns <c>searcher.Get()</c> into a call that never returns. The
+    /// probe thread is then stuck inside it, and because the flag saying a probe is
+    /// in flight is only cleared in a finally, every later probe for the rest of the
+    /// session is refused with "backlight probe already running". One hung query
+    /// costs the whole feature until the app is restarted, and the setting behind it
+    /// never comes back on.
+    /// </para>
+    /// <para>
+    /// Deliberately generous, because WMI is slow to answer for the first time on a
+    /// loaded machine and giving up early would report "no panel" on a laptop that
+    /// has one. Long enough to be patient about a cold start, short enough that a
+    /// wedged provider is something the session survives.
+    /// </para>
+    /// </summary>
+    private static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(5);
+
+
+    /// <summary>
+    /// A searcher bounded by <see cref="QueryTimeout"/>, so no caller can forget.
+    /// </summary>
+    private static ManagementObjectSearcher Searcher(string query) =>
+        new(Namespace, query, new EnumerationOptions { Timeout = QueryTimeout });
+
     /// <summary>Whether this machine has a panel that answers at all.</summary>
     public static bool IsAvailable()
     {
         try
         {
-            using ManagementObjectSearcher searcher = new(
-                Namespace,
+            using ManagementObjectSearcher searcher = Searcher(
                 "SELECT InstanceName FROM WmiMonitorBrightnessMethods");
             using ManagementObjectCollection results = searcher.Get();
             return results.Count > 0;
@@ -66,7 +94,12 @@ public static class PanelWmi
         {
             // No such class on a desktop, or WMI is not running, or a policy has
             // it off. All of those mean the same thing here: no panel to talk to.
-            TraceLog.Write("PANEL availability: " + ex.GetType().Name);
+            //
+            // Collapsing them to one answer is right; collapsing them to one
+            // silent answer was not. They are told apart in the log, because "no
+            // panel" and "panel there, WMI service broken" want different fixes
+            // and only this line can say which it was.
+            TraceLog.Write("PANEL availability", ex);
             return false;
         }
     }
@@ -76,8 +109,7 @@ public static class PanelWmi
     {
         try
         {
-            using ManagementObjectSearcher searcher = new(
-                Namespace,
+            using ManagementObjectSearcher searcher = Searcher(
                 "SELECT CurrentBrightness FROM WmiMonitorBrightness WHERE Active=TRUE");
             using ManagementObjectCollection results = searcher.Get();
 
@@ -91,7 +123,10 @@ public static class PanelWmi
         }
         catch (Exception ex)
         {
-            TraceLog.Write("PANEL read: " + ex.GetType().Name);
+            // Not a bare type name. A read that returns null is the same answer as a
+            // panel that is simply off, so without the cause here the user is told
+            // nothing they can act on.
+            TraceLog.Write("PANEL read", ex);
         }
 
         return null;
@@ -111,8 +146,7 @@ public static class PanelWmi
         {
             byte level = (byte)Math.Clamp(percent, 0, 100);
 
-            using ManagementObjectSearcher searcher = new(
-                Namespace,
+            using ManagementObjectSearcher searcher = Searcher(
                 "SELECT * FROM WmiMonitorBrightnessMethods WHERE Active=TRUE");
             using ManagementObjectCollection results = searcher.Get();
 
@@ -131,7 +165,14 @@ public static class PanelWmi
         }
         catch (Exception ex)
         {
-            TraceLog.Write("PANEL write: " + ex.GetType().Name);
+            // The one that matters most. A false here becomes a Refused from the
+            // composite bus, and a Refused counts toward RefusalsBeforeExclusion -
+            // three of them and this panel is written off for good and the
+            // exclusion is saved to settings.json. A permanent verdict reached on
+            // three refusals whose only record was the word "ManagementException"
+            // is not a verdict, it is a guess. This is the whole evidence for it,
+            // so it carries the message, the stack and anything underneath.
+            TraceLog.Write("PANEL write", ex);
             return false;
         }
     }

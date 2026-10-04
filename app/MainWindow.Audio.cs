@@ -342,6 +342,20 @@ public partial class MainWindow : Window
 
         bool missing = health.HowItIs == FxHealth.State.Missing;
 
+        // The installed version is read from the engine's own snapshot rather
+        // than out of the update state. That way it is on screen before anything
+        // has been checked at all, and it stays correct on a machine where the
+        // check cannot answer.
+        //
+        // It used to come from the update state alone, and that state only
+        // carried a version for one of its four outcomes. So "Up to date" was
+        // all this panel could ever say about the version it had just checked,
+        // and the number the button went to the network for was thrown away the
+        // moment it turned out nothing was newer.
+        string installed = snapshot is null || snapshot.Version.Length == 0
+            ? string.Empty
+            : snapshot.Version;
+
         FxStateText.Text = health.HowItIs == FxHealth.State.Ok
             ? "Ready"
             : System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(
@@ -379,13 +393,20 @@ public partial class MainWindow : Window
             // question somebody will want to answer with the path.
             FxPathText.Text = _audio.ExePath;
 
-            FxVersionText.Text = health.Detail.Length > 0
-                ? health.Detail
-                : _fxUpdateAvailable
-                    ? "Version " + _fxUpdateVersion + " is out"
-                    : _fxUpdateChecked
-                        ? "Up to date"
-                        : "Installed  ·  update not checked";
+            string update = _fxUpdate switch
+            {
+                { Outcome: FxUpdateOutcome.NewerAvailable } found => "Version " + found.Version + " is out",
+                { Outcome: FxUpdateOutcome.UpToDate } => "up to date",
+                { Outcome: FxUpdateOutcome.NoChecker } => "winget not on this PC",
+                { Outcome: FxUpdateOutcome.Failed } => "update check failed",
+                _ => "update not checked",
+            };
+
+            // The engine's own complaint still outranks the update note, because it
+            // is the more urgent of the two, but it no longer replaces the line. It
+            // is appended to it, so a version is on screen in every state.
+            FxVersionText.Text = (installed.Length > 0 ? "Installed " + installed : "Installed") + "  ·  "
+                + (health.Detail.Length > 0 ? health.Detail : update);
 
             FxInstallButton.Visibility = Visibility.Collapsed;
 
@@ -408,18 +429,31 @@ public partial class MainWindow : Window
         // control that exists in the markup and is unreachable in the app, which
         // is the exact thing this project is trying not to ship.
         FxUpgradeButton.Visibility = missing ? Visibility.Collapsed : Visibility.Visible;
-        FxUpgradeLabel.Text = _fxUpdateAvailable && _fxUpdateVersion.Length > 0
-            ? "Update to " + _fxUpdateVersion
-            : _fxUpdateChecked ? "Up to date" : "Check update";
+        FxUpgradeLabel.Text = _fxUpdate switch
+        {
+            { Outcome: FxUpdateOutcome.NewerAvailable } found when found.Version.Length > 0 => "Update to " + found.Version,
+            { Outcome: FxUpdateOutcome.UpToDate } => "Up to date",
+            // Not "Check update": there is nothing here that can answer the
+            // question, so pressing it would run the same unanswered check again.
+            // It says what it is going to do instead.
+            { Outcome: FxUpdateOutcome.NoChecker } => "Update",
+            { Outcome: FxUpdateOutcome.Failed } => "Try again",
+            _ => "Check update",
+        };
 
         // Labelled by its label rather than its content. Setting Content to a
         // string replaces the styled panel inside the button, so the emoji and the
         // button's own padding went with it the moment an update was found.
-        FxUpgradeButton.ToolTip = _fxUpdateAvailable
-            ? "Install FxSound " + _fxUpdateVersion
-            : _fxUpdateChecked
-                ? "Already looked; winget reported nothing newer"
-                : "Ask winget whether a newer FxSound exists. This is the only thing in the app that uses the network.";
+        FxUpgradeButton.ToolTip = _fxUpdate switch
+        {
+            { Outcome: FxUpdateOutcome.NewerAvailable } found => "Install FxSound " + found.Version,
+            { Outcome: FxUpdateOutcome.UpToDate } => installed.Length > 0
+                ? "FxSound " + installed + " is installed and winget reported nothing newer"
+                : "Already looked; winget reported nothing newer",
+            { Outcome: FxUpdateOutcome.NoChecker } => "winget is not installed, so there is nothing to check against. This downloads the current release directly.",
+            { Outcome: FxUpdateOutcome.Failed } => "The last check did not answer. Press to ask again.",
+            _ => "Ask winget whether a newer FxSound exists. This is the only thing in the app that uses the network.",
+        };
 
         UpdatePresetChrome();
     }
@@ -1657,8 +1691,18 @@ public partial class MainWindow : Window
         // One read at a time. The poll interval is shorter than the worst case
         // read, so without this the timer can start a second read while the first
         // is still inside the engine and the two race over the cached state.
+        //
+        // A request that arrives while a read is in flight is remembered rather
+        // than dropped. Dropping it is what left the settings line three and four
+        // seconds stale after somebody pressed FxSound's power button: the watch
+        // fired, landed on top of a poll that had already started, and was thrown
+        // away, so the only thing left to notice the change was the next tick.
+        // The requests that matter most are the ones raised by a person pressing a
+        // button in another program, and those are exactly the ones most likely to
+        // arrive mid-read.
         if (Interlocked.Exchange(ref _fxStateBusy, 1) == 1)
         {
+            Interlocked.Exchange(ref _fxStateQueued, 1);
             return;
         }
 
@@ -1684,6 +1728,19 @@ public partial class MainWindow : Window
         finally
         {
             Interlocked.Exchange(ref _fxStateBusy, 0);
+
+            // Drain the request that arrived while this read was in flight, once the
+            // guard is clear. Forced, because it exists to catch a change that just
+            // happened and the cached answer would be the one taken before it.
+            //
+            // Started from the finally rather than after it, and deliberately not
+            // awaited: this is the tail of an async method on the dispatcher, and
+            // awaiting would mean the read only ever completes once the follow-up
+            // read has too.
+            if (Interlocked.Exchange(ref _fxStateQueued, 0) == 1)
+            {
+                _ = RefreshFxStateAsync(true);
+            }
         }
     }
 

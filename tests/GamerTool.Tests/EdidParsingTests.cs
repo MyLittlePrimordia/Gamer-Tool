@@ -299,28 +299,36 @@ public class EdidParsingTests
     }
 
     [Fact]
-    public void An_edid_the_driver_withheld_is_flagged_as_withheld()
+    public void An_edid_read_from_the_windows_cache_is_flagged_as_such()
     {
-        // The flag the diagnosis leans on. A missing DDC/CI handle on its own is
-        // ambiguous; a driver that also declines to name the monitor is not, and
-        // this is the property that carries that.
+        // What the diagnosis leans on. A missing DDC/CI handle on its own is
+        // ambiguous; a driver that also will not name the monitor is not, and this
+        // is the property that carries that.
+        //
+        // This asserted true for "none" as well, on the grounds that an unprobed
+        // display should be treated as the case worth investigating. That was
+        // arranged by the predicate being `!= "driver"`, which was true of every
+        // display on every machine because the live EDID request could never be
+        // satisfied - so it was not a safe default, it was a constant. A display
+        // with no EDID anywhere is now distinguishable from one Windows had a
+        // cached block for, which is what a support log actually needs.
         Assert.True(new MonitorProbe { EdidSource = "registry" }.EdidWithheld);
-        Assert.True(new MonitorProbe { EdidSource = "none" }.EdidWithheld);
+        Assert.False(new MonitorProbe { EdidSource = "none" }.EdidWithheld);
     }
 
     [Fact]
-    public void An_edid_the_driver_supplied_is_not_flagged_as_withheld()
+    public void An_edid_the_driver_supplied_is_not_flagged_as_cached()
     {
         Assert.False(new MonitorProbe { EdidSource = "driver" }.EdidWithheld);
     }
 
     [Fact]
-    public void An_unprobed_display_is_assumed_to_have_had_its_edid_withheld()
+    public void An_unprobed_display_is_not_claimed_to_have_a_cached_edid()
     {
-        // The default, and it is the safe direction: the flag only ever adds
-        // corroboration to a verdict that has already been reached by other means,
-        // so an unknown is treated as the case worth investigating rather than the
-        // one worth dismissing.
-        Assert.True(new MonitorProbe().EdidWithheld);
+        // The default is "none", and it now says so rather than asserting a cache
+        // hit that has not happened. The flag only ever added corroboration to a
+        // verdict reached by other means, so losing it on an unprobed display costs
+        // nothing; claiming it would have cost the log its credibility.
+        Assert.False(new MonitorProbe().EdidWithheld);
     }
 }

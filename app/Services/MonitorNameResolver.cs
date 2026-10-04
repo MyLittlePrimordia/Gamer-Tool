@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Concurrent;
-using System.Linq;
 using System.Text;
 using Microsoft.Win32;
 
@@ -51,20 +50,13 @@ public static class MonitorNameResolver
     {
         try
         {
-            int split = deviceId.IndexOf('\\');
-            if (split < 0)
+            string hardwareId = DisplayRegistry.HardwareKeyOf(deviceId);
+            if (hardwareId.Length == 0)
             {
                 return null;
             }
 
-            string hardwareId = deviceId.Substring(split + 1);
-            int cut = hardwareId.IndexOf('{');
-            if (cut > 0)
-            {
-                hardwareId = hardwareId.Substring(0, cut);
-            }
-
-            string root = @"SYSTEM\CurrentControlSet\Enum\DISPLAY\" + hardwareId;
+            string root = DisplayRegistry.PanelRoot + "\\" + hardwareId;
             using RegistryKey? baseKey = Registry.LocalMachine.OpenSubKey(root);
             if (baseKey is null)
             {
@@ -131,20 +123,13 @@ public static class MonitorNameResolver
     {
         try
         {
-            int split = deviceId.IndexOf('\\');
-            if (split < 0)
+            string hardwareId = DisplayRegistry.HardwareKeyOf(deviceId);
+            if (hardwareId.Length == 0)
             {
                 return null;
             }
 
-            string hardwareId = deviceId.Substring(split + 1);
-            int cut = hardwareId.IndexOf('{');
-            if (cut > 0)
-            {
-                hardwareId = hardwareId.Substring(0, cut);
-            }
-
-            using RegistryKey? baseKey = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Enum\DISPLAY\" + hardwareId);
+            using RegistryKey? baseKey = Registry.LocalMachine.OpenSubKey(DisplayRegistry.PanelRoot + "\\" + hardwareId);
             if (baseKey is null)
             {
                 return null;
@@ -153,7 +138,7 @@ public static class MonitorNameResolver
             foreach (string sub in baseKey.GetSubKeyNames())
             {
                 using RegistryKey? entry = baseKey.OpenSubKey(sub + @"\Device Parameters");
-                byte[]? edid = ReadEdidValue(entry?.GetValue("EDID"));
+                byte[]? edid = DisplayRegistry.EdidBytes(entry?.GetValue("EDID"));
 
                 if (edid is null)
                 {
@@ -176,27 +161,15 @@ public static class MonitorNameResolver
     }
 
     /// <summary>
-    /// The EDID as bytes, whichever shape the registry hands it back.
+    /// Reads a VESA descriptor block out of an EDID as text.
     /// <para>
-    /// The value reads back as <c>byte[]</c> in theory and as <c>Object[]</c> in
-    /// practice, and a bare <c>is byte[]</c> test throws the second shape away
-    /// silently, which is what left this file naming a perfectly good panel
-    /// "Screen 1" while the file that reads the same value for the backlight
-    /// probe had already worked round it.
+    /// The bounds check covers the descriptor header and not the text inside it,
+    /// which is why it starts at 5: bytes 0 to 2 are the header, 3 and 4 are the
+    /// designated range the text must fall inside, and 5 to 17 are the thirteen
+    /// bytes of text. Every one of those is inside the eighteen the check has
+    /// already confirmed, so a short block cannot be indexed past its end.
     /// </para>
     /// </summary>
-    private static byte[]? ReadEdidValue(object? raw)
-    {
-        return raw switch
-        {
-            byte[] direct when direct.Length >= 128 => direct,
-            object[] boxed when boxed.Length >= 128 => boxed
-                .Select(v => v is byte b ? b : (byte)0)
-                .ToArray(),
-            _ => null
-        };
-    }
-
     private static string? ReadDescriptor(byte[] edid, byte tag)
     {
         for (int index = 0; index < 4; index++)

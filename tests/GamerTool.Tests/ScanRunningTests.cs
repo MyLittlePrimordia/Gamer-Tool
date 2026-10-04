@@ -95,24 +95,32 @@ public class ScanRunningTests
 
         foreach (AppCandidate candidate in found)
         {
-            using Process process = Process.GetProcessById(
-                Array.Find(
-                    Process.GetProcesses(),
-                    p => string.Equals(
-                        ProcessWatcherService.ReadImagePath((uint)p.Id),
-                        candidate.ExePath,
-                        StringComparison.OrdinalIgnoreCase))?.Id ?? -1);
-
-            if (process.Id <= 0)
+            // The process the scan actually read, by id.
+            //
+            // It used to go back to it by exe path, which cannot identify a process:
+            // a launcher and the game it launched share an image path, and the
+            // launcher is the one without a window. Re-finding by path could land on
+            // that second instance and report a windowless process as offered, which
+            // is a failure of the test's own bookkeeping rather than of the filter.
+            // It went off at random, on whichever app happened to be running twice.
+            Process? process;
+            try
             {
-                // It exited between the scan and this check, which is the normal
-                // case on a busy machine and not a failure.
+                process = Process.GetProcessById(candidate.ProcessId);
+            }
+            catch (ArgumentException)
+            {
+                // It exited between the scan and this check, which is the normal case
+                // on a busy machine and not a failure.
                 continue;
             }
 
-            Assert.True(
-                process.MainWindowHandle != IntPtr.Zero,
-                candidate.Name + " was offered without a window");
+            using (process)
+            {
+                Assert.True(
+                    process.MainWindowHandle != IntPtr.Zero,
+                    candidate.Name + " was offered without a window");
+            }
         }
     }
 

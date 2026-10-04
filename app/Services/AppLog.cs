@@ -375,7 +375,12 @@ public static class AppLog
                     ? "  [class " + monitor.Protection.AdapterKey + "]"
                     : string.Empty));
             lines.Add("    edid source  : " + monitor.EdidSource
-                + (monitor.EdidWithheld ? "  (driver withheld it)" : string.Empty)
+                // Was "(driver withheld it)", which described a refusal that never
+                // happened: the live EDID request could not be satisfied on any
+                // machine, so nothing was ever withheld. What the flag actually
+                // distinguishes is having a cached block against having none, and
+                // that is worth saying in a support log.
+                + (monitor.EdidWithheld ? "  (read from the Windows cache)" : string.Empty)
                 + (HardwareBrightness.RegistryMatchBy.Length > 0 && monitor.EdidSource == "registry"
                     ? " (" + Sanitise(HardwareBrightness.RegistryMatchBy) + ")"
                     : string.Empty));

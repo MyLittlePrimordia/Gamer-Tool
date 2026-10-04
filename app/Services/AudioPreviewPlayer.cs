@@ -69,9 +69,6 @@ public sealed class AudioPreviewPlayer : IDisposable
     /// <summary>The loop currently loaded.</summary>
     public PreviewTrack Track { get; private set; } = PreviewTrack.Game;
 
-    /// <summary>Raised when the loaded loop changes, so the page can restyle its toggle.</summary>
-    public event Action? TrackChanged;
-
     /// <summary>Switches loop, keeping playback running across the change where possible.</summary>
     public void SetTrack(PreviewTrack track)
     {
@@ -81,7 +78,6 @@ public sealed class AudioPreviewPlayer : IDisposable
         }
 
         Track = track;
-        TrackChanged?.Invoke();
         Prepare();
     }
 
@@ -276,8 +272,125 @@ public sealed class AudioPreviewPlayer : IDisposable
     }
 
     /// <summary>
+    /// Stops the endpoint and disposes the sample chain, holding <c>_gate</c> only
+    /// while the fields are swapped and never across the device.
+    /// <para>
+    /// This is the one place the locking rule lives, because the loop calls it from
+    /// the thread that has to be waited for. <see cref="WasapiOut.Stop"/> waits for
+    /// the playback thread, and when the loop ends the playback thread is the one
+    /// calling in here. So a caller on any other thread - Stop, Pause or Dispose,
+    /// all of them a click away - holding the gate while it joins, against this
+    /// thread waiting for that gate, is a deadlock. The way in is pressing stop as
+    /// the loop happens to end.
+    /// </para>
+    /// <para>
+    /// Same shape and the same reason as the capture teardown in
+    /// <c>LoopbackSampleFeed</c>: the lock protects the fields, never the device.
+    /// </para>
+    /// </summary>
+    private void TearDown()
+    {
+        WasapiOut? output;
+        PreviewMixProvider? mix;
+        Mp3FileReader? reader;
+
+        lock (_gate)
+        {
+            // Taken before the field swap so a loop that ends from here on sees it
+            // and does not start a rebuild underneath the teardown.
+            _stopping = true;
+
+            output = _out;
+            _out = null;
+            mix = _mix;
+            _mix = null;
+            reader = _reader;
+            _reader = null;
+        }
+
+        // Blocking, and on the loop's own caller. Nothing is held.
+        if (output is not null)
+        {
+            // Detached before the stop rather than after, so stopping an endpoint
+            // does not raise back into a player that has already moved on.
+            output.PlaybackStopped -= OnPlaybackStopped;
+            try
+            {
+                output.Stop();
+            }
+            catch (Exception ex)
+            {
+                TraceLog.Write("AUDIO PREVIEW", ex);
+            }
+
+            output.Dispose();
+        }
+
+        mix?.Dispose();
+        reader?.Dispose();
+
+        _playing = false;
+
+        lock (_gate)
+        {
+            _stopping = false;
+        }
+    }
+
+    /// <summary>
     /// Starts, or restarts from the top, on a freshly opened endpoint.
     /// </summary>
+    /// <summary>
+    /// Stops and disposes an output endpoint but keeps the decoded reader and the
+    /// mix provider, so playback can be rebuilt on top of them.
+    /// <para>
+    /// Pause deliberately leaves the endpoint open so resuming does not re-decode
+    /// the clip. The trouble is what happens when resuming goes down the "start a
+    /// new one" path instead of restarting the old one, which is what Play does
+    /// after a pause: <c>_playing</c> is false, so it is not a restart, and the
+    /// new endpoint simply overwrote the field holding the old one. Nothing else
+    /// references that instance again, and NAudio's Pause only flips a state field -
+    /// it does not stop, join or dispose - so it kept its AudioClient, its two wait
+    /// handles, its PlaybackStopped subscription and a play thread looping on a
+    /// state nothing was ever going to set to Stopped, plus the whole decoded chain
+    /// behind it. One leaked endpoint every pause-then-play, and two clicks apart.
+    /// </para>
+    /// </summary>
+    private void ReleaseOutput()
+    {
+        WasapiOut? output;
+
+        lock (_gate)
+        {
+            // Taken before the field swap so a loop that ends from here on sees it
+            // and does not start a rebuild underneath the teardown.
+            _stopping = true;
+
+            output = _out;
+            _out = null;
+        }
+
+        if (output is null)
+        {
+            return;
+        }
+
+        // Detached before the stop rather than after, so stopping an endpoint does
+        // not raise back into a player that has already moved on.
+        output.PlaybackStopped -= OnPlaybackStopped;
+        try
+        {
+            output.Stop();
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("AUDIO PREVIEW", ex);
+        }
+
+        output.Dispose();
+    }
+
+
     private void StartPlayback()
     {
         Mp3FileReader? reader = _reader;
@@ -286,6 +399,11 @@ public sealed class AudioPreviewPlayer : IDisposable
         {
             return;
         }
+
+        // Anything already open goes first, because reaching here at all means
+        // this is not the restart path and so is about to replace the endpoint
+        // rather than reuse it.
+        ReleaseOutput();
 
         // Shared mode, deliberately. This is the same path any ordinary player
         // takes, which is what lets FxSound process the loop the way it processes
@@ -297,7 +415,20 @@ public sealed class AudioPreviewPlayer : IDisposable
         // Only the mix is initialised. It already wraps the reader as its source,
         // and handing the reader to the output as well would open a second,
         // competing path to the same bytes.
-        output.Init(mix);
+        try
+        {
+            output.Init(mix);
+        }
+        catch (Exception)
+        {
+            // Init is what actually opens the stream, so it is the one call here that
+            // can fail on a device that has gone away or will not take this format.
+            // The endpoint is already live at this point and nothing else holds a
+            // reference to it - the field is assigned below - so without this it
+            // would be left open with no way back to it.
+            output.Dispose();
+            throw;
+        }
 
         // The handler is attached per output instance and detached in TearDown, so
         // a disposed endpoint cannot raise into a player that has already moved
@@ -311,37 +442,63 @@ public sealed class AudioPreviewPlayer : IDisposable
         StateChanged?.Invoke();
     }
 
+    /// <summary>
+    /// Builds a fresh chain over the same in-memory bytes and plays it again.
+    /// <para>
+    /// Runs on the playback thread, because that is where an ended loop comes from.
+    /// Nothing here holds <c>_gate</c> across a device call, for the reason on
+    /// <see cref="TearDown"/> - and since this thread is the one a Stop would
+    /// be waiting for, it must not be the one waiting too.
+    /// </para>
+    /// <para>
+    /// The sample chain is single pass, so a loop is a fresh chain rather than a
+    /// seek. The reader and the mix are disposed along with the output rather than
+    /// left to be overwritten: that left a 3.7 MB buffer and its decoder per loop
+    /// iteration for the finaliser, which on a repeating track is a track's worth
+    /// every few seconds for as long as the preview is left playing.
+    /// </para>
+    /// </summary>
     private void Restart()
     {
+        TearDown();
+
+        Mp3FileReader reader;
+        PreviewMixProvider mix;
+
+        try
+        {
+            byte[] data = DisplayPreview.ReadAsset(AssetFor(Track));
+            reader = new Mp3FileReader(new MemoryStream(data, writable: false));
+            mix = new PreviewMixProvider(reader.ToSampleProvider()) { Volume = 0.5f };
+        }
+        catch (Exception)
+        {
+            // Nothing has been published, so there is nothing to undo. Ready stays
+            // false and the loop does not come back until something asks it to.
+            Ready = false;
+            throw;
+        }
+
         lock (_gate)
         {
-            try
+            // The fields are empty, so this cannot displace a live chain. It is
+            // also the only reason this is safe at all: TearDown above
+            // released the gate to stop the device, which leaves a window for
+            // Stop, Prepare or Dispose to run to completion in between, and this
+            // is where that gets noticed.
+            if (_disposed || _reader is not null || _mix is not null)
             {
-                _out?.Stop();
-            }
-            catch (Exception ex)
-            {
-                TraceLog.Write("AUDIO PREVIEW", ex);
+                mix.Dispose();
+                reader.Dispose();
+                return;
             }
 
-            // The sample chain is single pass, so the loop is a fresh chain over
-            // the same in-memory bytes rather than a seek.
-            //
-            // The reader and the mix are disposed along with the output, not just
-            // the output. TearDownOutputOnly left them to be overwritten on the
-            // line below, so every end-of-loop iteration abandoned a 3.7 MB buffer
-            // and its decoder for the finaliser - on a track set to repeat, which
-            // is the default state, that is roughly a track's worth per few
-            // seconds for as long as the preview is left playing. Prepare does
-            // this correctly through TearDown, which is why only the loop leaked.
-            TearDown();
-
-            byte[] data = DisplayPreview.ReadAsset(AssetFor(Track));
-            _reader = new Mp3FileReader(new MemoryStream(data, writable: false));
-            _mix = new PreviewMixProvider(_reader.ToSampleProvider()) { Volume = 0.5f };
-
-            StartPlayback();
+            _reader = reader;
+            _mix = mix;
         }
+
+        Ready = true;
+        StartPlayback();
     }
 
     private void OnPlaybackStopped(object? sender, StoppedEventArgs e)
@@ -373,41 +530,6 @@ public sealed class AudioPreviewPlayer : IDisposable
             TraceLog.Write("AUDIO PREVIEW", ex);
             StateChanged?.Invoke();
         }
-    }
-
-    private void TearDownOutputOnly()
-    {
-        if (_out is not null)
-        {
-            _out.PlaybackStopped -= OnPlaybackStopped;
-            try
-            {
-                _out.Stop();
-            }
-            catch (Exception ex)
-            {
-                TraceLog.Write("AUDIO PREVIEW", ex);
-            }
-
-            _out.Dispose();
-            _out = null;
-        }
-    }
-
-    private void TearDown()
-    {
-        lock (_gate)
-        {
-            _stopping = true;
-            TearDownOutputOnly();
-            _mix?.Dispose();
-            _mix = null;
-            _reader?.Dispose();
-            _reader = null;
-            _stopping = false;
-        }
-
-        _playing = false;
     }
 
     public void Dispose()

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using GamerTool.Models;
@@ -192,18 +192,31 @@ new HotkeySlot
     /// settings file that still carries custom combos can be read and ignored.
     /// </para>
     /// </summary>
-    public static List<HotkeySlot> Migrate(AppSettings settings)
+    public static List<HotkeySlot> Migrate(AppSettings settings, bool brandNew = true)
     {
         if (settings.Slots is null || settings.Slots.Count == 0)
         {
-            return DefaultSlots();
+            // Only a profile that has never had slots is given the shipped six.
+            //
+            // This used to be "no slots means no slots yet", which is true of a fresh
+            // profile and completely wrong of a used one. Delete every slot and the
+            // empty list was written out as "Slots": [], and the next launch read
+            // that as a first run and handed back six slots - along with their
+            // default bindings, which were then registered with Windows, so keys the
+            // user had deliberately unbound came back and started firing. The window
+            // meanwhile showed "No slots" right up until the relaunch, which is what
+            // made it look like the deletions had not stuck.
+            //
+            // An empty list on a profile that has been used is a decision somebody
+            // made, and the app's job is to keep it rather than overrule it.
+            return brandNew ? DefaultSlots() : new List<HotkeySlot>();
         }
 
         List<HotkeySlot> slots = new();
         HashSet<string> usedIds = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string> usedKeys = new(StringComparer.OrdinalIgnoreCase);
 
-foreach (HotkeySlot slot in settings.Slots)
+        foreach (HotkeySlot slot in settings.Slots)
         {
             if (string.IsNullOrWhiteSpace(slot.Id))
             {
@@ -256,7 +269,7 @@ foreach (HotkeySlot slot in settings.Slots)
             slots.Add(slot);
         }
 
-foreach (ComboPreset combo in settings.CustomCombos ?? new List<ComboPreset>())
+        foreach (ComboPreset combo in settings.CustomCombos ?? new List<ComboPreset>())
         {
             // Matched by name before minting an id, for the same reason the
             // profile pass below does and with the same bug behind it. A combo

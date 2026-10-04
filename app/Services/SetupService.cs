@@ -31,9 +31,44 @@ public sealed class SetupStage
 }
 
 /// <summary>What a launch-time winget query found for FxSound.</summary>
+/// <summary>
+/// What an update check was actually able to find out.
+/// <para>
+/// The distinction that matters is between "nothing on this machine can answer"
+/// and "something was asked and did not answer". Those were one value, so a
+/// machine with no winget - a supported, deliberate configuration - was reported
+/// as a failed check.
+/// </para>
+/// </summary>
+public enum FxUpdateOutcome
+{
+    /// <summary>The check ran and the installed copy is the published one.</summary>
+    UpToDate,
+
+    /// <summary>The check ran and found a newer published version.</summary>
+    NewerAvailable,
+
+    /// <summary>
+    /// The question was never put to anything, because there is nothing here that
+    /// can answer it. Not a failure and not a pass: winget is not installed, and
+    /// the app has deliberately decided that is acceptable rather than a gap.
+    /// </summary>
+    NoChecker,
+
+    /// <summary>The question was put and nothing usable came back.</summary>
+    Failed,
+}
+
 public sealed class FxUpdateResult
 {
-    public bool UpdateAvailable { get; set; }
+    public FxUpdateOutcome Outcome { get; set; } = FxUpdateOutcome.Failed;
+
+    /// <summary>
+    /// Computed rather than set. It used to be a settable field alongside the two
+    /// versions, so it was possible to build a result claiming an update with no
+    /// version to update to, and nothing checked that the three agreed.
+    /// </summary>
+    public bool UpdateAvailable => Outcome == FxUpdateOutcome.NewerAvailable;
 
     public string InstalledVersion { get; set; } = string.Empty;
 
@@ -169,41 +204,54 @@ public sealed class SetupService
 
     /// <summary>
     /// Asks winget what the newest published FxSound is, then compares it with the
-    /// version of the exe on this PC. Runs off the UI thread at launch; returns
-    /// null when winget is missing or the query fails, which simply means no
-    /// upgrade badge is shown rather than an error state.
+    /// version of the exe on this PC. Runs off the UI thread at launch.
+    /// <para>
+    /// Always returns an answer, and the answer says which of the possibilities
+    /// happened. It used to return null for all six of them, on the reasoning that
+    /// null means no badge and no badge is not an error - which is true of the one
+    /// case it was written for and wrong for the other five. A caller that wanted
+    /// to tell the user anything could not, and one that guessed got it wrong:
+    /// "up to date" about a check that never ran.
+    /// </para>
     /// </summary>
-    public FxUpdateResult? CheckForUpdate()
+    public FxUpdateResult CheckForUpdate() => CheckForUpdate(allowDownload: false).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Asks what is published, preferring winget and falling back to fetching the
+    /// installer when there is none.
+    /// </summary>
+    /// <param name="allowDownload">
+    /// Whether the no-winget fallback may fetch the installer to read its version.
+    /// False for the launch-time query, which must not turn every start into a
+    /// download; true for a press of the button, which is the user asking.
+    /// </param>
+    public async Task<FxUpdateResult> CheckForUpdate(bool allowDownload)
     {
         try
         {
             if (!IsWingetAvailable())
             {
-                // No badge without winget, and that is deliberate rather than a
-                // gap still to be filled.
-                //
-                // The obvious fallback is to ask the download host what the newest
-                // build is, so it is worth recording that this was tried and why
-                // it cannot work. download.fxsound.com/fxsoundlatest redirects to
-                // a file named fxsound_setup.exe on a branch literally called
-                // "latest". There is no version in the path, no Content-Disposition
-                // to carry one, and the ETag is a SHA-256 of the bytes. The
-                // current version is genuinely not published as anything a client
-                // can read.
-                //
-                // Guessing at it - parsing the installer, or assuming the year is
-                // in there - would either be wrong or would mean running the file
-                // to find out. So a machine with no winget gets no update badge,
-                // and still gets the update button, which takes the direct
-                // download. A missing badge is a much smaller problem than an
-                // update prompt that lies about there being an update.
-                return null;
+                // The failsafe, and the reason there is a button on a no-winget
+                // machine that does something. Rather than reporting "cannot
+                // check", it asks the only party that knows: it fetches the
+                // installer and reads the version off the file. That is a download
+                // per check, so this is deliberately reached only from the button -
+                // the launch-time query goes through <c>allowDownload: false</c>
+                // and stays a no-op rather than pulling tens of megabytes on every
+                // start.
+                return await CheckWithoutWingetAsync(allowDownload).ConfigureAwait(false);
             }
 
             string installed = InstalledVersion();
             if (installed.Length == 0)
             {
-                return null;
+                // There is a checker here and it could not say what is installed.
+                // Logged, because the other three ways of failing log and a silent
+                // one is how this went undiagnosed: the banner said the check had
+                // failed and the log had nothing to say about which of the four it
+                // was. Where it looked is the useful half, so it is in the line.
+                TraceLog.Write("UPDATE CHECK winget is present but neither install path holds an FxSound.exe");
+                return new FxUpdateResult { Outcome = FxUpdateOutcome.Failed };
             }
 
             (int exitCode, string log) = RunWingetAsync(
@@ -213,26 +261,35 @@ public sealed class SetupService
 
             if (exitCode != 0)
             {
-                return null;
+                TraceLog.Write("UPDATE CHECK winget exited " + exitCode.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                return new FxUpdateResult { Outcome = FxUpdateOutcome.Failed };
             }
 
             string available = ParsePublishedVersion(log);
             if (available.Length == 0)
             {
-                return null;
+                // Winget answered and the answer had no version in it. Almost
+                // always a source that has not synced, or a winget whose output
+                // format has moved - so the tail of what it actually said is what
+                // tells those two apart.
+                TraceLog.Write("UPDATE CHECK winget said nothing with a version in it: "
+                    + log.Trim()[..Math.Min(400, log.Trim().Length)]);
+                return new FxUpdateResult { Outcome = FxUpdateOutcome.Failed };
             }
 
             return new FxUpdateResult
             {
+                Outcome = Compare(installed, available) < 0
+                    ? FxUpdateOutcome.NewerAvailable
+                    : FxUpdateOutcome.UpToDate,
                 InstalledVersion = installed,
                 AvailableVersion = available,
-                UpdateAvailable = Compare(installed, available) < 0
             };
         }
         catch (Exception ex)
         {
             TraceLog.Write("UPDATE CHECK", ex);
-            return null;
+            return new FxUpdateResult { Outcome = FxUpdateOutcome.Failed };
         }
     }
 
@@ -439,23 +496,68 @@ public sealed class SetupService
     }
 
     /// <summary>
-    /// winget show prints the release number on a line of its own just above the
-    /// installer block. Taking the last line that is nothing but digits and dots
-    /// avoids depending on the output being in English.
+    /// The version winget says is published, or empty when it did not say.
+    /// <para>
+    /// This never worked. It looked for a line containing nothing but digits and
+    /// dots, on the belief that winget prints the release number on a line of its
+    /// own. It does not: <c>winget show</c> prints a labelled field, so the real
+    /// output is
+    /// <code>
+    /// Found FxSound [FxSound.FxSound]
+    /// Version: 1.2.15.0
+    /// </code>
+    /// and a line that begins "Version:" never matched. Every check therefore came
+    /// back empty, and the caller had been treating empty as "nothing to report" -
+    /// so an update check that could not run was displayed as an update check that
+    /// had run and found nothing. Verified against a real winget on 2026-10-03.
+    /// </para>
+    /// <para>
+    /// Both shapes are accepted now, label first. The labelled form does lean on
+    /// winget printing "Version" in English, which the old bare-number rule was
+    /// written to avoid - but that rule matched nothing at all, which is not a way
+    /// of being robust to a translation. A URL is skipped outright, because a
+    /// dotted run inside one is not a release number.
+    /// </para>
     /// </summary>
-    private static string ParsePublishedVersion(string output)
+    /// <summary>Published so the parse can be tested against real winget output.</summary>
+    internal static string ParsePublishedVersion(string output)
     {
-        string found = string.Empty;
+        string labelled = string.Empty;
+        string bare = string.Empty;
+
         foreach (string line in output.Split('\n'))
         {
             string trimmed = line.Trim();
+            if (trimmed.Length == 0)
+            {
+                continue;
+            }
+
             if (Regex.IsMatch(trimmed, @"^\d+(\.\d+)+$"))
             {
-                found = trimmed;
+                bare = trimmed;
+                continue;
+            }
+
+            if (labelled.Length == 0
+                && !trimmed.Contains("http", StringComparison.OrdinalIgnoreCase))
+            {
+                int colon = trimmed.IndexOf(':');
+                if (colon >= 0
+                    && trimmed.AsSpan(0, colon).Trim().Equals("Version", StringComparison.OrdinalIgnoreCase))
+                {
+                    string afterColon = trimmed[(colon + 1)..].Trim();
+                    if (Regex.IsMatch(afterColon, @"^\d+(\.\d+)+$"))
+                    {
+                        labelled = afterColon;
+                    }
+                }
             }
         }
 
-        return found;
+        // The labelled form wins because it is the one winget actually produces;
+        // the bare scan is kept for anything that reports a bare line.
+        return labelled.Length > 0 ? labelled : bare;
     }
 
     private static string InstalledVersion()
@@ -544,6 +646,146 @@ public sealed class SetupService
     /// "update FxSound" button on such a machine reported success while doing
     /// nothing at all.
     /// </param>
+    /// <summary>
+    /// Fetches the current installer and returns the version stamped into it.
+    /// <para>
+    /// The fallback for a machine with no winget, and the reason it is a download
+    /// rather than a query: the download host publishes the file under a name with
+    /// no version in it, on a branch called "latest", with no Content-Disposition to
+    /// carry one and an ETag that is a hash of the bytes. There is genuinely
+    /// nothing to ask, so the only way to know what is on offer is to fetch it and
+    /// read the version off the file. That is safe here precisely because the file
+    /// is Authenticode signed and <see cref="IsSignedByPublisher"/> gates anything
+    /// that would run it.
+    /// </para>
+    /// <para>
+    /// Leaves the file at <see cref="InstallerPath"/> on success so a caller that
+    /// goes on to install it does not fetch it twice. The caller owns deleting it.
+    /// </para>
+    /// </summary>
+    private static async Task<string> DownloadInstallerVersionAsync(
+        IProgress<SetupStage>? progress,
+        CancellationToken token)
+    {
+        progress?.Report(new SetupStage { Percent = 0, Text = "DOWNLOAD", Indeterminate = true });
+
+        using HttpClient client = new();
+        client.Timeout = TimeSpan.FromMinutes(10);
+        using HttpRequestMessage request = new(HttpMethod.Get, DownloadUrl);
+        using HttpResponseMessage response = await client
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token)
+            .ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+
+        long? total = response.Content.Headers.ContentLength;
+        Stream source = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+
+        // Scoped to a block, and that is the whole point of the braces. A using
+        // *declaration* disposes at the end of the enclosing block, which here is
+        // the whole try, so the file was still open - and still held
+        // FileShare.None - when the signature check and Process.Start below went to
+        // open it again. Both are ERROR_SHARING_VIOLATION: the signature reader
+        // swallowed it and reported "not signed by FxSound" for every download, so
+        // the direct install could never run at all, and only winget or a manual
+        // install was left. The block closes the handle before either is reached.
+        await using (FileStream target = new(InstallerPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true))
+        {
+            byte[] buffer = new byte[81920];
+            long read = 0;
+            int taken;
+            while ((taken = await source.ReadAsync(buffer, token).ConfigureAwait(false)) > 0)
+            {
+                await target.WriteAsync(buffer.AsMemory(0, taken), token).ConfigureAwait(false);
+                read += taken;
+                int percent = total.HasValue && total.Value > 0 ? (int)Math.Clamp(read * 100 / total.Value, 0, 100) : 0;
+                progress?.Report(new SetupStage { Percent = percent, Text = "DOWNLOAD " + percent + "%" });
+            }
+
+            await target.FlushAsync(token).ConfigureAwait(false);
+        }
+
+        FileVersionInfo info = FileVersionInfo.GetVersionInfo(InstallerPath);
+        return (info.ProductVersion ?? string.Empty).Split(' ')[0].Trim();
+    }
+
+    /// <summary>
+    /// The no-winget path: fetch the installer, read its version, throw it away.
+    /// <para>
+    /// The download host publishes nothing a client can read a version out of, so
+    /// this is the only way to answer the question without winget - and it is why
+    /// this is a failsafe rather than the default. It costs a download per check,
+    /// which is why <c>allowDownload</c> exists.
+    /// </para>
+    /// <para>
+    /// The file is deleted on every exit including failure, so a check that could
+    /// not read a version does not leave tens of megabytes in the user's temp
+    /// folder for the app to clean up next launch.
+    /// </para>
+    /// </summary>
+    private static async Task<FxUpdateResult> CheckWithoutWingetAsync(bool allowDownload)
+    {
+        if (!allowDownload)
+        {
+            return new FxUpdateResult { Outcome = FxUpdateOutcome.NoChecker };
+        }
+
+        string installed = InstalledVersion();
+        if (installed.Length == 0)
+        {
+            TraceLog.Write("UPDATE CHECK no winget, and neither install path holds an FxSound.exe");
+            return new FxUpdateResult { Outcome = FxUpdateOutcome.Failed };
+        }
+
+        try
+        {
+            TraceLog.Write("UPDATE CHECK no winget, fetching the installer to read its version");
+
+            string available = await DownloadInstallerVersionAsync(progress: null, CancellationToken.None)
+                .ConfigureAwait(false);
+
+            if (available.Length == 0)
+            {
+                TraceLog.Write("UPDATE CHECK the downloaded installer carries no readable version");
+                return new FxUpdateResult { Outcome = FxUpdateOutcome.Failed };
+            }
+
+            return new FxUpdateResult
+            {
+                Outcome = Compare(installed, available) < 0
+                    ? FxUpdateOutcome.NewerAvailable
+                    : FxUpdateOutcome.UpToDate,
+                InstalledVersion = installed,
+                AvailableVersion = available,
+            };
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("UPDATE CHECK the fallback download failed", ex);
+            return new FxUpdateResult { Outcome = FxUpdateOutcome.Failed };
+        }
+        finally
+        {
+            // Always. Nothing was installed, so there is nothing to keep it for.
+            DiscardInstaller();
+        }
+    }
+
+    /// <summary>Deletes the downloaded installer, whatever happened to it.</summary>
+    private static void DiscardInstaller()
+    {
+        try
+        {
+            if (File.Exists(InstallerPath))
+            {
+                File.Delete(InstallerPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("INSTALLER CLEANUP", ex);
+        }
+    }
+
     public async Task<bool> DownloadAndInstallAsync(
         AudioService audio,
         IProgress<SetupStage> progress,
@@ -559,42 +801,12 @@ public sealed class SetupService
                 return true;
             }
 
-            progress.Report(new SetupStage { Percent = 0, Text = "DOWNLOAD", Indeterminate = true });
             StatusChanged?.Invoke("GETTING FXSOUND");
 
-            using HttpClient client = new();
-            client.Timeout = TimeSpan.FromMinutes(10);
-            using HttpRequestMessage request = new(HttpMethod.Get, DownloadUrl);
-            using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
-
-            long? total = response.Content.Headers.ContentLength;
-            Stream source = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
-
-            // Scoped to a block, and that is the whole point of the braces. A
-            // using *declaration* disposes at the end of the enclosing block, which
-            // here is the whole try, so the file was still open - and still held
-            // FileShare.None - when the signature check and Process.Start below
-            // went to open it again. Both are ERROR_SHARING_VIOLATION: the
-            // signature reader swallowed it and reported "not signed by FxSound"
-            // for every download, so the direct install could never run at all,
-            // and only winget or a manual install was left. The block closes the
-            // handle before either of them is reached.
-            await using (FileStream target = new(InstallerPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true))
-            {
-                byte[] buffer = new byte[81920];
-                long read = 0;
-                int taken;
-                while ((taken = await source.ReadAsync(buffer, token).ConfigureAwait(false)) > 0)
-                {
-                    await target.WriteAsync(buffer.AsMemory(0, taken), token).ConfigureAwait(false);
-                    read += taken;
-                    int percent = total.HasValue && total.Value > 0 ? (int)Math.Clamp(read * 100 / total.Value, 0, 100) : 0;
-                    progress.Report(new SetupStage { Percent = percent, Text = "DOWNLOAD " + percent + "%" });
-                }
-
-                await target.FlushAsync(token).ConfigureAwait(false);
-            }
+            // Shared with the no-winget update check, which needs the same bytes to
+            // read a version off. It was a second copy of this block, and the two
+            // would have drifted the way two copies of everything else here did.
+            await DownloadInstallerVersionAsync(progress, token).ConfigureAwait(false);
 
             progress.Report(new SetupStage { Percent = 90, Text = "INSTALLING", Indeterminate = true });
             StatusChanged?.Invoke("INSTALLING FXSOUND");
@@ -625,9 +837,15 @@ public sealed class SetupService
         }
         catch (Exception ex)
         {
+            // Same shape as the two sibling paths above: the tag goes on first, so
+            // the cause is on record before anything else can report a failure.
+            // This one was the only install failure that recorded nothing at all -
+            // Debug.WriteLine is compiled out of Release, which is the build that
+            // ships, so a user who could not install FxSound had a red FAILED and
+            // an empty support log.
+            TraceLog.Write("INSTALL", ex);
             progress.Report(new SetupStage { Percent = 0, Text = "FAILED" });
             StatusChanged?.Invoke("INSTALL FAILED");
-            Debug.WriteLine(ex.Message);
             return false;
         }
         finally
@@ -716,7 +934,14 @@ public sealed class SetupService
     /// True when the file carries an embedded Authenticode signature at all.
     /// A file with none is refused before anything else is even looked at.
     /// </summary>
-    public static bool HasEmbeddedSignature(string path) => ReadSigner(path) is not null;
+    public static bool HasEmbeddedSignature(string path)
+    {
+        // ReadSigner hands the certificate to its caller to dispose. Discarding it
+        // on a null check leaked one certificate handle per call, and this is
+        // called once per trust decision, so it was never a bounded number.
+        using X509Certificate2? signer = ReadSigner(path);
+        return signer is not null;
+    }
 
     /// <summary>
     /// The certificate that signed an executable, or null when there is not one.
@@ -733,7 +958,7 @@ public sealed class SetupService
         try
         {
 #pragma warning disable SYSLIB0057
-            X509Certificate raw = X509Certificate.CreateFromSignedFile(path);
+            using X509Certificate raw = X509Certificate.CreateFromSignedFile(path);
 #pragma warning restore SYSLIB0057
 
             // CreateFromSignedFile hands back a plain X509Certificate wrapping the

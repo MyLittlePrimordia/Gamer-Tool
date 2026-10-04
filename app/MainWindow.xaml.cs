@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -101,6 +102,27 @@ public partial class MainWindow : Window
     private DispatcherTimer? _stateTimer;
 
 
+    /// <summary>
+    /// Watches the engine's own settings file so a change made in FxSound's window
+    /// shows up here without waiting for the next poll. See <see cref="StartFxWatch"/>.
+    /// </summary>
+    private FileSystemWatcher? _fxWatch;
+
+
+    /// <summary>
+    /// Set while a watch notification is waiting to be turned into a refresh, so a
+    /// burst of writes costs one refresh rather than one per write.
+    /// </summary>
+    private int _fxWatchPending;
+
+
+    /// <summary>
+    /// Set when a refresh is asked for while a read is already in flight, so the
+    /// request survives to be run the moment the guard clears instead of being lost.
+    /// </summary>
+    private int _fxStateQueued;
+
+
     private CancellationTokenSourceHolder? _install;
 
 
@@ -171,14 +193,31 @@ public partial class MainWindow : Window
     private string _liveAudioName = "NOTHING";
 
 
-    /// <summary>Set by the launch-time winget query in SetupService.</summary>
-    private bool _fxUpdateAvailable;
+    /// <summary>
+    /// The result of the update check, or null when none has run this launch.
+    /// <para>
+    /// One value rather than an "available" flag, an "already checked" flag and a
+    /// version string, because those three together have four states and the flags
+    /// only reached three of them. It used to have a third: a query that threw left
+    /// the "already checked" flag standing, so the banner reported a successful
+    /// check about a question nobody had answered.
+    /// </para>
+    /// <para>
+    /// Carries <see cref="Services.FxUpdateOutcome"/> rather than a private copy of
+    /// it, so the states the service can produce and the states the window can
+    /// render are the same list. There was briefly one enum here as well, and the
+    /// compiler caught the pair the moment the service grew a state the window did
+    /// not have.
+    /// </para>
+    /// </summary>
+    private readonly record struct FxUpdateStatus(Services.FxUpdateOutcome Outcome, string Version);
 
-    /// <summary>Keeps the launch-time query to once, whatever else asks for it.</summary>
-    private bool _fxUpdateChecked;
-
-
-    private string _fxUpdateVersion = string.Empty;
+    /// <summary>
+    /// Null until the check has run, which is what "not checked" means. Set by the
+    /// launch-time winget query in <see cref="CheckFxSoundUpdateAsync"/> and
+    /// afterwards only by a completed check or a completed install.
+    /// </summary>
+    private FxUpdateStatus? _fxUpdate;
 
 
     private PreviewScene _previewScene = PreviewScene.Day;
@@ -322,6 +361,11 @@ public partial class MainWindow : Window
         _display.StatusChanged += SetRailStatus;
         _audio.StatusChanged += SetRailStatus;
         _setup.StatusChanged += SetRailStatus;
+        // Was raised and never heard. The event had no subscriber anywhere in the
+        // app, so the one failure it exists to report - the whole endpoint list
+        // unreadable - reached nobody: the picker came up empty and the log said
+        // nothing, which is the same silence as having no devices at all.
+        _devices.StatusChanged += SetRailStatus;
         _hotkeys.Pressed += OnHotkeyPressed;
         _hotkeys.Failed += OnHotkeyFailed;
         _watcher.ForegroundChanged += OnForegroundChanged;
@@ -367,7 +411,18 @@ public partial class MainWindow : Window
         // OnWindowLoaded because the handle exists as soon as the source is
         // initialised and Loaded can fire more than once.
         SourceInitialized += OnSourceInitialized;
-        Closing += (_, _) => _displayDebounce.Ignore = true;
+
+        // There is deliberately no second Closing handler setting
+        // _displayDebounce.Ignore. There used to be one, and it was the wrong place
+        // for it: Closing is a plain multicast delegate, so setting e.Cancel in
+        // OnClosing to hide-to-tray or to refuse a close during an install did not
+        // stop this one from running. The window stayed open with the flag set, and
+        // because nothing ever clears it, every later display change was ignored for
+        // the rest of the session - no rescan, and no re-push of the gamma ramp that
+        // Windows drops on a display event. One click of the close button was enough.
+        //
+        // OnClosing sets it instead, below the two branches that can cancel the
+        // close, which is where "the window is really closing" is actually decided.
 
         // The displays go back to the brightness they were found at on the way out, and
         // this is what puts that in front of the exit path. EmergencyReset calls it
@@ -563,18 +618,148 @@ private void HideToTray()
         if (AudioTabVisible)
         {
             _spectrum?.Start();
+        }
+        else
+        {
+            _spectrum?.Stop();
+        }
 
-            if (_stateTimer is not null && !_stateTimer.IsEnabled && _audio.IsInstalled)
-            {
-                _stateTimer.Start();
-                _ = RefreshFxStateAsync(true);
-            }
+        // The state poll is deliberately not inside the Audio tab branch, and used
+        // to be stopped along with the spectrum.
+        //
+        // The FxSound status line is on the Settings tab. Stopping the poll when the
+        // Audio tab was hidden therefore switched off the only thing keeping that
+        // line true, on exactly the tab where it is read. It froze at whatever it
+        // last saw while the Audio tab was open, which is why an EQ switched on
+        // inside FxSound's own window went on reading "EQ SWITCHED OFF" until
+        // something on the Audio tab forced a fresh read by coincidence.
+        //
+        // Only the spectrum is scoped to the tab. Capturing loopback audio for a
+        // graph nobody is looking at is real work being done for nobody; re-reading
+        // a status file is not.
+        if (_stateTimer is not null && !_stateTimer.IsEnabled && _audio.IsInstalled)
+        {
+            _stateTimer.Start();
+            _ = RefreshFxStateAsync(true);
+        }
 
+        StartFxWatch();
+    }
+
+
+    /// <summary>
+    /// Watches the file FxSound's own window writes, so most changes made over
+    /// there reach this app without waiting for the next tick.
+    /// <para>
+    /// It watches the settings file and not <see cref="FxSoundState.StatusPath"/>,
+    /// and that distinction is why it works at all. FxSound's window writes the
+    /// settings file when the user changes something in it; the status file is only
+    /// rewritten when something runs the command line. Watching the status file
+    /// would have missed the power button entirely - and worse, this app's own polls
+    /// write that file, so watching it would feed itself.
+    /// </para>
+    /// <para>
+    /// What it is not is fast, and it took a measurement to find out why. The engine
+    /// applies a change immediately; the settings file follows between 166ms and
+    /// three seconds afterwards. So this watch is a lagging signal, and its latency
+    /// is FxSound's persistence timing rather than anything decided here. It is
+    /// worth keeping because the common case is the fast one, but the poll is what
+    /// actually bounds how stale the line can get - which is why that interval is
+    /// short. Do not read the fast path as the guarantee; it is the best case.
+    /// </para>
+    /// </summary>
+    private void StartFxWatch()
+    {
+        if (_fxWatch is not null || !_audio.IsInstalled)
+        {
             return;
         }
 
-        _spectrum?.Stop();
-        _stateTimer?.Stop();
+        try
+        {
+            string? folder = Path.GetDirectoryName(FxSoundState.SettingsPath);
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
+            {
+                return;
+            }
+
+            _fxWatch = new FileSystemWatcher(folder, "FxSound.settings")
+            {
+                // The engine rewrites the whole file rather than editing it, so the
+                // write time moves even when the length lands in the same place.
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName,
+                EnableRaisingEvents = true,
+            };
+
+            _fxWatch.Changed += OnFxSettingsChanged;
+            _fxWatch.Created += OnFxSettingsChanged;
+            _fxWatch.Renamed += OnFxSettingsChanged;
+
+            TraceLog.Write("FX WATCH armed on " + folder);
+        }
+        catch (Exception ex)
+        {
+            // No watcher is a slower status line, not a broken one. The poll still
+            // runs, so this is not worth failing startup over.
+            TraceLog.Write("FX WATCH", ex);
+            _fxWatch = null;
+        }
+    }
+
+
+    /// <summary>
+    /// Tears the watch down. Safe to call when there is nothing to tear down,
+    /// because the shutdown path and the not-installed path both land here.
+    /// </summary>
+    private void StopFxWatch()
+    {
+        if (_fxWatch is null)
+        {
+            return;
+        }
+
+        _fxWatch.EnableRaisingEvents = false;
+        _fxWatch.Changed -= OnFxSettingsChanged;
+        _fxWatch.Created -= OnFxSettingsChanged;
+        _fxWatch.Renamed -= OnFxSettingsChanged;
+        _fxWatch.Dispose();
+        _fxWatch = null;
+    }
+
+
+    /// <summary>
+    /// A change in FxSound's settings, which arrives on a thread pool thread with no
+    /// dispatcher of its own. Everything downstream touches controls, so the work is
+    /// handed across rather than done here.
+    /// <para>
+    /// The pending flag is a one-refresh latch rather than a timer: FxSound writes
+    /// this file more than once for some changes, and a debounce would mean choosing
+    /// an interval that is either too eager or too slow. Latching costs at most one
+    /// extra read and never delays the first one.
+    /// </para>
+    /// </summary>
+    private void OnFxSettingsChanged(object sender, FileSystemEventArgs e)
+    {
+        if (Interlocked.Exchange(ref _fxWatchPending, 1) == 1)
+        {
+            return;
+        }
+
+        try
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                Interlocked.Exchange(ref _fxWatchPending, 0);
+                _ = RefreshFxStateAsync(true);
+            }));
+        }
+        catch (Exception ex)
+        {
+            // The window can close between the notification arriving and this being
+            // posted, and a dispatcher that has shut down throws rather than queues.
+            Interlocked.Exchange(ref _fxWatchPending, 0);
+            TraceLog.Write("FX WATCH", ex);
+        }
     }
 
 
@@ -687,6 +872,20 @@ private void HideToTray()
         FxPromptBox.IsChecked = _settings.FxPromptDisabled;
         StartHiddenBox.IsChecked = _settings.StartHidden;
         CloseToTrayBox.IsChecked = _settings.CloseToTray;
+
+        // The night row, here, where every other row is. It was reached only from the
+        // option-changed handler above, which returns early while _ready is false -
+        // and this method runs at launch, before _ready is set, and again on a
+        // restore. So the switch never took the profile's value and the two pickers
+        // never took theirs: a profile with night blue light on came up showing it
+        // off, and because the handler reads the switch back rather than the model,
+        // the first click then wrote the value that was already stored. The doc
+        // comment on SyncNightScheduleControls claimed it was called from here.
+        //
+        // Safe to write these controls at this point in startup: the night handlers
+        // all bail on !_ready or _updating, and SyncNightScheduleControls raises
+        // _updating over its own writes.
+        SyncNightScheduleControls();
         AntiClipBox.IsChecked = _settings.AntiClip;
         BypassBox.IsChecked = BypassToggle.IsEngaged(_settings.EffectsEnabled);
         LoudGuardBox.IsChecked = _settings.LoudGuard;
@@ -1001,11 +1200,35 @@ private void HideToTray()
         UpdateFxBanner();
         _ = FinishStartupAsync();
 
-        // Created here, started by UpdateAudioTabActivity and not before. It used
-        // to start immediately and then run for the whole life of the process,
-        // whatever the user was looking at or whether the window existed at all.
-        _stateTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
-        _stateTimer.Tick += (s, e) => _ = RefreshFxStateAsync(false);
+        // Created here, started by UpdateAudioTabActivity and not before, so nothing
+        // polls the engine before the window is up.
+        //
+        // It used to be described here as running "for the whole life of the
+        // process, whatever the user was looking at or whether the window existed
+        // at all", and the correction was to stop it with the Audio tab. That
+        // correction was the bug: the FxSound status line is on the Settings tab,
+        // so stopping the poll there switched off the only thing keeping that line
+        // true. It now runs for as long as FxSound is installed, which is what the
+        // original sentence described and what the status line needs.
+        //
+        // Four seconds became one and a half because of what the watch turned out to
+        // be worth. Measured on this machine, the engine applies a power change the
+        // instant FxSound's own window asks for it, and then writes its settings
+        // file between 166ms and 3 seconds later - so the watch is a lagging signal
+        // and its worst case is the four second tick it was supposed to improve on.
+        // The tick is what bounds that, and it is cheap enough to be the real answer:
+        // --status takes about 75ms, so this asks the engine for roughly five percent
+        // of the time and changes nothing until the engine says it has.
+        _stateTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
+        // Forced, because this tick is the authoritative refresh and the whole reason
+        // the interval above is short. It used to pass false and let the engine
+        // read fall back on its three second cache, which quietly put a floor
+        // under how often the engine could be asked - a one and a half second tick
+        // then produced a read every four and a half, because every other tick was
+        // answered out of the cache without going near FxSound at all. The cache
+        // is for the incidental callers who just want something cheap; a poll whose
+        // job is noticing that another program changed something cannot use one.
+        _stateTimer.Tick += (s, e) => _ = RefreshFxStateAsync(true);
 
         // The two moments that are neither a tab change nor a hide to the tray,
         // and so were the two the spectrum was still capturing through.
@@ -1124,26 +1347,45 @@ private void HideToTray()
     /// </summary>
     private async System.Threading.Tasks.Task CheckFxSoundUpdateAsync()
     {
-        if (_fxUpdateChecked)
+        // Only a conclusive answer suppresses a second press. A failed check has to be
+        // retryable, because the button says "Try again" and that has to be true
+        // of it - the flag pair this replaced could not say the difference between
+        // "asked and answered" and "asked and did not", so it treated both as done,
+        // and a user pressing a button labelled "try again" got nothing at all.
+        //
+        // NotChecked still asks, obviously, and NoChecker re-asks harmlessly in
+        // case winget has appeared since - the press is cheap either way and the
+        // button is not doing the check in either of those two states.
+        if (_fxUpdate is { Outcome: FxUpdateOutcome.UpToDate or FxUpdateOutcome.NewerAvailable or FxUpdateOutcome.NoChecker })
         {
             return;
         }
 
-        _fxUpdateChecked = true;
+        // Not set here. It used to be, as a separate "already checked" flag, and
+        // that is what made a thrown query report success: the flag went up before
+        // the answer came back and nothing put it down again. The value is written
+        // on each of the three exits below instead, including the failure one.
         FxUpgradeButton.IsEnabled = false;
 
         try
         {
-            FxUpdateResult? result = await System.Threading.Tasks.Task.Run(() => _setup.CheckForUpdate());
-            if (result is not null)
+            // allowDownload because this is the user pressing the button, which is the only
+            // moment a fallback may fetch the installer to read its version. The
+            // launch-time query uses the no-argument overload and stays a no-op on
+            // a machine with no winget rather than downloading on every start.
+            FxUpdateResult result = await System.Threading.Tasks.Task.Run(() => _setup.CheckForUpdate(allowDownload: true));
+            _fxUpdate = result.Outcome switch
             {
-                _fxUpdateAvailable = result.UpdateAvailable;
-                _fxUpdateVersion = result.AvailableVersion;
-            }
+                Services.FxUpdateOutcome.NewerAvailable => new FxUpdateStatus(Services.FxUpdateOutcome.NewerAvailable, result.AvailableVersion),
+                Services.FxUpdateOutcome.UpToDate => new FxUpdateStatus(Services.FxUpdateOutcome.UpToDate, string.Empty),
+                Services.FxUpdateOutcome.NoChecker => new FxUpdateStatus(Services.FxUpdateOutcome.NoChecker, string.Empty),
+                _ => new FxUpdateStatus(Services.FxUpdateOutcome.Failed, string.Empty),
+            };
         }
         catch (Exception ex)
         {
             TraceLog.Write("UPDATE CHECK", ex);
+            _fxUpdate = new FxUpdateStatus(FxUpdateOutcome.Failed, string.Empty);
         }
         finally
         {

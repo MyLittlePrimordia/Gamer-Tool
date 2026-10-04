@@ -44,14 +44,27 @@ public sealed class StartupService
                     return false;
                 }
 
-                string trimmed = value.Trim().Trim('"');
-                int space = trimmed.IndexOf(' ');
-                string path = space > 0 ? trimmed[..space] : trimmed;
+                string path = ReadConfiguredPath(value);
+                if (path.Length == 0)
+                {
+                    return false;
+                }
 
-                return string.Equals(
-                    Path.GetFileName(path),
-                    Path.GetFileName(ExecutablePath),
-                    StringComparison.OrdinalIgnoreCase);
+                string mine;
+                string theirs;
+                try
+                {
+                    mine = Path.GetFileName(ExecutablePath);
+                    theirs = Path.GetFileName(path);
+                }
+                catch (ArgumentException)
+                {
+                    // A hand-edited or truncated value can hold a character path
+                    // rejects. That is not this app's entry, whatever it says.
+                    return false;
+                }
+
+                return string.Equals(theirs, mine, StringComparison.OrdinalIgnoreCase);
             }
             catch (Exception ex)
             {
@@ -60,6 +73,41 @@ public sealed class StartupService
             }
         }
     }
+
+    /// <summary>
+    /// Pulls the executable path back out of the value this class writes.
+    /// <para>
+    /// The value is written as a quoted path followed by " --tray", and it used to be
+    /// recovered with <c>Trim().Trim('"')</c> and a split on the first space. Both
+    /// halves of that were wrong against the app's own output, and neither could be
+    /// seen without reading the two together: the trailing quote is not at the end of
+    /// the string, because the string ends in the y of "--tray", so trimming quotes
+    /// only ever removed the leading one and left <c>GamerTool.exe"</c> behind; and
+    /// the first space is inside the path whenever any directory has one in it, which
+    /// for this app's own install folder is the normal case rather than the rare one.
+    /// Between them the reader could not return true for any value the writer had
+    /// produced, so the switch always read off while the app autostarted.
+    /// </para>
+    /// <para>
+    /// Reading the quoted section instead fixes both at once, because that is the
+    /// format the value is actually written in. The unquoted branch is for an entry
+    /// some other tool wrote, where the path is whatever precedes the arguments.
+    /// </para>
+    /// </summary>
+    internal static string ReadConfiguredPath(string value)
+    {
+        string trimmed = value.Trim();
+
+        if (trimmed.Length > 0 && trimmed[0] == '"')
+        {
+            int close = trimmed.IndexOf('"', 1);
+            return close > 1 ? trimmed[1..close] : trimmed.Trim('"');
+        }
+
+        int space = trimmed.IndexOf(' ');
+        return space > 0 ? trimmed[..space] : trimmed;
+    }
+
 
     public bool SetEnabled(bool enabled)
     {

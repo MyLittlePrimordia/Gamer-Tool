@@ -117,7 +117,26 @@ public sealed class BacklightWriteRetry
 
 public sealed class BacklightService
 {
-    private AppSettings _settings;
+    /// <summary>
+    /// The profile this service reads and writes.
+    /// <para>
+    /// Volatile because <see cref="Rebind"/> replaces it from the window while a
+    /// probe or a write is in flight on a worker, and a reader has to see either the
+    /// whole old object or the whole new one. Without the barrier the store can
+    /// become visible ahead of the object's own field writes.
+    /// </para>
+    /// <para>
+    /// Never dereferenced directly more than once in a block. Every method that
+    /// locks the profile binds it to a local first, because
+    /// <c>lock (_settings.Gate)</c> reads this field to choose the lock and then
+    /// the body reads it again for every access. Those are separate reads of a
+    /// replaceable field: a rebind landing between them locks the old profile and
+    /// mutates the new one, which is the one thing holding the gate is there to
+    /// stop. It is the same reason the reads are bound to a local rather than
+    /// guarded - see the note on the gate in <see cref="AppSettings"/>.
+    /// </para>
+    /// </summary>
+    private volatile AppSettings _settings;
 
     private readonly IBacklightBus _bus;
 
@@ -249,7 +268,13 @@ public sealed class BacklightService
     /// </summary>
     public void Probe()
     {
-        if (!_settings.HardwareBrightnessEnabled)
+        // Bound once for the whole probe, which runs for seconds. The flag that
+        // starts it and the list that ends it must come from the same profile, or
+        // a restore in between has the probe reading one profile's exclusions and
+        // recording its round against another's.
+        AppSettings profile = _settings;
+
+        if (!profile.HardwareBrightnessEnabled)
         {
             return;
         }
@@ -275,7 +300,7 @@ public sealed class BacklightService
             // window in which it sees half a table; swapping means it sees the
             // old one until the new one is whole.
             Dictionary<string, MonitorProbe> found = new(StringComparer.OrdinalIgnoreCase);
-            foreach (MonitorProbe monitor in _bus.ProbeAll(_settings.ExcludedDdcMonitors))
+            foreach (MonitorProbe monitor in _bus.ProbeAll(profile.ExcludedDdcMonitors))
             {
                 found[monitor.DeviceName] = monitor;
             }
@@ -303,7 +328,7 @@ public sealed class BacklightService
                 AppLog.Info("backlight " + monitor.DeviceName + " " + monitor.FriendlyName
                     + " edid=" + monitor.Edid.Summary
                     + " edidFrom=" + monitor.EdidSource
-                    + (monitor.EdidWithheld ? "(withheld)" : string.Empty)
+                    + (monitor.EdidWithheld ? "(from cache)" : string.Empty)
                     + " hdcpOverride=" + monitor.Protection.State
                     + " target=" + monitor.Target.Health
                     + " link=" + monitor.Link
@@ -315,7 +340,7 @@ public sealed class BacklightService
                     + " attempts=" + monitor.Attempts.ToString(System.Globalization.CultureInfo.InvariantCulture)
                     + " probeMs=" + monitor.ProbeMs.ToString(System.Globalization.CultureInfo.InvariantCulture)
                     + " phys=" + (monitor.PhysicalMonitor ?? "none")
-                    + " excluded=" + _settings.ExcludedDdcMonitors.Contains(monitor.DeviceName)
+                    + " excluded=" + profile.ExcludedDdcMonitors.Contains(monitor.DeviceName)
                     + " refusals=" + RefusalCountOf(monitor.DeviceName).ToString(System.Globalization.CultureInfo.InvariantCulture)
                     + " reason=" + (monitor.BlockedReason ?? monitor.NoReplyBecause ?? "none"));
             }
@@ -340,14 +365,14 @@ public sealed class BacklightService
             // the count can only ever reach one, and a rule that retires after two
             // is a rule that never fires. Under the profile's gate, because a
             // click handler on the window can be serialising it right now.
-            lock (_settings.Gate)
+            lock (profile.Gate)
             {
                 (int rounds, bool retired) = Availability.Persistable();
-                if (rounds != _settings.HardwareBrightnessFailedRounds
-                    || retired != _settings.HardwareBrightnessRetired)
+                if (rounds != profile.HardwareBrightnessFailedRounds
+                    || retired != profile.HardwareBrightnessRetired)
                 {
-                    _settings.HardwareBrightnessFailedRounds = rounds;
-                    _settings.HardwareBrightnessRetired = retired;
+                    profile.HardwareBrightnessFailedRounds = rounds;
+                    profile.HardwareBrightnessRetired = retired;
                     Interlocked.Exchange(ref _settingsChanged, 1);
                 }
             }
@@ -647,11 +672,12 @@ public MonitorProbe? Find(string deviceName)
             // the row greys out rather than failing every remaining drag. The
             // Hardware brightness switch clears this again, so it is a pause
             // rather than a life sentence.
-            lock (_settings.Gate)
+            AppSettings excluded = _settings;
+            lock (excluded.Gate)
             {
-                if (!_settings.ExcludedDdcMonitors.Contains(monitor.DeviceName))
+                if (!excluded.ExcludedDdcMonitors.Contains(monitor.DeviceName))
                 {
-                    _settings.ExcludedDdcMonitors.Add(monitor.DeviceName);
+                    excluded.ExcludedDdcMonitors.Add(monitor.DeviceName);
                     Interlocked.Exchange(ref _settingsChanged, 1);
                     AppLog.Warn("backlight excluding " + monitor.FriendlyOrDevice()
                         + " after " + count.ToString(System.Globalization.CultureInfo.InvariantCulture)
@@ -678,11 +704,12 @@ public MonitorProbe? Find(string deviceName)
         // can be serialising at this instant. If absent, so it is the value from
         // before this session touched the panel rather than the value the last
         // preset happened to leave - which is the whole reason the map exists.
-        lock (_settings.Gate)
+        AppSettings baseline = _settings;
+        lock (baseline.Gate)
         {
-            if (!_settings.OriginalHardwareBrightness.ContainsKey(monitor.DeviceName))
+            if (!baseline.OriginalHardwareBrightness.ContainsKey(monitor.DeviceName))
             {
-                _settings.OriginalHardwareBrightness[monitor.DeviceName] = before;
+                baseline.OriginalHardwareBrightness[monitor.DeviceName] = before;
             }
         }
 
@@ -723,21 +750,22 @@ public MonitorProbe? Find(string deviceName)
         bool hadAny;
         Availability.ResetCount();
 
-        lock (_settings.Gate)
+        AppSettings profile = _settings;
+        lock (profile.Gate)
         {
-            hadAny = _settings.ExcludedDdcMonitors.Count > 0;
+            hadAny = profile.ExcludedDdcMonitors.Count > 0;
 
             // This call is what lets a probe run again, and that probe is the one the
             // user just asked for by moving the switch. Spent here, once, so the
             // launch that follows is the first round that counts towards retiring.
             _nextRoundIsFree = true;
 
-            foreach (string device in _settings.ExcludedDdcMonitors.ToList())
+            foreach (string device in profile.ExcludedDdcMonitors.ToList())
             {
                 AppLog.Info("backlight clearing exclusion for " + device);
             }
 
-            _settings.ExcludedDdcMonitors.Clear();
+            profile.ExcludedDdcMonitors.Clear();
         }
 
         lock (_gate)
@@ -835,15 +863,16 @@ public MonitorProbe? Find(string deviceName)
 
         List<string> released;
 
-        lock (_settings.Gate)
+        AppSettings profile = _settings;
+        lock (profile.Gate)
         {
-            released = _settings.OriginalHardwareBrightness.Keys
+            released = profile.OriginalHardwareBrightness.Keys
                 .Where(device => !attached_to(device))
                 .ToList();
 
             foreach (string device in released)
             {
-                _settings.OriginalHardwareBrightness.Remove(device);
+                profile.OriginalHardwareBrightness.Remove(device);
             }
         }
 
@@ -873,10 +902,11 @@ public MonitorProbe? Find(string deviceName)
         // clear would leave the map claiming there is still something outstanding,
         // so the map is emptied first and the writes use the copy.
         List<KeyValuePair<string, uint>> pending;
-        lock (_settings.Gate)
+        AppSettings profile = _settings;
+        lock (profile.Gate)
         {
-            pending = _settings.OriginalHardwareBrightness.ToList();
-            _settings.OriginalHardwareBrightness.Clear();
+            pending = profile.OriginalHardwareBrightness.ToList();
+            profile.OriginalHardwareBrightness.Clear();
         }
 
         if (pending.Count == 0)

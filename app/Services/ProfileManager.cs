@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -175,14 +175,14 @@ public sealed class ProfileManager
             _unreadable = true;
             AppLog.Error("SETTINGS LOAD", new IOException(
                 "settings.json is present but could not be read; it has been left alone"));
-            return Normalize(new AppSettings());
+            return Normalize(new AppSettings(), brandNew: true);
         }
 
         if (json is not null)
         {
             if (TryParse(json, out AppSettings loaded))
             {
-                return Normalize(loaded);
+                return Normalize(loaded, brandNew: false);
             }
 
             // Genuinely not valid content, which is the one case where moving the
@@ -201,10 +201,10 @@ public sealed class ProfileManager
         {
             AppLog.Warn("SETTINGS recovered from " + Path.GetFileName(BackupPath));
             RecoveredFromBackup = true;
-            return Normalize(recovered);
+            return Normalize(recovered, brandNew: false);
         }
 
-        return Normalize(new AppSettings());
+        return Normalize(new AppSettings(), brandNew: true);
     }
 
     /// <summary>
@@ -231,13 +231,11 @@ public sealed class ProfileManager
         {
             try
             {
-                using FileStream stream = new(
-                    path,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete);
-                using StreamReader reader = new(stream);
-                return reader.ReadToEnd();
+                // Capped, and shared. Shared because the window can be writing the
+                // profile while this reads it; capped because nothing has ever put a
+                // ceiling on the file and the retry loop below is the only thing
+                // between a bad file and an allocation sized by it.
+                return BoundedRead.AllText(path);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -337,11 +335,77 @@ public sealed class ProfileManager
     /// nothing in the session can bring it back.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Asks again whether the settings file that could not be read at launch can be
+    /// read now, and gets it out of the way if it can.
+    /// <para>
+    /// The rule this exists to serve is not to overwrite a file whose content was
+    /// never seen, because that content may be the only copy of the user's presets.
+    /// The rule used to be permanent: the flag was raised once during Load and never
+    /// lowered, so every save for the rest of the session was dropped - including
+    /// the one after a backup restore, which the window had already reported as
+    /// done. A whole afternoon of work went nowhere with nothing on screen saying so.
+    /// </para>
+    /// <para>
+    /// What held the file is transient by nature - an antivirus scan, a sync client, a
+    /// backup tool - so the question is worth asking again rather than answering "no"
+    /// for the rest of the session. When the file reads now it is moved aside under a
+    /// stamped name, which is exactly what already happens to content that will not
+    /// parse, so nothing is destroyed either way. When it still cannot be read the
+    /// original protection stands and this returns false.
+    /// </para>
+    /// </summary>
+    private bool SetAsideUnreadableSettings()
+    {
+        try
+        {
+            bool unreadable;
+            string? content = TryRead(SettingsPath, out unreadable);
+
+            // Still held, which is the case the protection is for. Returning false
+            // leaves the save refused, exactly as it was before any of this.
+            //
+            // This has to be tested before the "is it gone" branch below. A file
+            // that is present and unreadable comes back from TryRead as null, the
+            // same as a file that is not there at all, and the only thing that tells
+            // them apart is the out parameter. Checking the wrong one first means
+            // quarantining a file that cannot be moved because it is locked, which
+            // fails, gets logged, and then lets the save through to overwrite the
+            // one thing this was written to protect.
+            if (unreadable)
+            {
+                return false;
+            }
+
+            _unreadable = false;
+
+            if (content is null)
+            {
+                // Not there at all now. Whatever was holding it has let go
+                // completely, so there is nothing left to protect.
+                return true;
+            }
+
+            // Readable now, and still not something this session has read. Moved
+            // aside under a stamped name rather than overwritten blind, which is
+            // what already happens to content that will not parse.
+            Quarantine();
+            AppLog.Warn("SETTINGS the file that could not be read at launch was kept aside rather than overwritten");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("SETTINGS SAVE", ex);
+            return false;
+        }
+    }
+
+
     public void Save(AppSettings settings)
     {
-        if (_unreadable)
+        if (_unreadable && !SetAsideUnreadableSettings())
         {
-            AppLog.Warn("SETTINGS SAVE skipped: settings.json could not be read at launch");
+            AppLog.Warn("SETTINGS SAVE skipped: settings.json could not be read at launch and still cannot be read");
             return;
         }
 
@@ -417,7 +481,7 @@ public sealed class ProfileManager
     /// range the app's own controls enforce.
     /// </para>
     /// </summary>
-    public static AppSettings Normalize(AppSettings settings)
+    public static AppSettings Normalize(AppSettings settings, bool brandNew = true)
     {
         // A profile written before the EffectsEnabled rename still carries the old
         // key, and restoring a backup replaces the whole profile without passing
@@ -536,7 +600,7 @@ settings.CustomDisplayPresets ??= new List<DisplayPreset>();
             preset.Tag ??= string.Empty;
         }
 
-foreach (AudioPreset preset in settings.CustomAudioPresets)
+        foreach (AudioPreset preset in settings.CustomAudioPresets)
         {
             preset.Id ??= string.Empty;
             preset.Name ??= string.Empty;
@@ -552,7 +616,7 @@ foreach (AudioPreset preset in settings.CustomAudioPresets)
         // landed on the "could not start" box, with the quarantine path never
         // reached because the file had parsed perfectly well. Unrecoverable without
         // editing settings.json by hand.
-        settings.Slots = SlotService.Migrate(settings);
+        settings.Slots = SlotService.Migrate(settings, brandNew);
 
         foreach (AppProfile profile in settings.AppProfiles)
         {
@@ -569,11 +633,7 @@ foreach (AudioPreset preset in settings.CustomAudioPresets)
 
         foreach (AudioPreset preset in settings.CustomAudioPresets)
         {
-            int wanted = preset.NumBands <= 0 ? AudioPreset.PresetBandCount : preset.NumBands;
-            if (!AudioPreset.BandCounts.Contains(wanted))
-            {
-                wanted = AudioPreset.PresetBandCount;
-            }
+            int wanted = AudioService.ResolveBandCount(preset);
 
             preset.NumBands = wanted;
             if (preset.Bands is null || preset.Bands.Length != wanted)

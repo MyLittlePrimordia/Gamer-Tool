@@ -151,8 +151,25 @@ public static class IconFactory
         return result;
     }
 
-    private static string SelfExe =>
-        System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName ?? string.Empty;
+    /// <summary>
+    /// This executable's own path, used to skip asking the shell for our own icon.
+    /// <para>
+    /// Disposed rather than left to the finaliser. This is evaluated once per
+    /// candidate executable in <see cref="WarmAppIcons"/>, which runs inside a
+    /// loop over the whole Steam plus registry plus running-process scan, and a
+    /// <see cref="System.Diagnostics.Process"/> holds an open handle to this
+    /// process. The three services that walk process lists all release theirs in a
+    /// finally; this one was missed.
+    /// </para>
+    /// </summary>
+    private static string SelfExe
+    {
+        get
+        {
+            using System.Diagnostics.Process current = System.Diagnostics.Process.GetCurrentProcess();
+            return current.MainModule?.FileName ?? string.Empty;
+        }
+    }
 
 
     /// <summary>

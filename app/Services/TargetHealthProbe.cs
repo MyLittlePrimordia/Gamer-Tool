@@ -39,7 +39,26 @@ public enum TargetHealth
     /// index that does not exist, or a refresh rate of one hertz, for a display it
     /// is simultaneously driving at full specification.
     /// </summary>
-    Stub
+    Stub,
+
+    /// <summary>
+    /// The question could not be asked at all.
+    /// <para>
+    /// Deliberately not <see cref="Unknown"/>. Unknown means the driver answered
+    /// and there was no target to describe; this means the query itself failed or
+    /// was refused. They were the same value, so a display whose driver threw -
+    /// which is a real thing that happens, and the array allocation in particular
+    /// can throw - came back indistinguishable from a display with nothing
+    /// attached, and the user's diagnosis was built on that.
+    /// </para>
+    /// <para>
+    /// Nothing branches on this. The checks that matter all ask about
+    /// <see cref="Stub"/> specifically, and an unanswerable question is not a stub.
+    /// It exists so the log and the diagnostics row can say "we could not look"
+    /// instead of "there is nothing there".
+    /// </para>
+    /// </summary>
+    Unavailable
 }
 
 

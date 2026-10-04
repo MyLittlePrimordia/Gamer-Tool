@@ -47,6 +47,21 @@ public sealed class AppCandidate : System.ComponentModel.INotifyPropertyChanged
 
     public string ProcessName { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Which process this candidate was, for a live scan. Zero for anything that
+    /// did not come from a running process - a saved profile, for instance - because
+    /// there is no process behind those at all.
+    /// <para>
+    /// The exe path is not enough to say which one this was. Two processes can
+    /// share an image path - a launcher and the thing it launched, or a second copy
+    /// of the same game - and a launcher without a window is precisely the case the
+    /// window filter exists to drop. Anything that needs to get back to the process
+    /// this was read from has to use this, because getting back by path can land on
+    /// the other one instead.
+    /// </para>
+    /// </summary>
+    public int ProcessId { get; set; }
+
     public string Source { get; set; } = "APP";
 
     /// <summary>

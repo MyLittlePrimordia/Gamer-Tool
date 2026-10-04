@@ -229,6 +229,7 @@ public sealed class AppLibraryService
                     Name = title.Length > 0 ? title : name,
                     ExePath = path,
                     ProcessName = name,
+                    ProcessId = process.Id,
                     Source = "RUNNING"
                 });
             }
@@ -497,7 +498,7 @@ public sealed class AppLibraryService
                 // each library in a numbered object, so a top-level read returns
                 // an empty section and every game on a drive other than the
                 // Steam root quietly stops existing.
-                foreach (string path in Vdf.ParseAllValues(File.ReadAllText(vdf), "path"))
+                foreach (string path in Vdf.ParseAllValues(BoundedRead.AllText(vdf), "path"))
                 {
                     if (!string.IsNullOrWhiteSpace(path))
                     {
@@ -559,7 +560,7 @@ public sealed class AppLibraryService
         {
             try
             {
-                Dictionary<string, Dictionary<string, string>> sections = Vdf.ParseSections(File.ReadAllText(manifest));
+                Dictionary<string, Dictionary<string, string>> sections = Vdf.ParseSections(BoundedRead.AllText(manifest));
                 if (!sections.TryGetValue("AppState", out Dictionary<string, string>? state))
                 {
                     continue;
@@ -843,15 +844,6 @@ public static class Vdf
 
             index += 2;
         }
-    }
-
-    public static Dictionary<string, Dictionary<string, string>> Parse(string text)
-    {
-        List<string> tokens = Tokenize(text);
-        int index = 0;
-        Dictionary<string, string> root = new(StringComparer.OrdinalIgnoreCase);
-        ParseInto(tokens, ref index, root);
-        return new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase) { { "root", root } };
     }
 
     public static Dictionary<string, Dictionary<string, string>> ParseSections(string text)

@@ -469,12 +469,18 @@ public partial class MainWindow : Window
 
     private void OnUpgradeFxSoundClick(object sender, RoutedEventArgs e)
     {
-        // Two jobs, decided by what is already known. The banner's button says
-        // "Check update" until a check has happened, and pressing it then is an
-        // explicit request to go and look - which is the only path in the app that
-        // touches the network for anything other than an install the user asked
-        // for. Once an update is known the same button performs it.
-        if (_fxUpdateAvailable)
+        // Three jobs rather than two. The banner's button says "Check update" until a
+        // check has happened, and pressing it then is an explicit request to go
+        // and look - which is the only path in the app that touches the network
+        // for anything other than an install the user asked for.
+        //
+        // With no winget there is nothing to look with, so the button does not
+        // offer to look: it offers the update, which SetupService can still do by
+        // downloading the installer directly. Leaving it on "check" would have
+        // been a button that runs the same unanswered query every time it is
+        // pressed, which is the unreachable-control problem this file already
+        // has a note about.
+        if (_fxUpdate is { Outcome: FxUpdateOutcome.NewerAvailable or FxUpdateOutcome.NoChecker })
         {
             _ = UpgradeFxSoundAsync();
             return;
@@ -562,8 +568,11 @@ public partial class MainWindow : Window
             return;
         }
 
-        _fxUpdateAvailable = false;
-        _fxUpdateVersion = string.Empty;
+        // Just installed, so it is the current version by definition. Recorded as an
+        // answer rather than as "clear the flag": the previous line of code left
+        // the checked flag standing with nothing behind it, which the banner then
+        // read as a successful check.
+        _fxUpdate = new FxUpdateStatus(FxUpdateOutcome.UpToDate, string.Empty);
 
         // The rest of a fresh launch, without the fresh launch. AdoptInstalledPath
         // has already re-resolved the exe, and this is everything else the app
@@ -714,8 +723,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        _fxUpdateAvailable = false;
-        _fxUpdateVersion = string.Empty;
+        // Same as after an install: it has just been updated, so there is nothing newer
+        // to offer and saying so is a fact rather than an absence of one.
+        _fxUpdate = new FxUpdateStatus(FxUpdateOutcome.UpToDate, string.Empty);
 
         // The update landed but the handshake is what says the app can actually
         // use it, so the two are reported separately rather than the update being
@@ -820,6 +830,8 @@ public partial class MainWindow : Window
         // Saving afterwards persists the empty map, which is the honest record
         // that there is nothing outstanding to put back.
         Commit();
+
+        StopFxWatch();
 
         if (_stateTimer is not null)
         {

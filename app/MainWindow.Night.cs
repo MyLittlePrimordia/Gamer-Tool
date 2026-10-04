@@ -374,11 +374,20 @@ public partial class MainWindow
         _nightRampWasOurs = _display.IsEnabled;
         _nightApplied = true;
 
-        // Full strength for a profile with no fade set, and for the first push of a
-        // window whose fade has already elapsed - a machine asleep across the start
-        // of the window should not wake up to a half-warm screen.
-        _nightStrength = 1.0;
-
+// _nightStrength is not forced to full here, and used to be. The comment
+        // that stood here said full strength was for "a profile with no fade
+        // set, and for the first push of a window whose fade has already
+        // elapsed" - but NightFade.Strength already returns exactly 1.0 in
+        // both of those cases, because a zero fade divides to infinity and a
+        // machine waking past the ramp is past the ramp. So the caller had
+        // already worked out the right value, set it on the line above, and
+        // this overwrote it with 1.0 regardless.
+        //
+        // What that produced on any profile with a fade: a full-strength EXTRA
+        // WARM push, then fifteen seconds later a quiet push that found a real
+        // difference against that 1.0 and dragged the ramp back to nearly
+        // nothing, and only then the fade climbing as designed. The fade ran,
+        // but behind a flash and a collapse.
         PushBlueLight();
         Flash("Night blue light on");
 

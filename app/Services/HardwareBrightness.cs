@@ -348,19 +348,22 @@ public sealed class MonitorProbe
     public string EdidSource { get; set; } = "none";
 
     /// <summary>
-    /// Whether the display driver declined to hand back this display's EDID, and
-    /// the block therefore came out of the registry cache instead.
+    /// Whether this display's EDID was read out of the Windows cache, because the
+    /// app could not read it from the driver.
     /// <para>
-    /// Worth its own flag rather than a string comparison because it is the
-    /// corroboration that turns "the driver gave me no DDC/CI handle" from one
-    /// ambiguous fact into a diagnosis. A display driver has no ordinary reason to
-    /// withhold a monitor's EDID. Withholding it and the DDC/CI handle together is
-    /// what content protection looks like from the outside, and it is the
-    /// difference between advising someone to check an HDCP setting and advising
-    /// them to buy a different cable.
+    /// This used to be <c>EdidSource != "driver"</c>, on the reasoning that a
+    /// driver had been asked and had said no. It had not. The live request was
+    /// addressed to a 128-character field for a 256-character answer, so it had
+    /// never succeeded, which made this true of every display on every machine -
+    /// including the ones where no EDID was found at all, which is the case that
+    /// makes a flag worth having. It now means what it says.
+    /// </para>
+    /// <para>
+    /// False for "none", and that is the improvement: a support reader can now tell
+    /// a display Windows had a cached block for from one it had nothing on.
     /// </para>
     /// </summary>
-    public bool EdidWithheld => EdidSource != "driver";
+    public bool EdidWithheld => EdidSource == "registry";
 
     /// <summary>
     /// Where AMD's per-display HDCP setting is saved on this machine, if anywhere.
@@ -771,13 +774,19 @@ private static void LeaveBus()
         }
         else if (bus.Outcome == BusOutcome.NoDdcPathway && edidSource != "driver")
         {
+            // Says the block came from the Windows cache, and not that a driver
+            // refused anything. It used to say the driver "declined to return this
+            // display's EDID", which was an inference from a flag pair and never an
+            // observation: the live request went to a 128-character field for a
+            // 256-character answer, so it had never succeeded on any machine, and
+            // the diagnosis below is built on it.
             notes.Add(
-                "The driver also declined to return this display's EDID"
+                "Windows is holding this display's EDID in its own cache"
                 + (edid.Verdict == EdidVerdict.Plausible
-                    ? ", reading it from the Windows cache instead"
-                    : string.Empty)
-                + ". A driver has no ordinary reason to withhold both, and withholding the display's"
-                + " identity along with its DDC/CI link is what content protection looks like from here");
+                    ? ", and it is what the check below was made against"
+                    : ", though the block itself did not read as usable")
+                + ". A driver that gives no DDC/CI handle and a display whose identity it will not"
+                + " describe is what content protection looks like from here");
         }
 
         // Only worth saying when the registry actually disagrees with itself. On a
@@ -976,7 +985,18 @@ private static void LeaveBus()
                     // mean guessing which entries are real.
                     if (filled)
                     {
-                        DestroyPhysicalMonitors(count, buffer);
+                        if (!DestroyPhysicalMonitors(count, buffer))
+                        {
+                            // Every other interop call in this file has its result
+                            // checked, and this one was the exception. A failure here
+                            // leaks every HPhysicalMonitor handle for the life of the
+                            // process, and there is nothing anywhere that would
+                            // notice: the handles are not ours to close by another
+                            // route, and the symptom is a slowly growing handle count
+                            // on a machine that happens to be probing a lot.
+                            TraceLog.Write("DDC destroy physical monitors failed: "
+                                + DdcErrors.Describe(Marshal.GetLastWin32Error()));
+                        }
                     }
 
                     Marshal.FreeHGlobal(buffer);
@@ -999,7 +1019,7 @@ private static void LeaveBus()
             }
         });
 
-if (!write.Wait(ProbeTimeoutMs))
+        if (!write.Wait(ProbeTimeoutMs))
         {
             // The worker is still inside the transaction and still holding the
             // gate. Handing it the claim is what stops every later call from
@@ -1211,6 +1231,7 @@ Task? abandoned = null;
                     int lastError = 0;
                     int usedAttempts = 0;
                     string? firstZeroHandle = null;
+                    int zeroHandles = 0;
 
                     for (int i = 0; i < count; i++)
                     {
@@ -1226,6 +1247,7 @@ Task? abandoned = null;
                             // never spoken to, so a refusal count against it is
                             // counting something that did not happen.
                             firstZeroHandle ??= monitor.szPhysicalMonitorDescription;
+                            zeroHandles++;
                             declined.Add("\"" + monitor.szPhysicalMonitorDescription
                                 + "\" has no DDC/CI handle from the driver, so this display has no DDC/CI link (a dock, hub, KVM or"
                                 + " adapter in the path will do this, as will a GPU driver with no DDC/CI support)");
@@ -1287,7 +1309,15 @@ Task? abandoned = null;
                             + usedAttempts + " attempts, " + DdcErrors.Describe(error));
                     }
 
-                    bool zeroHandleOnly = firstZeroHandle is not null && declined.Count == 1;
+                    // Counted separately from declined, because "declined.Count == 1" was being
+                    // read as "the only thing wrong here is a missing handle" and it
+                    // does not mean that. The zero-handle branch adds to declined
+                    // too, so a display offering two physical monitors with
+                    // neither handle came out as a refusal rather than as no DDC/CI
+                    // pathway - with a message listing two monitors that had no
+                    // handle, filed under Refused, and with all three of the
+                    // explanatory notes that only print for NoDdcPathway suppressed.
+                    bool zeroHandleOnly = zeroHandles > 0 && zeroHandles == declined.Count;
 
                     return new BusResult
                     {
@@ -1308,7 +1338,18 @@ Task? abandoned = null;
                     // that were never ours to destroy.
                     if (filled)
                     {
-                        DestroyPhysicalMonitors(count, buffer);
+                        if (!DestroyPhysicalMonitors(count, buffer))
+                        {
+                            // Every other interop call in this file has its result
+                            // checked, and this one was the exception. A failure here
+                            // leaks every HPhysicalMonitor handle for the life of the
+                            // process, and there is nothing anywhere that would
+                            // notice: the handles are not ours to close by another
+                            // route, and the symptom is a slowly growing handle count
+                            // on a machine that happens to be probing a lot.
+                            TraceLog.Write("DDC destroy physical monitors failed: "
+                                + DdcErrors.Describe(Marshal.GetLastWin32Error()));
+                        }
                     }
 
                     Marshal.FreeHGlobal(buffer);
@@ -1332,7 +1373,7 @@ Task? abandoned = null;
             }
         });
 
-if (!read.Wait(ProbeTimeoutMs))
+        if (!read.Wait(ProbeTimeoutMs))
         {
             // The worker is still inside the transaction holding the gate. It takes
             // the claim with it, so this and every later call report the bus as
@@ -1392,7 +1433,6 @@ if (!read.Wait(ProbeTimeoutMs))
         foreach ((IntPtr handle, string device) in displays)
         {
             string friendly = device;
-            string driverEdid = string.Empty;
             string hardwareId = string.Empty;
             bool external = true;
 
@@ -1408,79 +1448,44 @@ if (!read.Wait(ProbeTimeoutMs))
                 {
                     friendly = md.DeviceString.Length == 0 ? device : md.DeviceString;
 
-                    // With EDD_GET_EDID set, DeviceID is REPLACED by the EDID in
-                    // hex. A driver that declines the request leaves the hardware
-                    // id in place instead, which is why this field is sometimes an
-                    // EDID and sometimes not. DeviceKey is not rewritten, so it is
-                    // the dependable source of the panel's registry key.
-                    if (LooksLikeHexEdid(md.DeviceID))
-                    {
-                        driverEdid = md.DeviceID;
-                        hardwareId = PanelKeyOf(md.DeviceKey.Length > 0 ? md.DeviceKey : md.DeviceID);
-                    }
-                    else
-                    {
-                        hardwareId = PanelKeyOf(md.DeviceID.Length > 0 ? md.DeviceID : md.DeviceKey);
-                    }
+                    // DeviceID is WCHAR[128]. An EDID is 128 bytes, which is 256
+                    // characters of hex, so an EDD_GET_EDID reply cannot fit in the
+                    // field it is supposed to arrive in and the driver has to
+                    // truncate or decline it. This code used to ask for it, test the
+                    // reply for 256 hex characters, and fall through to the registry
+                    // - which it therefore did on every display on every machine,
+                    // while the log and the user's diagnosis spoke of a driver that
+                    // had declined something the app was never able to receive.
+                    //
+                    // The flag is still passed, because it is also what makes
+                    // DeviceKey dependable: DeviceID is left holding the hardware id
+                    // and DeviceKey the panel's registry key, and the key is what
+                    // the EDID lookup below actually wants. Testing DeviceID for an
+                    // EDID was not what made it dependable.
+                    hardwareId = PanelKeyOf(md.DeviceKey.Length > 0 ? md.DeviceKey : md.DeviceID);
 
                     external = (md.StateFlags & DisplayDeviceAttachedToDesktop) == 0;
                 }
             }
 
-            // Asked for outside the loop on purpose. This driver refuses the
-            // EDD_GET_EDID request outright, so the enumeration above can come
-            // back empty, and a fallback that only runs when the driver answered
-            // is a fallback that never runs.
-            EdidReading reading = ReadEdid(driverEdid, friendly, hardwareId, out string source);
+            EdidReading reading = ReadEdid(friendly, hardwareId, out string source);
 
             yield return (handle, device, friendly, external, reading, source, hardwareId);
         }
     }
 
 
-    /// <summary>An EDD_GET_EDID reply is a long hex string; a hardware id is not.</summary>
-    private static bool LooksLikeHexEdid(string value) =>
-        value.Length >= 256 && value.Length % 2 == 0;
-
-
     /// <summary>
     /// The panel's key under HKLM\SYSTEM\CurrentControlSet\Enum\DISPLAY, pulled
-    /// out of a device id. Drivers spell these several ways, so the two that
-    /// actually turn up are both handled:
-    /// <code>\\?\DISPLAY#AOCA610#7&amp;272e3773&amp;0&amp;UID264#{...}</code> and
-    /// <code>MONITOR\AOCA610\{...}\0001</code>.
+    /// out of a device id.
+    /// <para>
+    /// Kept public because it is the app's answer to "what is this panel called in
+    /// the registry", and because it had a second implementation elsewhere that
+    /// this replaced. The parsing itself, and the note on why there is only one of
+    /// it now, live on <see cref="DisplayRegistry.HardwareKeyOf"/>.
+    /// </para>
     /// </summary>
-    public static string PanelKeyOf(string deviceId)
-    {
-        if (string.IsNullOrWhiteSpace(deviceId))
-        {
-            return string.Empty;
-        }
-
-        int hash = deviceId.IndexOf("DISPLAY#", StringComparison.OrdinalIgnoreCase);
-        if (hash >= 0)
-        {
-            int start = hash + "DISPLAY#".Length;
-            int end = deviceId.IndexOf('#', start);
-            if (end > start)
-            {
-                return deviceId[start..end];
-            }
-        }
-
-        int backslash = deviceId.IndexOf('\\');
-        if (backslash >= 0)
-        {
-            int start = backslash + 1;
-            int end = deviceId.IndexOf('\\', start);
-            if (end > start)
-            {
-                return deviceId[start..end];
-            }
-        }
-
-        return string.Empty;
-    }
+    public static string PanelKeyOf(string deviceId) => DisplayRegistry.HardwareKeyOf(deviceId);
 
 
     private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, IntPtr rect, IntPtr data);
@@ -1587,8 +1592,14 @@ if (!read.Wait(ProbeTimeoutMs))
         }
         catch (Exception ex)
         {
-            // Diagnostics must never be the thing that breaks a probe.
-            TraceLog.Write("HWB display link read failed: " + ex.GetType().Name);
+            // Diagnostics must never be the thing that breaks a probe, and this
+            // returns the empty list on purpose so the probe carries on. What it
+            // must not do is return the empty list silently: every display then
+            // reports "unknown, HDR unknown", which is true, and a support reader
+            // has no way to tell a driver that withheld the answer from an
+            // allocation that threw before the question was asked. Carrying the
+            // exception is what separates them.
+            TraceLog.Write("HWB display link read failed", ex);
         }
 
         return links;
@@ -1619,7 +1630,7 @@ if (!read.Wait(ProbeTimeoutMs))
             if (GetDisplayConfigBufferSizes(QueryDisplayConfigOnlyActive, out uint pathCount, out uint modeCount) != 0
                 || pathCount == 0)
             {
-                return new TargetHealthReading(TargetHealth.Unknown, new[] { "the display topology could not be queried" });
+                return new TargetHealthReading(TargetHealth.Unavailable, new[] { "the display topology could not be queried" });
             }
 
             var paths = new DISPLAYCONFIG_PATH_INFO[pathCount];
@@ -1633,7 +1644,7 @@ if (!read.Wait(ProbeTimeoutMs))
                     modes,
                     IntPtr.Zero) != 0)
             {
-                return new TargetHealthReading(TargetHealth.Unknown, new[] { "the display topology could not be queried" });
+                return new TargetHealthReading(TargetHealth.Unavailable, new[] { "the display topology could not be queried" });
             }
 
             // Reported modes are what the compositor allocated slots for. The driver
@@ -1687,9 +1698,14 @@ if (!read.Wait(ProbeTimeoutMs))
         }
         catch (Exception ex)
         {
-            // Diagnostics must never be the thing that breaks a probe.
-            TraceLog.Write("HWB target health read failed: " + ex.GetType().Name);
-            return new TargetHealthReading(TargetHealth.Unknown, new[] { "the target could not be examined" });
+            // Diagnostics must never be the thing that breaks a probe - which is
+            // why this is caught at all, and not a reason to report the failure as
+            // though it were an answer. Unavailable says the question went
+            // unasked; Unknown says the driver answered and there was nothing to
+            // describe. Carries the exception, because this is reached by an
+            // allocation failure as readily as by a driver fault.
+            TraceLog.Write("HWB target health read failed", ex);
+            return new TargetHealthReading(TargetHealth.Unavailable, new[] { "the target could not be examined" });
         }
     }
 
@@ -1837,19 +1853,16 @@ if (!read.Wait(ProbeTimeoutMs))
     }
 
 
-    private static EdidReading ReadEdid(string hex, string modelName, string hardwareId, out string source)
+    /// <summary>
+    /// The EDID Windows cached for this display, straight out of
+    /// HKLM\SYSTEM\CurrentControlSet\Enum\DISPLAY.
+    /// <para>
+    /// The registry is not a fallback here, it is the only source. See the note on
+    /// the enumeration for why the live request cannot be satisfied.
+    /// </para>
+    /// </summary>
+    private static EdidReading ReadEdid(string modelName, string hardwareId, out string source)
     {
-        if (TryHex(hex, out byte[]? fromDriver) && fromDriver is not null)
-        {
-            source = "driver";
-            return ParseEdid(fromDriver, modelName);
-        }
-
-        // Plenty of drivers decline the EDD_GET_EDID request and still publish
-        // the block in the registry, which is where Windows itself caches it. One
-        // real machine here reports "Generic PnP Monitor" through the driver and
-        // holds a perfectly good 128 byte EDID under Enum\DISPLAY, so without this
-        // the pre-flight check would refuse to look at a perfectly ordinary panel.
         byte[]? fromRegistry = ReadRegistryEdid(modelName, hardwareId);
         if (fromRegistry is null)
         {
@@ -1880,7 +1893,7 @@ if (!read.Wait(ProbeTimeoutMs))
         try
         {
             using Microsoft.Win32.RegistryKey? root =
-                Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Enum\DISPLAY");
+                Microsoft.Win32.Registry.LocalMachine.OpenSubKey(DisplayRegistry.PanelRoot);
 
             if (root is null)
             {
@@ -1907,17 +1920,10 @@ if (!read.Wait(ProbeTimeoutMs))
                         continue;
                     }
 
-                    // The value reads back as byte[] in theory and as Object[] in
-                    // practice, which is exactly the sort of thing a silent
-                    // `is byte[]` test throws away. Both shapes are accepted.
-                    byte[]? bytes = parameters.GetValue("EDID") switch
-                    {
-                        byte[] direct when direct.Length >= 128 => direct,
-                        object[] boxed when boxed.Length >= 128 => boxed
-                            .Select(v => v is byte b ? b : (byte)0)
-                            .ToArray(),
-                        _ => null
-                    };
+                    // Both shapes are accepted, and the second one is the one that
+                    // actually turns up. Shared with the file that names panels, so
+                    // there is one decoder rather than the two this had.
+                    byte[]? bytes = DisplayRegistry.EdidBytes(parameters.GetValue("EDID"));
 
                     if (bytes is null)
                     {
@@ -2058,10 +2064,7 @@ if (!read.Wait(ProbeTimeoutMs))
     }
 
 
-    /// <summary>Why the registry fallback gave up, for diagnostics. Empty when it worked.</summary>
-
-
-
+    
     /// <summary>
     /// Decodes a 128 byte EDID block. Public and side effect free so it can be
     /// driven from synthetic blocks in the test suite, which is the only way to
@@ -2173,29 +2176,6 @@ if (!read.Wait(ProbeTimeoutMs))
             Verdict = reasons.Count == 0 ? EdidVerdict.Plausible : EdidVerdict.Suspicious,
             Reasons = reasons
         };
-    }
-
-
-    private static bool TryHex(string hex, out byte[]? bytes)
-    {
-        bytes = null;
-        hex = hex.Trim();
-        if (hex.Length < 256 || hex.Length % 2 != 0)
-        {
-            return false;
-        }
-
-        byte[] buffer = new byte[hex.Length / 2];
-        for (int i = 0; i < buffer.Length; i++)
-        {
-            if (!byte.TryParse(hex.AsSpan(i * 2, 2), System.Globalization.NumberStyles.HexNumber, null, out buffer[i]))
-            {
-                return false;
-            }
-        }
-
-        bytes = buffer;
-        return true;
     }
 
 

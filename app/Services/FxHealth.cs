@@ -164,7 +164,7 @@ public sealed class FxHealth
             {
                 HowItIs = State.Missing,
                 Caption = "NOT INSTALLED",
-                Detail = "FxSound does every bit of the audio work here, so nothing on this tab works yet.",
+                Detail = "Not installed yet.",
                 OffersInstall = true,
             };
         }
@@ -175,7 +175,7 @@ public sealed class FxHealth
             {
                 HowItIs = State.NotRunning,
                 Caption = "NOT RUNNING",
-                Detail = "FxSound is installed but not running, so there is no sound to change.",
+                Detail = "Not running.",
                 OffersStart = true,
             };
         }
@@ -186,28 +186,35 @@ public sealed class FxHealth
             {
                 HowItIs = State.Stale,
                 Caption = "NO RESPONSE",
-                Detail = "FxSound is running but is not reporting its settings, so what is shown here may be out of date.",
+                Detail = "Not reporting settings.",
             };
         }
 
         if (power == PowerState.Off)
         {
-            // Wording rewritten. It used to say the sliders "have nothing to act
-            // on", which is true and reads as a fault: it tells the user their
-            // controls are dead without saying that the next thing they do will
-            // fix it by itself. "Bypassed" is also engine jargon, and it was the
-            // word in the caption a new user was most likely to read as "this is
-            // broken".
+            // Wording rewritten twice now, both times for length.
             //
-            // What this state is actually for is answering "why is my EQ doing
-            // nothing" - and the honest answer is that it is switched off and one
-            // click away from on. So that is what it says.
+            // It used to say the sliders "have nothing to act on", which is true and
+            // reads as a fault: it tells the user their controls are dead without
+            // saying that the next thing they do will fix it by itself. "Bypassed"
+            // is also engine jargon, and it was the word in the caption a new user
+            // was most likely to read as "this is broken".
+            //
+            // The replacement then carried two sentences: that the settings are not being
+            // heard, and that applying a preset switches it back on. The first is
+            // already the caption immediately beside this, said twice, and the pair
+            // ran to a hundred and twenty characters on a status line somebody is
+            // trying to read at a glance.
+            //
+            // What earns its place is the half that is not on screen anywhere else:
+            // that one click reverses it, and that the click is applying a preset.
+            // That is what The_switched_off_message_says_what_to_do_about_it holds
+            // this to, so the wording keeps both of the phrases it checks for.
             return new FxHealth
             {
                 HowItIs = State.PoweredOff,
                 Caption = "EQ SWITCHED OFF",
-                Detail = "FxSound is switched off, so your settings are not being heard. "
-                    + "Apply a preset on the Audio tab and it switches back on by itself.",
+                Detail = "Apply a preset and it switches back on by itself.",
             };
         }
 

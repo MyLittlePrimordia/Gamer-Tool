@@ -175,7 +175,22 @@ public sealed class BackupService
         // their configuration, which is the one artefact in this app that exists
         // nowhere else. It did not keep a ".bak" the way the profile does, because
         // the whole point of a backup is that it is somewhere else.
-        string json = JsonSerializer.Serialize(file, Options);
+        // Under the profile's own gate, exactly as ProfileManager.Save does it and for
+        // the same reason. Save's comment names the hazard: the backlight worker
+        // adds to the exclusion list and to the remembered brightness from a pool
+        // thread while the UI thread serialises, and enumerating a collection while
+        // another thread is adding to it throws. Taking the same lock here is what
+        // stops the backup being the one path that does not.
+        //
+        // It is not redundant with anything. The worker holds BacklightService's
+        // gate while it makes those writes, not settings.Gate, so the two locks do
+        // not exclude each other and only settings.Gate is common to both sides.
+        string json;
+        lock (settings.Gate)
+        {
+            json = JsonSerializer.Serialize(file, Options);
+        }
+
         string temp = path + ".tmp";
         File.WriteAllText(temp, json);
         ProfileManager.AtomicSwap(temp, path);
@@ -194,7 +209,7 @@ public sealed class BackupService
                 return null;
             }
 
-            string json = File.ReadAllText(path);
+            string json = BoundedRead.AllText(path);
             AppSettings? settings = Read(json);
             if (settings is null)
             {
@@ -202,7 +217,11 @@ public sealed class BackupService
                 return null;
             }
 
-            return ProfileManager.Normalize(settings);
+            // brandNew is false, and this is the reason the parameter exists. A backup is a
+        // profile somebody actually used, so an empty slot list in one is a decision
+        // they made and are getting back, not a first run that has yet to be given
+        // the shipped slots. Restoring an empty profile used to hand back six.
+        return ProfileManager.Normalize(settings, brandNew: false);
         }
         catch (Exception ex)
         {

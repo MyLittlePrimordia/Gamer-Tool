@@ -616,9 +616,7 @@ public sealed class AudioService
         // refuses it too, but this is the boundary where an untrusted number enters
         // the app, so it is bounded here as well as downstream.
         int reported = ReadState()?.Equalizer.NumBands ?? AudioPreset.PresetBandCount;
-        int bands = reported <= 0 || !AudioPreset.BandCounts.Contains(reported)
-            ? AudioPreset.PresetBandCount
-            : reported;
+        int bands = ResolveBandCount(reported);
 
         Run("--power=0");
 
@@ -843,12 +841,24 @@ public sealed class AudioService
     /// had been told to expect rather than with what the engine could actually hold.
     /// </para>
     /// </summary>
-    public static int ResolveBandCount(AudioPreset preset)
+    public static int ResolveBandCount(AudioPreset preset) => ResolveBandCount(preset.NumBands);
+
+    /// <summary>
+    /// The band count to actually use, given a number that came from somewhere
+    /// else.
+    /// <para>
+    /// Takes the count rather than only the preset because two of the three
+    /// callers do not have one: this file reads the count back off the engine
+    /// during a reset, and <see cref="ProfileManager"/> normalises a saved preset.
+    /// Both used to carry their own copy of the rule, which is how a profile
+    /// naming thirteen bands was sent ten and then checked against thirteen.
+    /// </para>
+    /// </summary>
+    public static int ResolveBandCount(int requested)
     {
-        int count = preset.NumBands;
-        return count <= 0 || !AudioPreset.BandCounts.Contains(count)
+        return requested <= 0 || !AudioPreset.BandCounts.Contains(requested)
             ? AudioPreset.PresetBandCount
-            : count;
+            : requested;
     }
 
     /// <summary>Throws the bypass, or takes it off. See <see cref="BuildBypassCommand"/>.</summary>

@@ -117,7 +117,21 @@ public sealed class AudioDeviceManager
                     }
                     catch (Exception ex)
                     {
-                        Debug.WriteLine(ex.Message);
+                        // A device that cannot be read at all is left out of the list
+                        // rather than added half-built, and the reason it vanished
+                        // has to be recorded here: from the user's side a missing
+                        // endpoint is indistinguishable from one Windows did not
+                        // report, and "my headset is not in the list" is not
+                        // something anybody can act on without this line.
+                        //
+                        // Nothing read off the device to name it in. This catch
+                        // covers the read of device.ID, so asking for the ID again
+                        // to put in the message raises the same failure out of the
+                        // handler. The name already read is the only identifier
+                        // known to be safe, and it is empty when even that failed.
+                        TraceLog.Write(
+                            string.IsNullOrWhiteSpace(name) ? "OUTPUT device skipped" : "OUTPUT device skipped: " + name,
+                            ex);
                     }
                 }
             }
@@ -125,7 +139,11 @@ public sealed class AudioDeviceManager
         catch (Exception ex)
         {
             StatusChanged?.Invoke("NO DEVICE");
-            Debug.WriteLine(ex.Message);
+
+            // The whole enumeration failed, so the picker will be empty and every
+            // other explanation for that is a guess. Debug.WriteLine was compiled
+            // out of Release, which is the build that ships, so this reached nobody.
+            TraceLog.Write("OUTPUT device list unreadable", ex);
         }
 
         return devices;

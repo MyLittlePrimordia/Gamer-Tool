@@ -303,4 +303,30 @@ public class SlotServiceTests
             new[] { "ALT+1", "NUM5", "WIN+Q", "F2", "CTRL+ALT+S" },
             slots.Select(s => s.Hotkey));
     }
+[Fact]
+    public void A_profile_whose_slots_were_all_deleted_keeps_them_deleted()
+    {
+        // The other half of "fresh install gets the six shipped slots", and it used
+        // to fail it. An empty list on a used profile is a decision somebody made;
+        // treating it as a first run handed back six slots and their default
+        // bindings, which then registered with Windows.
+        AppSettings settings = new();
+        settings.Slots = new List<HotkeySlot>();
+
+        Assert.Empty(SlotService.Migrate(settings, brandNew: false));
+    }
+
+    [Fact]
+    public void A_used_profile_with_slots_still_keeps_them()
+    {
+        AppSettings settings = new();
+        settings.Slots = new List<HotkeySlot>
+        {
+            new HotkeySlot { Id = "a", Name = "Mine", Hotkey = "CTRL+ALT+S" },
+        };
+
+        List<HotkeySlot> slots = SlotService.Migrate(settings, brandNew: false);
+
+        Assert.Equal("Mine", Assert.Single(slots).Name);
+    }
 }
