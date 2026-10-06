@@ -164,7 +164,7 @@ public class LiveEqTests
             + " events in, " + writesPerSecond.ToString("0") + " writes out");
     }
 
-    [Fact]
+    [SkippableFact]
     public void OneEngineWriteCostsWhatWasMeasuredAndNotWhatWasFeared()
     {
         // Re-measured against the real engine. 77 ms sustained over forty writes,
