@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using Xunit;
+using Skip = Xunit.Skip;
 
 namespace GamerTool.Tests;
 
@@ -170,7 +171,7 @@ public class LiveEqTests
         // no degradation - which is the number that makes live EQ viable at all,
         // and the one the original refusal should have been based on.
         string exe = @"C:\Program Files\FxSound LLC\FxSound\FxSound.exe";
-        Assert.True(File.Exists(exe), "FxSound is not at the path the cost was measured against");
+        Skip.If(!File.Exists(exe), "FxSound is not at the path the cost was measured against");
 
         var stopwatch = Stopwatch.StartNew();
 
