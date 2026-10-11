@@ -1346,8 +1346,45 @@ public partial class MainWindow : Window
     }
 
 
-    /// <summary>1 while a scan is running, so two of them never overlap.</summary>
-    private int _scanBusy;
+    /// <summary>
+    /// Runs one app-library scan at a time, and runs another afterwards for a
+    /// request that arrived while the first was in flight.
+    /// </summary>
+    /// <remarks>
+    /// The sequencing lives in <see cref="ScanCoordinator"/> rather than here, and
+    /// that move is the point. The rule this replaces was hand-written in this file
+    /// and read plausibly, and reading it plausibly was the only thing checking it:
+    /// a scan of the real Steam libraries and the real uninstall registry has no
+    /// seam a test can drive, so the coalescing could not be exercised at all. It
+    /// had a lost-request window as well - see the remarks on the coordinator for
+    /// what it was. Out there the rule is asserted directly, with a fake scan and a
+    /// gate the test holds open, and this method is left doing only what belongs to
+    /// a window: building the list and warming its icons.
+    /// <para>
+    /// Built lazily because the run delegate is an instance member: the coordinator
+    /// has to be able to call back into <see cref="ScanAppLibraryAsync"/> and
+    /// <see cref="WarmAppIcons"/>, neither of which exists until the window does.
+    /// </para>
+    /// </remarks>
+    private ScanCoordinator? _scans;
+
+    private ScanCoordinator Scans => _scans ??= new ScanCoordinator(
+        ScanAppLibraryAsync,
+        ex => TraceLog.Write("SCAN GAMES", ex));
+
+    /// <summary>
+    /// One pass: build the list from the machine and sort it.
+    /// </summary>
+    private async System.Threading.Tasks.Task ScanAppLibraryAsync()
+    {
+        _appList = (await System.Threading.Tasks.Task.Run(() => _library.Scan()))
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // In the background, and only once the scan has settled. This is the pass
+        // that makes the dropdowns open with their icons already on them.
+        WarmAppIcons();
+    }
 
     /// <param name="force">
     /// Rescan even when the list already has something in it.
@@ -1362,18 +1399,19 @@ public partial class MainWindow : Window
     /// <summary>
     /// Builds the app list, unless one is already being built.
     /// <para>
-    /// There was no guard here, and this is reached from four places: the scan
-    /// button, the first time a slot's game dropdown opens, a restore, and a
-    /// window state change. The scan walks every Steam library and every
-    /// uninstall subkey on the machine, so a second click on the button - which
-    /// force:true permits, since it deliberately bypasses the cache - ran it
-    /// twice at once, and whichever finished last overwrote the other's result
-    /// with a list that may have been built mid-scan.
+    /// Reached from four places: the scan button, the first time a slot's game
+    /// dropdown opens, a restore, and a window state change. The scan walks every
+    /// Steam library and every uninstall subkey on the machine, so without the
+    /// guard a second caller - which force:true permits, since it deliberately
+    /// bypasses the cache - ran it twice at once, and whichever finished last
+    /// overwrote the other's result with a list that may have been built mid-scan.
     /// </para>
     /// <para>
-    /// The pattern is the same one the FxSound state refresh uses three files
-    /// away: take an interlocked flag, and re-arm in the finally for a request
-    /// that arrived while the work was in flight.
+    /// Waits for the pass that serves this request, including when it joined one
+    /// already running. The handler for the scan button builds the board from
+    /// <c>_appList</c> immediately after this returns, so returning before the pass
+    /// that answers it had finished would rebuild the board from a list that was
+    /// still being replaced underneath it.
     /// </para>
     /// </summary>
     private async System.Threading.Tasks.Task EnsureAppList(bool force = false)
@@ -1383,52 +1421,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (Interlocked.Exchange(ref _scanBusy, 1) == 1)
-        {
-            // A scan is already running. Recorded so it runs again afterwards
-            // rather than being dropped: a force:true caller - the scan button -
-            // wants a fresh look, and returning without saying so would leave it
-            // with the previous list and no indication that nothing happened.
-            _appListPending = true;
-            return;
-        }
-
-        try
-        {
-            // Cleared *before* each pass, not after the last one. The flag means
-            // "somebody asked while this was in flight", so a caller arriving
-            // during the scan sets it and the loop runs one more time; a caller
-            // arriving during the final check finds it clear and is served by that
-            // pass. Setting it inside the body instead - which is what this did
-            // first - means it is always true when the condition is read, so the
-            // scan runs at full speed for the life of the process.
-            while (true)
-            {
-                _appListPending = false;
-
-                _appList = (await System.Threading.Tasks.Task.Run(() => _library.Scan()))
-                    .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-
-                if (!_appListPending)
-                {
-                    break;
-                }
-            }
-
-            // In the background, and only once the scan has settled. This is the
-            // pass that makes the dropdowns open with their icons already on them.
-            WarmAppIcons();
-        }
-        finally
-        {
-            _appListPending = false;
-            Interlocked.Exchange(ref _scanBusy, 0);
-        }
+        await Scans.RequestAsync();
     }
-
-    /// <summary>Set by a caller that arrived while a scan was already running.</summary>
-    private bool _appListPending;
 
 
     private async void OnScanAppsClick(object sender, RoutedEventArgs e)
