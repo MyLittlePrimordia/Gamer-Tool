@@ -1,0 +1,147 @@
+﻿name: Build GamerTool Standalone EXE
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+# Required so the built EXE can be written to a release.
+permissions:
+  contents: write
+
+# One release at a time: never let two pushes race on the same asset.
+concurrency:
+  group: gamertool-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and publish
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          # Pinned to the LTS. 9.0.x would keep building happily right up until
+          # it stopped being patched, and nothing in a green build says that.
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore app/GamerTool.csproj
+
+      # Catches regressions before anything is published.
+      - name: Build (warnings are errors)
+        run: dotnet build app/GamerTool.csproj -c Release --no-restore -warnaserror
+
+      # The release build is the one that ships, but the developer flags behind
+      # #if DEBUG are only compiled here. Without this a change that breaks the
+      # debug build stays green until someone goes looking for it, which is
+      # exactly the sort of thing that quietly rots. Cheap, so keep it.
+      - name: Build Debug (developer flags)
+        run: dotnet build app/GamerTool.csproj -c Debug --no-restore -warnaserror
+
+      # The unit tests cover the parts that decide what a new user sees, what a
+      # restore is allowed to replace, and what reaches the screen and the
+      # engine. They run before the publish so a regression stops the release
+      # rather than reaching a download.
+      - name: Test
+        run: |
+          dotnet restore tests/GamerTool.Tests/GamerTool.Tests.csproj
+          dotnet test tests/GamerTool.Tests/GamerTool.Tests.csproj -c Release --no-restore -warnaserror -v minimal
+
+      # Single file, self contained, compressed. The publish settings live in
+      # GamerTool.csproj so the local and CI builds cannot drift apart.
+      - name: Publish Standalone Executable
+        run: dotnet publish app/GamerTool.csproj -c Release -o ./publish
+
+      - name: Verify the EXE was produced
+        shell: pwsh
+        run: |
+          $exe = './publish/GamerTool.exe'
+          if (-not (Test-Path $exe)) { throw 'GamerTool.exe was not produced.' }
+          $mb = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+          Write-Host "GamerTool.exe = $mb MB"
+          if ($mb -lt 1) { throw "GamerTool.exe is only $mb MB, which is far too small." }
+
+      - name: Upload GamerTool Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GamerTool-Standalone
+          path: ./publish/GamerTool.exe
+          if-no-files-found: error
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GamerTool-Tests
+          path: tests/GamerTool.Tests/TestResults
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # Keeps a single rolling "latest" release whose EXE is replaced on every
+      # push, so the permanent download URL stays stable:
+      #   https://github.com/<owner>/<repo>/releases/latest/download/GamerTool.exe
+      #
+      # Gated to main on purpose. Pushes are already limited to main, but
+      # workflow_dispatch is not: it can be fired from any branch or tag, and
+      # without this a dispatch from a feature branch would build that branch and
+      # publish it over the one file every existing download URL points at. The
+      # build and test steps above still run for any ref, which is what you want
+      # when dispatching to check a branch.
+      - name: Add or overwrite the EXE on the latest release
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # PowerShell 7.3+ raises on non-zero native exit codes. This script checks
+          # $LASTEXITCODE itself, so turn that behaviour off.
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          $tag   = 'latest'
+          $asset = 'GamerTool.exe'
+          $exe   = './publish/GamerTool.exe'
+
+          $version = (Select-String -Path 'app/GamerTool.csproj' -Pattern '<Version>([^<]+)</Version>').Matches[0].Groups[1].Value
+          $short   = $env:GITHUB_SHA.Substring(0, 7)
+          $stamp   = Get-Date -Format 'yyyy-MM-dd HH:mm zzz'
+          $runUrl  = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+
+          $notes = @(
+            "Gamer Tool $version - automatic build"
+            ''
+            "- Commit: $short"
+            "- Branch: $($env:GITHUB_REF_NAME)"
+            "- Built: $stamp"
+            ''
+            "[View the workflow run]($runUrl)"
+          ) -join "`n"
+
+          # Find the existing release, or create it once.
+          $release = gh release view $tag --json id --jq '.id'
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($release)) {
+            Write-Host "No '$tag' release yet, creating it."
+            gh release create $tag --title 'Gamer Tool (latest)' --notes $notes --latest
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to create the release.' }
+          }
+          else {
+            Write-Host "Reusing existing '$tag' release $release"
+          }
+
+          # --clobber replaces the EXE already attached to the release.
+          gh release upload $tag $exe --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to upload the EXE.' }
+
+          # Refresh the notes with this build's commit and keep it flagged latest.
+          gh release edit $tag --title 'Gamer Tool (latest)' --notes $notes --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to update the release.' }
+
+          Write-Host "Published $asset to the '$tag' release."

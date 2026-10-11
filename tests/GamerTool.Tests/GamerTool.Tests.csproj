@@ -1,0 +1,37 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Matches the app's framework, because a test project that targets a
+         different one is resolved against a different WPF shared framework and
+         the two disagree about what the UI types are. -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+
+    <!--
+      xUnit v2 cannot skip a test at run time, only at discovery, and whether
+      this machine can produce an Authenticode signature is only known once the
+      test is running: it needs PowerShell's security module, which will not load
+      on some Windows images. This is the standard way to skip dynamically in v2,
+      and it reports as Skipped rather than quietly passing, which is the whole
+      point.
+    -->
+    <PackageReference Include="Xunit.SkippableFact" Version="1.4.13" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\app\GamerTool.csproj" />
+  </ItemGroup>
+
+</Project>
