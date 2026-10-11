@@ -1346,8 +1346,45 @@ public partial class MainWindow : Window
     }
 
 
-    /// <summary>1 while a scan is running, so two of them never overlap.</summary>
-    private int _scanBusy;
+    /// <summary>
+    /// Runs one app-library scan at a time, and runs another afterwards for a
+    /// request that arrived while the first was in flight.
+    /// </summary>
+    /// <remarks>
+    /// The sequencing lives in <see cref="ScanCoordinator"/> rather than here, and
+    /// that move is the point. The rule this replaces was hand-written in this file
+    /// and read plausibly, and reading it plausibly was the only thing checking it:
+    /// a scan of the real Steam libraries and the real uninstall registry has no
+    /// seam a test can drive, so the coalescing could not be exercised at all. It
+    /// had a lost-request window as well - see the remarks on the coordinator for
+    /// what it was. Out there the rule is asserted directly, with a fake scan and a
+    /// gate the test holds open, and this method is left doing only what belongs to
+    /// a window: building the list and warming its icons.
+    /// <para>
+    /// Built lazily because the run delegate is an instance member: the coordinator
+    /// has to be able to call back into <see cref="ScanAppLibraryAsync"/> and
+    /// <see cref="WarmAppIcons"/>, neither of which exists until the window does.
+    /// </para>
+    /// </remarks>
+    private ScanCoordinator? _scans;
+
+    private ScanCoordinator Scans => _scans ??= new ScanCoordinator(
+        ScanAppLibraryAsync,
+        ex => TraceLog.Write("SCAN GAMES", ex));
+
+    /// <summary>
+    /// One pass: build the list from the machine and sort it.
+    /// </summary>
+    private async System.Threading.Tasks.Task ScanAppLibraryAsync()
+    {
+        _appList = (await System.Threading.Tasks.Task.Run(() => _library.Scan()))
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // In the background, and only once the scan has settled. This is the pass
+        // that makes the dropdowns open with their icons already on them.
+        WarmAppIcons();
+    }
 
     /// <param name="force">
     /// Rescan even when the list already has something in it.
@@ -1362,18 +1399,19 @@ public partial class MainWindow : Window
     /// <summary>
     /// Builds the app list, unless one is already being built.
     /// <para>
-    /// There was no guard here, and this is reached from four places: the scan
-    /// button, the first time a slot's game dropdown opens, a restore, and a
-    /// window state change. The scan walks every Steam library and every
-    /// uninstall subkey on the machine, so a second click on the button - which
-    /// force:true permits, since it deliberately bypasses the cache - ran it
-    /// twice at once, and whichever finished last overwrote the other's result
-    /// with a list that may have been built mid-scan.
+    /// Reached from four places: the scan button, the first time a slot's game
+    /// dropdown opens, a restore, and a window state change. The scan walks every
+    /// Steam library and every uninstall subkey on the machine, so without the
+    /// guard a second caller - which force:true permits, since it deliberately
+    /// bypasses the cache - ran it twice at once, and whichever finished last
+    /// overwrote the other's result with a list that may have been built mid-scan.
     /// </para>
     /// <para>
-    /// The pattern is the same one the FxSound state refresh uses three files
-    /// away: take an interlocked flag, and re-arm in the finally for a request
-    /// that arrived while the work was in flight.
+    /// Waits for the pass that serves this request, including when it joined one
+    /// already running. The handler for the scan button builds the board from
+    /// <c>_appList</c> immediately after this returns, so returning before the pass
+    /// that answers it had finished would rebuild the board from a list that was
+    /// still being replaced underneath it.
     /// </para>
     /// </summary>
     private async System.Threading.Tasks.Task EnsureAppList(bool force = false)
@@ -1383,52 +1421,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (Interlocked.Exchange(ref _scanBusy, 1) == 1)
-        {
-            // A scan is already running. Recorded so it runs again afterwards
-            // rather than being dropped: a force:true caller - the scan button -
-            // wants a fresh look, and returning without saying so would leave it
-            // with the previous list and no indication that nothing happened.
-            _appListPending = true;
-            return;
-        }
-
-        try
-        {
-            // Cleared *before* each pass, not after the last one. The flag means
-            // "somebody asked while this was in flight", so a caller arriving
-            // during the scan sets it and the loop runs one more time; a caller
-            // arriving during the final check finds it clear and is served by that
-            // pass. Setting it inside the body instead - which is what this did
-            // first - means it is always true when the condition is read, so the
-            // scan runs at full speed for the life of the process.
-            while (true)
-            {
-                _appListPending = false;
-
-                _appList = (await System.Threading.Tasks.Task.Run(() => _library.Scan()))
-                    .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-
-                if (!_appListPending)
-                {
-                    break;
-                }
-            }
-
-            // In the background, and only once the scan has settled. This is the
-            // pass that makes the dropdowns open with their icons already on them.
-            WarmAppIcons();
-        }
-        finally
-        {
-            _appListPending = false;
-            Interlocked.Exchange(ref _scanBusy, 0);
-        }
+        await Scans.RequestAsync();
     }
-
-    /// <summary>Set by a caller that arrived while a scan was already running.</summary>
-    private bool _appListPending;
 
 
     private async void OnScanAppsClick(object sender, RoutedEventArgs e)
@@ -1677,9 +1671,10 @@ public partial class MainWindow : Window
             ApplyAudio(audio.Copy(), announce: false);
         }
 
-        RefreshPresetBoxes();
-        UpdateLiveLabels();
-        RefreshTraySlots();
+        // One call for every surface that renders which preset is loaded, rather
+        // than three the next reader has to keep in step. That includes the tray
+        // lines and both dropdowns, which are rebuilt from the ids just changed.
+        RefreshActivePreset();
 
         RailStatus.Text = "UNDONE";
         Flash("Back to what was loaded before");
@@ -2175,14 +2170,13 @@ public partial class MainWindow : Window
     /// </summary>
     private void RevertWildcardOnFocusLoss(WatchedWindow window)
     {
-        if (_autoWildcardProcess.Length == 0)
+        // Whether the wildcard should stand down at all, as one named question. The
+        // second half is the one that is easy to get wrong: the game having another
+        // window in front - its own launcher, a second instance of itself - is not a
+        // focus loss, and standing down for it would suspend the boost for looking
+        // at the game.
+        if (!AutoApplyDecision.WildcardShouldStandDown(_autoWildcardProcess, window.ProcessName))
         {
-            return;
-        }
-
-        if (string.Equals(_autoWildcardProcess, window.ProcessName, StringComparison.OrdinalIgnoreCase))
-        {
-            // Back to the game, or another window of it. Not a focus loss.
             return;
         }
 
@@ -2251,20 +2245,25 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnTargetExited(string processName)
     {
-        // The paused case, and it has to come first. A focus pause stands the
-        // screen down, and StandDownScreen clears _autoSlotId on its way through -
-        // so by the time a paused game's process exits, MatchProcessName finds the
-        // slot but the guard at the bottom ("this is the slot the app applied")
-        // does not, because _autoSlotId is empty. The exit would be ignored and the
-        // SOUND would stay boosted for whatever the user runs next, which is the
-        // one thing the whole exit path exists to prevent.
+        // The paused case is asked first, in this method, so that the order is
+        // visible where it matters rather than implied by a helper's parameter list.
+        // It has to come before the revert-on-exit guard below: a focus pause stands
+        // the screen down and clears the auto slot on its way through, so by the time
+        // a paused game exits there is no auto slot left to match, and with the guard
+        // first the exit would be ignored - leaving the sound boosted for whatever the
+        // user runs next, which is the one thing this path exists to prevent.
         //
-        // Sound only: the screen is already neutral, so pushing it again would be
+        // Sound only, because the screen is already neutral: pushing it again would be
         // doing work that is not needed.
-        if (_pausedSlotId.Length > 0
-            && string.Equals(_pausedProcess, processName, StringComparison.OrdinalIgnoreCase))
+        bool startedPaused = _pausedSlotId.Length > 0
+            && string.Equals(_pausedProcess, processName, StringComparison.OrdinalIgnoreCase);
+
+        if (startedPaused)
         {
             TraceLog.Write("AUTO EXIT while paused " + processName);
+
+            // Cleared either way. The pause is over whatever the setting says, and
+            // leaving the record standing would have the next exit match it again.
             ClearFocusPause();
 
             if (_settings.AutoRevertOnExit && !_quitting)
@@ -2281,37 +2280,53 @@ public partial class MainWindow : Window
             return;
         }
 
-        HotkeySlot? slot = SlotService.MatchProcessName(_settings.Slots, processName);
-        if (slot is null)
+        // Everything from here is a pure decision, so the remaining three answers and
+        // the order they are asked in are asserted by test rather than by a comment.
+        HotkeySlot? bound = SlotService.MatchProcessName(_settings.Slots, processName);
+
+        HotkeySlot? autoSlot = _settings.Slots.FirstOrDefault(s =>
+            string.Equals(s.Id, _autoSlotId, StringComparison.OrdinalIgnoreCase));
+
+        RevertDecision decision = AutoApplyDecision.ClassifyExit(
+            revertEnabled: true,
+            pausedExit: false,
+            pausedSlotId: string.Empty,
+            exitedProcess: processName,
+            wildcardProcess: _autoWildcardProcess,
+            autoSlotId: _autoSlotId,
+            boundSlotId: bound?.Id ?? string.Empty,
+            autoSlotIsWildcard: autoSlot?.IsAnyGameTarget == true);
+
+        if (!decision.ShouldRevert)
         {
-            // Not a bound game. It may still be a program a wildcard slot applied
-            // itself for, which MatchProcessName cannot find by construction - the
-            // wildcard matched something that is not bound to anything.
-            //
-            // Both halves have to agree: the process must be the one remembered at
-            // apply time, and the slot that applied it must still be the one
-            // loaded. Without the first, quitting any unbound program would revert
-            // the profile; without the second, a revert would fire for an
-            // application the user has since overridden with their own key press.
-            if (!string.Equals(_autoWildcardProcess, processName, StringComparison.OrdinalIgnoreCase))
+            // Said out loud because the common case for a watched process going away
+            // is that it was never ours, and "the app changed nothing" is the
+            // outcome the whole guard exists to produce.
+            if (autoSlot is not null || bound is not null)
             {
-                return;
+                TraceLog.Write("AUTO EXIT SKIP " + processName + " <- not the auto loaded slot");
             }
 
-            slot = _settings.Slots.FirstOrDefault(s =>
-                string.Equals(s.Id, _autoSlotId, StringComparison.OrdinalIgnoreCase));
-
-            if (slot is null || !slot.IsAnyGameTarget)
-            {
-                TraceLog.Write("AUTO WILDCARD EXIT SKIP " + processName + " <- no longer the loaded slot");
-                return;
-            }
+            return;
         }
 
-        if (!string.Equals(_autoSlotId, slot.Id, StringComparison.OrdinalIgnoreCase))
+        // The slot the decision named, which for the wildcard case is the wildcard
+        // rather than anything bound to the process - the wildcard matched something
+        // that is bound to nothing, which is why the name lookup cannot find it.
+        HotkeySlot? slot = _settings.Slots.FirstOrDefault(s =>
+            string.Equals(s.Id, decision.SlotId, StringComparison.OrdinalIgnoreCase));
+
+        if (slot is null)
         {
-            TraceLog.Write("AUTO EXIT SKIP " + processName + " <- not the auto loaded slot");
+            // Deleted between the apply and the exit. Nothing to revert and nothing
+            // to say; the guard above already decided this exit was ours.
+            TraceLog.Write("AUTO EXIT SKIP " + processName + " <- the slot has gone");
             return;
+        }
+
+        if (decision.Kind == RevertKind.Wildcard)
+        {
+            TraceLog.Write("AUTO WILDCARD EXIT " + slot.Name + " <- " + processName);
         }
 
         TraceLog.Write("AUTO EXIT " + slot.Name + " <- " + processName);
@@ -2356,8 +2371,12 @@ public partial class MainWindow : Window
 
     private bool ShouldAutoApply(HotkeySlot slot, string processName)
     {
-        if (string.Equals(_autoSlotId, slot.Id, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(_autoProcess, processName, StringComparison.OrdinalIgnoreCase))
+        // Whether this exact pair is already loaded, as a named question rather than
+        // as an inline comparison of two fields. Both halves are needed and the
+        // reason is worth keeping next to the answer: the slot id alone would refuse
+        // a second game started under a different process, and the process alone
+        // would refuse a different slot loaded for the same program.
+        if (AutoApplyDecision.AlreadyApplied(_autoSlotId, _autoProcess, slot.Id, processName))
         {
             return false;
         }

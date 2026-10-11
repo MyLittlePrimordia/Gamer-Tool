@@ -208,7 +208,22 @@ public static class EmergencyReset
             FxPresetFile.PresetName,
             StringComparison.OrdinalIgnoreCase);
     }
-    /// <summary>Per-call budget for the exit path. See <see cref="AudioService"/>.</summary>
+
+    /// <summary>
+    /// The shorter budget used on the way out, where nothing is left to show a wait
+    /// and the process is about to be torn down. At the full budget - the 4000ms
+    /// <c>AudioService.ExitWaitMs</c> a normal call gets - quitting could sit there
+    /// for eight seconds with no window on screen and no sign anything was happening.
+    /// </summary>
+    /// <remarks>
+    /// Owned here rather than on <see cref="AudioService"/>, and that is a correction
+    /// rather than a preference. This constant used to be declared in both classes,
+    /// byte for byte, under the same doc comment - and the copy on the service was
+    /// referenced by nothing at all. All four real uses are below. So the second
+    /// declaration was not a shared budget, it was a dead constant that looked exactly
+    /// like the live one, which is the kind of thing somebody tunes one day and
+    /// wonders why nothing changed.
+    /// </remarks>
     private const int ShutdownWaitMs = 1200;
 
     /// <summary>Set once the backlight has been put back, so a second exit hook does not repeat it.</summary>

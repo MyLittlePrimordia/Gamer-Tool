@@ -442,8 +442,12 @@ public partial class MainWindow : Window
         _settings.ActiveDisplayPresetId = preset.Id;
         _activeDisplayId = preset.Id;
         UpdateScreenLabels(preset);
-        UpdateLiveLabels();
-        UpdatePresetChrome();
+
+        // Through the fan-out rather than naming the surfaces here. This path - a
+        // preset becoming live - used to refresh the labels and the chrome but left
+        // the dropdown alone, so a slot key could load a preset and leave the box
+        // still naming the previous one.
+        RefreshActivePreset();
         Commit();
         if (announce)
         {
@@ -706,6 +710,64 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>
+    /// Gives up everything the app was holding on the user's behalf, because the
+    /// user has just taken the screen back.
+    /// </summary>
+    /// <remarks>
+    /// Split out of <see cref="StandDownScreen"/> as one named step, because who
+    /// clobbers what was the hard part of reading that method and this is the whole
+    /// of the answer. Five pieces of state, three of which a caller has to know
+    /// about:
+    /// <list type="bullet">
+    /// <item>
+    /// The auto-apply claim, so a slot the app loaded is not still remembered as
+    /// ours. Without this, quitting that game would run a second, redundant revert
+    /// on top of a screen the user had already put back themselves.
+    /// </item>
+    /// <item>
+    /// The wildcard's own record, for the same reason and with one extra condition:
+    /// it is released from the watcher <em>before</em> the field is cleared, because
+    /// the name only exists on this side of that line. The game is very often still
+    /// running here - this is reached by toggling a slot off and by alt-tabbing away
+    /// - so leaving it watched would mean its eventual exit raised a revert for a
+    /// preset that had already been stood down.
+    /// </item>
+    /// <item>
+    /// Any pending or completed focus pause. Note the guard: this is <b>not</b>
+    /// cleared unconditionally. The pause calls this path to do the standing down,
+    /// and it re-records itself immediately afterwards precisely so the exit path can
+    /// still find the slot this method is about to forget. Clearing it when no pause
+    /// is armed is what the guard expresses.
+    /// </item>
+    /// </list>
+    /// <para>
+    /// Called after the panel work rather than before it: <c>_presetOwnedPanelDevice</c>
+    /// is consulted by the restore, so ownership has to be given up afterwards or a
+    /// stand-down that should have put the panel back would skip it.
+    /// </para>
+    /// </remarks>
+    private void ReleaseAutoClaimOnStandDown()
+    {
+        // Taking the screen back to neutral by hand takes over from the app, so the
+        // auto-apply guard is stood down here.
+        _autoSlotId = string.Empty;
+        _autoProcess = string.Empty;
+
+        // Released before it is cleared. See the remarks above.
+        _watcher.ForgetUnbound(_autoWildcardProcess);
+        _autoWildcardProcess = string.Empty;
+
+        if (_focusPause is not null)
+        {
+            // Armed but not fired: the user got back in time, or pressed something.
+            CancelFocusPause();
+            _pausedSlotId = string.Empty;
+            _pausedProcess = string.Empty;
+        }
+    }
+
+
     /// <param name="restorePanel">
     /// Whether to put the hardware backlight back regardless of what the loaded
     /// preset asked for. True for the paths where the user is explicitly asking for
@@ -737,7 +799,7 @@ public partial class MainWindow : Window
         _autoStamp = DateTime.MinValue;
 
         // The monitor's own brightness is part of the screen going back to normal,
-        // and this used to leave it alone. The ramp above is only half of what this
+        // and this used to leave it alone. The ramp below is only half of what this
         // app can change: with hardware brightness switched on, the display is left
         // sitting at whatever the last slot asked for. That is worst exactly where
         // it hurts most - the panic key is the one control a user reaches for when
@@ -768,6 +830,11 @@ public partial class MainWindow : Window
             // showing now, so it must not go on recording that it is standard.
             // The service keeps its own flag set too, which is what gives the exit
             // path another turn at it.
+            //
+            // Returns before the state below is touched, and that is the same
+            // decision the comment above describes. The hardware half of the reset
+            // did not happen, so the half that has happened - the backlight - is all
+            // this path claims.
             Flash("The screen would not take the reset", true);
             UpdateLiveLabels();
             return;
@@ -787,45 +854,13 @@ public partial class MainWindow : Window
         // is supposed to prevent.
         _settings.ActiveDisplayPresetId = "flat";
 
-        // Taking the screen back to neutral by hand takes over from the app, so
-        // the auto-apply guard is stood down here. Without this, a slot the app
-        // loaded would still be remembered as ours after the user had reset it,
-        // and quitting that game would run a second, redundant revert on top of
-        // a screen the user had already put back themselves.
-        _autoSlotId = string.Empty;
-        _autoProcess = string.Empty;
-
-        // The wildcard's own record, for the same reason. Left set, the revert
-        // would still fire when the program that triggered it closed, and this is
-        // the path that stands the guard down for the bound case - so the wildcard
-        // case has to be stood down here too or it becomes the one that reverts a
-        // screen the user put back on purpose.
-        //
-        // Released before it is cleared, because the name only exists on this side
-        // of that line. The game is very often still running at this point - this
-        // is reached by toggling a slot off and by alt-tabbing away - and leaving
-        // it watched would mean its eventual exit raised a revert for a preset that
-        // had already been stood down.
-        _watcher.ForgetUnbound(_autoWildcardProcess);
-        _autoWildcardProcess = string.Empty;
-
-        // Any pending or completed focus pause, for the same reason. The pause
-        // remembers a slot id and a process precisely so the exit path can still
-        // find them after this method has emptied _autoSlotId - and every one of
-        // those callers is the user taking over from the app. Left set, the user's
-        // own reset would be undone by the paused game's exit a moment later.
-        //
-        // On the pause's own path this is a no-op in effect: the pause calls this
-        // method to do the standing down, and clearing the record here would lose
-        // what the exit path needs. So it is not cleared unconditionally - the
-        // pause records itself again after this returns.
-        if (_focusPause is not null)
-        {
-            // Armed but not fired: the user got back in time, or pressed something.
-            CancelFocusPause();
-            _pausedSlotId = string.Empty;
-            _pausedProcess = string.Empty;
-        }
+        // Everything the app was holding on the user's behalf, released in one
+        // named step. It is a separate method because three of its five parts are
+        // things a caller has to know about - see the remarks on it - and because
+        // the ordering between it and the panel work above is load-bearing:
+        // _presetOwnedPanelDevice is consulted by the restore, so ownership has to
+        // be given up after it rather than before.
+        ReleaseAutoClaimOnStandDown();
 
         // Nothing owns the panel any more. Only cleared once the restore above has
         // had its answer, so a stand-down that skipped the restore because the
@@ -834,8 +869,7 @@ public partial class MainWindow : Window
         _presetOwnedPanelDevice = string.Empty;
 
         LoadTune(DisplayPreset.Flat(), _workAudio);
-        RefreshPresetBoxes();
-        UpdateLiveLabels();
+        RefreshActivePreset();
         UpdateScreenLabels(_workDisplay);
 
         // The warm tint has just been reset along with everything else.

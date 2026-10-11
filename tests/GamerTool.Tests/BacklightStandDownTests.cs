@@ -245,15 +245,26 @@ public class BacklightStandDownTests
         // other way round forgets the empty string - the name is already gone - and
         // leaves a still-running game watched for an exit that would revert a
         // screen the user had already put back.
+        //
+        // Anchored on ReleaseAutoClaimOnStandDown rather than on StandDownScreen,
+        // because that is where the release now lives. Splitting it out is what makes
+        // the ordering structural instead of a habit of whoever edits the big method
+        // next. The second assertion is the one that keeps the split honest: the
+        // release only happens if the stand-down still calls the step that does it.
         string display = Source("MainWindow.Display.cs");
-        string body = BodyAfter(display, "private void StandDownScreen");
 
-        int forget = body.IndexOf("_watcher.ForgetUnbound(_autoWildcardProcess)", StringComparison.Ordinal);
-        int clear = body.IndexOf("_autoWildcardProcess = string.Empty;", StringComparison.Ordinal);
+        string step = BodyAfter(display, "private void ReleaseAutoClaimOnStandDown");
+        int forget = step.IndexOf("_watcher.ForgetUnbound(_autoWildcardProcess)", StringComparison.Ordinal);
+        int clear = step.IndexOf("_autoWildcardProcess = string.Empty;", StringComparison.Ordinal);
 
         Assert.True(forget >= 0, "the stand-down no longer releases the wildcard watch");
         Assert.True(clear >= 0, "the wildcard process name is never cleared");
         Assert.True(forget < clear, "the watch is released after the name it needs is cleared");
+
+        Assert.Contains(
+            "ReleaseAutoClaimOnStandDown();",
+            BodyAfter(display, "private void StandDownScreen"),
+            StringComparison.Ordinal);
     }
 
     // ---- What the preset itself has to carry ----

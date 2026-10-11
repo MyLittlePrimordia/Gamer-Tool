@@ -19,14 +19,6 @@ public sealed class AudioService
     /// <summary>The read-only command that writes the engine's current state to its status file.</summary>
     private const string StatusArguments = "--status";
 
-    /// <summary>
-    /// The shorter budget used on the way out, where nothing is left to show a
-    /// wait and the process is about to be torn down. The emergency reset makes
-    /// two of these calls, so at the full budget quitting could sit there for
-    /// eight seconds with no window on screen and no sign anything was happening.
-    /// </summary>
-    private const int ShutdownWaitMs = 1200;
-
     private string _exePath = DefaultFxSoundPath;
 
     private FxSoundState? _cached;
