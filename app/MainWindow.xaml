@@ -38,7 +38,7 @@
              The frame line is the card showing through a one pixel inset rather
              than a Border brush, because a border is drawn on the card's own
              edge and the card is what the rounded clip has to line up with. -->
-    <Border x:Name="AppFrame" CornerRadius="{StaticResource RadiusFrame}" Background="{StaticResource LineStrong}">
+    <Border CornerRadius="{StaticResource RadiusFrame}" Background="{StaticResource LineStrong}">
         <Grid x:Name="ShellGrid" Margin="1" Background="{StaticResource AppBg}">
         <!-- A Border's CornerRadius does not clip its child, so the contents get
              their own matching clip. The numbers are the card's inner size: the
@@ -59,7 +59,7 @@
         <!-- ============ TITLE BAR ============ -->
         <!-- Title on the left, the tab switcher in the middle and the window
              buttons on the right, all on one strip inside the frame. -->
-        <Grid x:Name="TitleBar" Grid.Row="0" Background="Transparent"
+        <Grid Grid.Row="0" Background="Transparent"
               MouseLeftButtonDown="OnTitleBarDragDown">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
@@ -143,7 +143,7 @@
                                               HorizontalContentAlignment="Center" SelectionChanged="OnDisplayPresetSelected"
                                               ToolTip="Screen preset" />
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <ui:IconButton x:Name="DisplaySaveButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Plus}"
+                                        <ui:IconButton Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Plus}"
                                                        Margin="0,0,6,0" Click="OnSaveAsScreenClick" ToolTip="Save Preset" AutomationProperties.Name="Save this screen preset" />
                                         <ui:IconButton x:Name="DisplayRenameButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Pencil}"
                                                        Margin="0,0,6,0" Click="OnRenameScreenClick" ToolTip="Rename Preset" AutomationProperties.Name="Rename this screen preset" />
@@ -195,7 +195,7 @@
                                                  its child, and ClipToBounds only cuts
                                                  to the square slot, so the scene would
                                                  otherwise spill over the rounding. -->
-                                            <Border Grid.Row="1" x:Name="PreviewFrame" CornerRadius="10" Background="#020202"
+                                            <Border Grid.Row="1" CornerRadius="10" Background="#020202"
                                                     SizeChanged="OnPreviewFrameSizeChanged">
                                                 <Image x:Name="PreviewImage" Stretch="UniformToFill"
                                                        RenderOptions.BitmapScalingMode="HighQuality" />
@@ -431,7 +431,7 @@
                                                 </Grid.ColumnDefinitions>
 
                                         <StackPanel Grid.Column="0" HorizontalAlignment="Center">
-                                            <TextBlock x:Name="RedLabel" Style="{StaticResource Label}" Text="R"
+                                            <TextBlock Style="{StaticResource Label}" Text="R"
                                                        Foreground="#F87171" FontWeight="SemiBold"
                                                        HorizontalAlignment="Center" Margin="0,0,0,6" />
                                             <Slider x:Name="RedSlider" ui:SliderSnap.Neutral="1.0" ui:SliderSnap.Threshold="0.012" Style="{StaticResource BandSliderVertical}" Foreground="#F87171"
@@ -442,7 +442,7 @@
                                         </StackPanel>
 
                                         <StackPanel Grid.Column="1" HorizontalAlignment="Center">
-                                            <TextBlock x:Name="GreenLabel" Style="{StaticResource Label}" Text="G"
+                                            <TextBlock Style="{StaticResource Label}" Text="G"
                                                        Foreground="#34D399" FontWeight="SemiBold"
                                                        HorizontalAlignment="Center" Margin="0,0,0,6" />
                                             <Slider x:Name="GreenSlider" ui:SliderSnap.Neutral="1.0" ui:SliderSnap.Threshold="0.012" Style="{StaticResource BandSliderVertical}" Foreground="#34D399"
@@ -453,7 +453,7 @@
                                         </StackPanel>
 
                                         <StackPanel Grid.Column="2" HorizontalAlignment="Center">
-                                            <TextBlock x:Name="BlueLabel" Style="{StaticResource Label}" Text="B"
+                                            <TextBlock Style="{StaticResource Label}" Text="B"
                                                        Foreground="#60A5FA" FontWeight="SemiBold"
                                                        HorizontalAlignment="Center" Margin="0,0,0,6" />
                                             <Slider x:Name="BlueSlider" ui:SliderSnap.Neutral="1.0" ui:SliderSnap.Threshold="0.012" Style="{StaticResource BandSliderVertical}" Foreground="#60A5FA"
@@ -545,6 +545,10 @@
                                          which point the glyph has already been judged.
                                          This one looks for something, so it looks like
                                          a magnifier. -->
+                                    <!-- The x:Name here is a test anchor, not code: no
+                                         handler reads it, but LiveEqTests uses it to
+                                         assert this button is drawn as a magnifier
+                                         rather than as a second refresh arrow. -->
                                     <ui:IconButton x:Name="RescanScreensButton" Icon="{x:Static ui:Icons.Search}"
                                                    Style="{StaticResource IconButton}" Margin="8,0,0,0"
                                                    Click="OnRescanScreensClick" ToolTip="Find screens"
@@ -598,6 +602,10 @@
                                              three buttons here all act on the app's own tunes,
                                              so the row had a word in it that meant something
                                              else. -->
+                                        <!-- x:Name is a test anchor, not code: no handler
+                                             reads it, but RemovedCaptureFeatureTests uses
+                                             it to assert the presets row still has its
+                                             three buttons after the capture button went. -->
                                         <ui:IconButton x:Name="AudioSaveButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Plus}"
                                                        Margin="0,0,6,0" Click="OnSaveAsSoundClick" ToolTip="Save Preset" AutomationProperties.Name="Save this sound preset" />
                                         <ui:IconButton x:Name="AudioRenameButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Pencil}"
@@ -1587,7 +1595,7 @@
 
                                         <ui:EmojiImage Grid.Column="0" Glyph="bug" Width="19" Height="19" VerticalAlignment="Center" />
 
-                                        <TextBlock x:Name="DiagLabelText" Grid.Column="2" Text="Diagnostics" VerticalAlignment="Center"
+                                        <TextBlock Grid.Column="2" Text="Diagnostics" VerticalAlignment="Center"
                                                    FontFamily="{StaticResource Sans}" FontSize="12"
                                                    Foreground="{StaticResource TextHi}" TextTrimming="CharacterEllipsis" />
 
@@ -1755,7 +1763,7 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Ellipse x:Name="StatusDot" Width="6" Height="6" Fill="{StaticResource Green}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <Ellipse Width="6" Height="6" Fill="{StaticResource Green}" VerticalAlignment="Center" Margin="0,0,8,0" />
                     <TextBlock x:Name="RailStatus" Text="READY" FontSize="10.5" Foreground="{StaticResource TextMid}" VerticalAlignment="Center" />
                 </StackPanel>
 

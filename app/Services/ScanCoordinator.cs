@@ -48,7 +48,6 @@ namespace GamerTool.Services;
 public sealed class ScanCoordinator
 {
     private readonly Func<Task> _scan;
-    private readonly Action<Exception>? _onError;
 
     /// <summary>Guards every field below it.</summary>
     private readonly object _gate = new();
@@ -101,11 +100,9 @@ public sealed class ScanCoordinator
     private readonly List<TaskCompletionSource> _idleWaiters = new();
 
     /// <param name="scan">Runs one pass. What it does with the result is the caller's business; this only sequences it.</param>
-    /// <param name="onError">Where <see cref="RequestQuietlyAsync"/> sends a failure. Optional, so a test does not have to supply one.</param>
-    public ScanCoordinator(Func<Task> scan, Action<Exception>? onError = null)
+    public ScanCoordinator(Func<Task> scan)
     {
         _scan = scan;
-        _onError = onError;
     }
 
     /// <summary>Whether a pass is running.</summary>
@@ -269,27 +266,6 @@ public sealed class ScanCoordinator
         foreach (TaskCompletionSource waiter in waiting)
         {
             waiter.TrySetResult();
-        }
-    }
-
-    /// <summary>
-    /// <see cref="RequestAsync"/> with the failure swallowed and reported.
-    /// </summary>
-    /// <remarks>
-    /// For callers that are not waiting on the result and must not be handed an
-    /// exception to handle - the dropdown opening, a restore, a window state change.
-    /// The scan is a convenience for them; a scan that failed means an empty picker,
-    /// which is a state they already have to render.
-    /// </remarks>
-    public async Task RequestQuietlyAsync()
-    {
-        try
-        {
-            await RequestAsync();
-        }
-        catch (Exception ex)
-        {
-            _onError?.Invoke(ex);
         }
     }
 }

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -217,12 +217,6 @@ public sealed class SetupService
     /// to tell the user anything could not, and one that guessed got it wrong:
     /// "up to date" about a check that never ran.
     /// </para>
-    /// </summary>
-    public FxUpdateResult CheckForUpdate() => CheckForUpdate(allowDownload: false).GetAwaiter().GetResult();
-
-    /// <summary>
-    /// Asks what is published, preferring winget and falling back to fetching the
-    /// installer when there is none.
     /// </summary>
     /// <param name="allowDownload">
     /// Whether the no-winget fallback may fetch the installer to read its version.

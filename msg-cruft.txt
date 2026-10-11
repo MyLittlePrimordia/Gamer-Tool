@@ -1,0 +1,49 @@
+Purge the dead members the product audit found
+
+PILLAR 1 / PILLAR 2 of the product audit. Nothing here changes behaviour;
+every item was confirmed unreferenced across app and tests before removal.
+
+Removed:
+
+- DisplayService.ApplyWorking() - a one-line wrapper around Apply(Working)
+  that nothing called.
+- SetupService.CheckForUpdate(), the parameterless overload - a
+  blocking-on-async wrapper with no callers. The window calls the
+  allowDownload overload. A dead sync-over-async wrapper is a deadlock
+  waiting for somebody to adopt it by mistake.
+- ScanCoordinator.RequestQuietlyAsync(), and the onError delegate that
+  existed only to serve it. This one was mine, added in the hardening pass
+  earlier in this session: I wrote a convenience path for callers that did
+  not want to handle a failure, then never adopted it, and wrote a test for
+  it so it looked alive. A test asserting an unused method works is not
+  coverage.
+- FrequencyDial.CurrentHertz, SetStepFromHertz, CurrentStep, the
+  _currentHertz field and the private TrackHertz that existed only to keep
+  that field current. The chain read as deliberate - a doc comment claimed
+  "keeps the hertz the automation peer reports in step with the detent" -
+  but the peer reads only the window's two ends, never the current value.
+  State written and never read. SetBand keeps its currentHertz parameter so
+  the call site does not change; the parameter is now documented as unused
+  with the reason.
+
+- Eleven x:Name attributes that nothing referenced, leaving 102 of the
+  original 113. Nine of them are gone: AppFrame, RedLabel, GreenLabel,
+  BlueLabel, StatusDot, TitleBar, PreviewFrame, DiagLabelText,
+  DisplaySaveButton. Each either carries a Click= handler and needs no name
+  or is a static label or ellipse never touched at runtime.
+
+Two were restored, and the reason is worth recording rather than the
+removal: RescanScreensButton and AudioSaveButton are test anchors. No
+handler reads them, but LiveEqTests uses one to assert the find-screens
+button is drawn as a magnifier rather than as a second refresh arrow, and
+RemovedCaptureFeatureTests uses the other to assert the presets row still
+has its three buttons. Both now carry a comment saying the name is a test
+anchor and not code, so the next reader does not delete them again.
+
+Note for whoever edits the markup: XAML compiles x:Name into a generated
+field, so the build catches a name that code still needs. That is what
+made this safe to do in bulk - and it is also why removing these does not
+break anything silently.
+
+Verified: release build clean under -warnaserror with a full
+--no-incremental rebuild, 1538/1538 tests pass.

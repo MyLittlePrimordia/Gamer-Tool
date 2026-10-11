@@ -22,3 +22,6 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 *.commitmsg.txt
+
+# Scratch space for asset re-encoding
+assetwork/

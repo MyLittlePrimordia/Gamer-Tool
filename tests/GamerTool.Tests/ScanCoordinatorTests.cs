@@ -293,23 +293,6 @@ public class ScanCoordinatorTests
     }
 
     [Fact]
-    public async Task TheQuietPathSwallowsTheFailureAndReportsIt()
-    {
-        // The dropdown, a restore and a state change are not waiting on the result
-        // and must not be handed an exception to handle: a scan that failed means an
-        // empty picker, which is a state they already have to render.
-        Exception? reported = null;
-        ScanCoordinator coordinator = new(
-            () => Task.FromException(new InvalidOperationException("no")),
-            ex => reported = ex);
-
-        await coordinator.RequestQuietlyAsync();
-
-        Assert.NotNull(reported);
-        Assert.IsType<InvalidOperationException>(reported);
-    }
-
-    [Fact]
     public async Task SequentialCallersEachRunTheirOwnPass()
     {
         // The single-flight rule must not turn into a cache. A caller arriving after

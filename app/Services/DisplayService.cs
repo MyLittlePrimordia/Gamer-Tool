@@ -613,11 +613,6 @@ public sealed class DisplayService
         return ok;
     }
 
-    public bool ApplyWorking()
-    {
-        return Apply(Working);
-    }
-
     public bool Push()
     {
         // Scanned first when the list is empty, because the scan reconciles the

@@ -1368,9 +1368,7 @@ public partial class MainWindow : Window
     /// </remarks>
     private ScanCoordinator? _scans;
 
-    private ScanCoordinator Scans => _scans ??= new ScanCoordinator(
-        ScanAppLibraryAsync,
-        ex => TraceLog.Write("SCAN GAMES", ex));
+    private ScanCoordinator Scans => _scans ??= new ScanCoordinator(ScanAppLibraryAsync);
 
     /// <summary>
     /// One pass: build the list from the machine and sort it.
