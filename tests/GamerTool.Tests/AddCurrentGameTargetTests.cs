@@ -303,4 +303,54 @@ public class AddCurrentGameWiringTests
         string page = Read("MainWindow.xaml.cs");
         Assert.Contains("RefreshAddPlayingState();", Body(page, "private void SelectPage"), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void TheWatcherRunsWhetherOrNotAnythingIsArmedToAutoLoad()
+    {
+        // The flaw this exists for, and it was live for exactly as long as it took
+        // somebody to look at the control.
+        //
+        // The watcher used to be started only when some slot was armed to auto-load.
+        // But the watcher does two jobs - it applies slots on a foreground change,
+        // and it remembers what was in the foreground - and only the first of those
+        // is behind the switch. The second is what the offer reads. So on a fresh
+        // install, where nothing is bound to a game yet, nothing was watching, there
+        // was never anything to offer, and the control could only light up after the
+        // user had already done by hand the thing it exists to save them doing.
+        //
+        // Nothing caught it. The decision underneath is tested thoroughly and the
+        // wiring above it is tested; what was untested was the condition the state
+        // was computed from, which is the part that made all of it unreachable.
+        string body = Body(Read("MainWindow.Setup.cs"), "private void ApplyWatchState");
+
+        int branch = body.IndexOf("if (autoApply)", StringComparison.Ordinal);
+        int otherwise = branch < 0 ? -1 : body.IndexOf("else", branch, StringComparison.Ordinal);
+        int start = body.IndexOf("_watcher.Start(1500);", StringComparison.Ordinal);
+
+        Assert.True(branch >= 0, "the watch state no longer branches on whether anything auto-loads");
+        Assert.True(otherwise > branch, "the off branch was removed");
+        Assert.True(start > otherwise, "the watcher is started inside the arming branch, so a fresh install watches nothing");
+
+        // And turning auto-load off no longer stops it.
+        Assert.DoesNotContain("_watcher.Stop();", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TurningAutoLoadOffStillDropsTheStaleAnswerWithoutStoppingTheMemory()
+    {
+        // The other direction. Reset clears the remembered window, which is its
+        // documented job and the reason it is still called on the off branch - a
+        // pre-toggle answer is the one moment it is least wanted. What it must not
+        // do is run on the arming arm as well, where it used to: that wiped the
+        // memory on every edit to every slot, so the offer survived only until the
+        // user touched something.
+        string body = Body(Read("MainWindow.Setup.cs"), "private void ApplyWatchState");
+
+        int arming = body.IndexOf("if (autoApply)", StringComparison.Ordinal);
+        int otherwise = body.IndexOf("else", arming, StringComparison.Ordinal);
+
+        Assert.True(
+            body.IndexOf("_watcher.Reset();", otherwise, StringComparison.Ordinal) > otherwise,
+            "turning auto-load off no longer clears the remembered window");
+    }
 }

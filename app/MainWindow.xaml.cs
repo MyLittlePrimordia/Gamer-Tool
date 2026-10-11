@@ -355,6 +355,13 @@ public partial class MainWindow : Window
         _watcher.TargetExited += OnTargetExited;
         _watcher.ForegroundLeft += OnForegroundLeft;
 
+        // The offer is refreshed on the transition that produces it. Leaving a game
+        // for the desktop or the shell is exactly the moment the remembered window
+        // becomes the answer the user is about to go looking for, so the control
+        // lights up as they arrive rather than on whatever next happens to rebuild
+        // the page. Cheap: this fires on a foreground transition, not on a tick.
+        _watcher.ForegroundLeft += _ => RefreshAddPlayingState();
+
         PreviewKeyDown += OnPreviewKeyDown;
 
         // Keeps the caption buttons' focus ring for the keyboard only.

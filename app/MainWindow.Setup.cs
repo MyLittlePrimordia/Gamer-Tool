@@ -226,20 +226,43 @@ public partial class MainWindow : Window
         bool wildcard = _settings.Slots.Any(s =>
             s.Enabled && s.AutoActivate && s.HasWork && s.IsAnyGameTarget);
 
-        bool wanted = _settings.AutoSwitch
+        // Whether any slot should load itself. Note what this is NOT: it is not
+        // whether the watcher runs. The watcher does two jobs, and only one of them
+        // is behind this switch.
+        //
+        // It applies slots when something takes the foreground - that is the job
+        // this flag governs, and every handler it raises checks the flag itself.
+        // And it remembers the last window that was neither this app nor the shell,
+        // which is what the "add the game you are playing" control reads. The second
+        // job needs no permission: it is the app noticing something so it can offer
+        // it, and the whole value of the control is that the answer exists before
+        // the user goes looking for it.
+        //
+        // The watcher used to run only when this was true, which meant the control
+        // was disabled in exactly the state where a new user finds it - nothing
+        // bound to a game yet, so nothing had asked to auto-load, so nothing was
+        // watching, so there was never anything to offer. On a fresh install it
+        // could only ever light up after the user had already done by hand the thing
+        // it exists to save them doing.
+        bool autoApply = _settings.AutoSwitch
             && (wildcard || _settings.Slots.Any(s => s.Enabled && s.AutoActivate));
 
-        // Cleared on the way into both arms, not only when arming. The watcher
-        // remembers the last foreground window so it can raise a change once
-        // rather than on every tick, and that memory outlives a stop: without
-        // this, turning auto-switch off and on again while sitting in a game
-        // re-armed the watcher with the game's window still recorded, and the
-        // next tick read the same window and either missed the change or, worse,
-        // matched a slot again for a game the user had already left.
-        _watcher.Reset();
-
-        if (wanted)
+        if (autoApply)
         {
+            // Cleared on the way into the arming arm, because the watcher raises a
+            // change once rather than on every tick and that memory outlives a stop:
+            // without this, turning auto-switch off and on again while sitting in a
+            // game re-armed the watcher with the game's window still recorded, and
+            // the next tick read the same window and either missed the change or,
+            // worse, matched a slot again for a game the user had already left.
+            //
+            // Deliberately still on this arm and not above it, where it used to be.
+            // Reset clears the remembered foreground window along with the action
+            // state, and clearing it on every pass meant the memory was wiped by any
+            // edit to any slot - so the offer survived only until the user touched
+            // something. See OperationMemoryKeptWhileActionStops for the other half.
+            _watcher.Reset();
+
             _watcher.PrimeProcesses(SlotService.TargetProcessNames(_settings.Slots));
 
             // Re-armed here, and this is the whole fix for the invariant "a wildcard
@@ -274,13 +297,25 @@ public partial class MainWindow : Window
                 _watcher.ForgetUnbound(_autoWildcardProcess);
                 _watcher.WatchUnbound(_autoWildcardProcess);
             }
-
-            _watcher.Start(1500);
         }
         else
         {
-            _watcher.Stop();
+            // Nothing will act on a foreground change, so the action state goes -
+            // including the remembered window, which is the documented job of Reset
+            // and is why it stays called from somewhere on the off branch. The
+            // watcher itself keeps running below, so the memory is rebuilt on the
+            // next tick; what this clears is the stale pre-toggle answer.
+            _watcher.Reset();
         }
+
+        // Started on both arms, for the reason at the top: this is what fills the
+        // memory the offer reads. Idempotent, so the repeated calls this method
+        // already makes cost nothing.
+        _watcher.Start(1500);
+
+        // The offer follows the memory, so it is re-evaluated whenever the watch
+        // state changes rather than only when the tab happens to be opened.
+        RefreshAddPlayingState();
     }
 
 
