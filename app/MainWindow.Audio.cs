@@ -979,9 +979,16 @@ public partial class MainWindow : Window
         }
 
         string removed = mine.Name;
+
+        // Same as the screen half: name what the deletion is about to break, rather
+        // than promising it will break something.
+        List<HotkeySlot> inUse = SlotService.SlotsUsingPreset(_settings.Slots, mine.Id, checkDisplay: false);
+        string usage = SlotService.DescribeUsage(inUse);
+
         ShowConfirmModal(
             "DELETE \u201C" + removed.ToUpperInvariant() + "\u201D?",
-            "This takes the preset out of Gamer Tool and out of any slot that points at it.",
+            "This takes the preset out of Gamer Tool and out of any slot that points at it."
+                + (usage.Length > 0 ? "  " + usage : string.Empty),
             "Delete",
             () =>
             {

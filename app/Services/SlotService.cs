@@ -602,6 +602,91 @@ public static void ResolveAutoClaims(List<HotkeySlot> slots)
     }
 
     /// <summary>
+    /// The slots that use a given preset, in the order they appear on the board.
+    /// </summary>
+    /// <param name="slots">Every slot, enabled or not - a disabled slot still names the preset and still loses it.</param>
+    /// <param name="presetId">The preset being asked about.</param>
+    /// <param name="checkDisplay">
+    /// True to look at the screen half, false for the sound half. Which half a preset
+    /// belongs to is a property of how it is stored rather than of the id, so the
+    /// caller states it rather than this guessing from the string.
+    /// </param>
+    /// <remarks>
+    /// Exists so the delete confirmation can name what it is about to break. The
+    /// dialog already said the preset would come out of "any slot that points at
+    /// it", which is true and tells the user nothing they can act on - by the time
+    /// they read it the decision is already made, and afterwards the only evidence
+    /// is a slot that has quietly gone back to saying NOTHING SET.
+    /// <para>
+    /// Disabled slots are included deliberately. A disabled slot keeps its preset,
+    /// and deleting the preset out from under it means the user finds it empty the
+    /// day they switch it back on, with the deletion long out of mind.
+    /// </para>
+    /// <para>
+    /// An empty <paramref name="presetId"/> matches nothing, because that is what
+    /// "no preset" is stored as and it is not a preset anybody can delete.
+    /// </para>
+    /// </remarks>
+    public static List<HotkeySlot> SlotsUsingPreset(
+        IReadOnlyList<HotkeySlot> slots,
+        string? presetId,
+        bool checkDisplay)
+    {
+        List<HotkeySlot> inUse = new();
+
+        if (slots is null || string.IsNullOrWhiteSpace(presetId))
+        {
+            return inUse;
+        }
+
+        foreach (HotkeySlot slot in slots)
+        {
+            string? named = checkDisplay ? slot.DisplayPresetId : slot.AudioPresetId;
+
+            if (!string.IsNullOrWhiteSpace(named)
+                && string.Equals(named, presetId, StringComparison.OrdinalIgnoreCase))
+            {
+                inUse.Add(slot);
+            }
+        }
+
+        return inUse;
+    }
+
+    /// <summary>
+    /// The names of the slots that use a preset, for a confirmation message.
+    /// </summary>
+    /// <remarks>
+    /// Named rather than counted, where the count allows it. "3 slots" sends the
+    /// user hunting through the board to find which three; one name is something
+    /// they can picture. Long lists fall back to a count plus the first couple,
+    /// because a dialog is one line and five slot names in it is not a sentence.
+    /// </remarks>
+    public static string DescribeUsage(IReadOnlyList<HotkeySlot> inUse)
+    {
+        if (inUse is null || inUse.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        if (inUse.Count == 1)
+        {
+            return "It is loaded by " + Name(inUse[0]) + ".";
+        }
+
+        if (inUse.Count == 2)
+        {
+            return "It is loaded by " + Name(inUse[0]) + " and " + Name(inUse[1]) + ".";
+        }
+
+        return "It is loaded by " + inUse.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + " slots, including " + Name(inUse[0]) + " and " + Name(inUse[1]) + ".";
+    }
+
+    private static string Name(HotkeySlot slot) =>
+        string.IsNullOrWhiteSpace(slot.Name) ? "an unnamed slot" : slot.Name;
+
+    /// <summary>
     /// The output device a slot should actually send sound to.
     /// <para>
     /// The slot's own device when it names one the app currently knows about,
