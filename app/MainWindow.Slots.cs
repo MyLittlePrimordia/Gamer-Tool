@@ -33,6 +33,133 @@ public partial class MainWindow : Window
 
 
     /// <summary>
+    /// Points a slot at the game the user was in a moment ago.
+    /// </summary>
+    /// <remarks>
+    /// The awkward half of this feature is that clicking the control takes the game
+    /// out of the foreground, so nothing can be read at the moment of the click. The
+    /// answer is that the watcher has been remembering it all along, and this reads
+    /// that memory rather than asking the machine.
+    /// <para>
+    /// Adds a row when the game has none, and moves the existing row when it already
+    /// has one. Two rows for one game is how a user ends up with a slot they have
+    /// forgotten about and no way to tell which of them fires; moving the existing
+    /// one also keeps whatever preset pair and hotkey it already carried, which is
+    /// the work the user actually did.
+    /// </para>
+    /// </remarks>
+    private void OnAddPlayingClick(object sender, RoutedEventArgs e)
+    {
+        CurrentGameTarget? target = AddCurrentGame.From(
+            _watcher.LastForeign,
+            _watcher.LastForeignAt,
+            DateTime.Now);
+
+        if (target is null)
+        {
+            // The button should have been greyed out, so reaching here means the
+            // memory went stale between the tab being drawn and the click landing -
+            // twenty minutes of the window sitting open, most likely. Said plainly
+            // rather than silently doing nothing.
+            Flash("No game seen recently", true);
+            RefreshAddPlayingState();
+            return;
+        }
+
+        CurrentGameTarget game = target.Value;
+
+        HotkeySlot? existing = AddCurrentGame.SlotFor(_settings.Slots, game.ExePath);
+
+        if (existing is not null)
+        {
+            existing.AppExePath = game.ExePath;
+            existing.AppName = game.Name;
+            existing.IsSelfTarget = false;
+            existing.IsAnyGameTarget = false;
+            existing.ApplyOnStart = false;
+            existing.AutoActivate = true;
+
+            // The same claim rule every other way of setting a target goes through,
+            // so a row that was already armed does not end up competing with another
+            // slot for the same program.
+            ReleaseAutoClaims(existing);
+
+            Commit();
+            BuildSlots();
+            RegisterHotkeys();
+            ApplyWatchState();
+
+            Flash(existing.Name + " set to " + game.Name);
+            RefreshAddPlayingState();
+            return;
+        }
+
+        HotkeySlot slot = SlotService.NewSlot(_settings.Slots.Count + 1);
+        slot.Name = game.Name;
+        slot.AppExePath = game.ExePath;
+        slot.AppName = game.Name;
+
+        // Armed, because the reason the user pressed this is that they are playing
+        // it now and want it to load itself. Turning it on is the whole point of
+        // binding the game that is running.
+        slot.AutoActivate = true;
+
+        _settings.Slots.Add(slot);
+        ReleaseAutoClaims(slot);
+
+        Commit();
+        BuildSlots();
+        RegisterHotkeys();
+        ApplyWatchState();
+
+        Flash(game.Name + " added");
+        RefreshAddPlayingState();
+    }
+
+
+    /// <summary>
+    /// Enables or greys out the "add what I am playing" control, and says why.
+    /// </summary>
+    /// <remarks>
+    /// A control that does nothing when pressed is worse than one that is visibly
+    /// unavailable, so the button follows the memory rather than the other way
+    /// round: nothing remembered and it is off, which is the ordinary state on a
+    /// machine where the user has only opened this window. The tooltip names the
+    /// game it would bind, so the user can tell whether the answer is the one they
+    /// want before committing to it.
+    /// <para>
+    /// Guarded on <see cref="_ready"/> because this is called from
+    /// <see cref="SelectPage"/>, which the constructor reaches before every control
+    /// on the page has been through its first pass.
+    /// </para>
+    /// </remarks>
+    private void RefreshAddPlayingState()
+    {
+        if (!_ready)
+        {
+            return;
+        }
+
+        CurrentGameTarget? target = AddCurrentGame.From(
+            _watcher.LastForeign,
+            _watcher.LastForeignAt,
+            DateTime.Now);
+
+        AddPlayingButton.IsEnabled = target is not null;
+
+        AddPlayingButton.ToolTip = target is { } game
+            ? "Bind " + game.Name
+            : "Play something first, then come back";
+
+        System.Windows.Automation.AutomationProperties.SetName(
+            AddPlayingButton,
+            target is { } named
+                ? "Add " + named.Name + " as a slot"
+                : "No game seen recently");
+    }
+
+
+    /// <summary>
     /// One slot per full width row with everything on a single line, so the
     /// dropdowns can be wide enough to show a real preset name and a real game
     /// name instead of truncating to nothing. The game target takes the leftover
@@ -1777,43 +1904,6 @@ public partial class MainWindow : Window
         }
     }
 
-
-    /// <summary>
-    /// The name to give a slot for a game the app noticed but was never told about.
-    /// <para>
-    /// The window title is the only one of the three strings that is ever the
-    /// game's own name. A process called <c>launcher.exe</c> has a window that says
-    /// what it is launching, and the exe name is just the name of the thing that
-    /// starts it - so a slot called "launcher" is a slot the user has to open to
-    /// find out what it does.
-    /// </para>
-    /// <para>
-    /// Two things disqualify the title, and both are ordinary rather than rare.
-    /// Games that draw their own chrome leave the title as the exe name, which is
-    /// the same string twice; and a title can be a path, a URL or a line out of a
-    /// log, none of which belongs on a one-line slot row. So an empty, silly-long,
-    /// or merely-duplicate title falls back to the process name.
-    /// </para>
-    /// <para>
-    /// Trimmed, because window titles carry trailing whitespace often enough that
-    /// an untrimmed name would not match what the user types to find it again.
-    /// </para>
-    /// </summary>
-    internal static string NameForCurrentGame(WatchedWindow window)
-    {
-        // A slot row is one line high and the name is what the user reads on the
-        // board, so this is a display limit rather than a storage one.
-        const int MaxNameLength = 60;
-
-        string process = window.ProcessName ?? string.Empty;
-        string title = (window.Title ?? string.Empty).Trim();
-
-        bool usable = title.Length > 0
-            && title.Length <= MaxNameLength
-            && !string.Equals(title, process, StringComparison.OrdinalIgnoreCase);
-
-        return usable ? title : process;
-    }
 
     private void OnForegroundChanged(WatchedWindow window)
     {

@@ -409,6 +409,60 @@ public static string TargetKey(HotkeySlot slot)
     /// its boost on every single launch.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// The name to give a slot for a game the app noticed but was never told about.
+    /// <para>
+    /// The window title is the only one of the three strings that is ever the
+    /// game's own name. A process called <c>launcher.exe</c> has a window that says
+    /// what it is launching, and the exe name is just the name of the thing that
+    /// starts it - so a slot called "launcher" is a slot the user has to open to
+    /// find out what it does.
+    /// </para>
+    /// <para>
+    /// Two things disqualify the title, and both are ordinary rather than rare.
+    /// Games that draw their own chrome leave the title as the exe name, which is
+    /// the same string twice; and a title can be a path, a URL or a line out of a
+    /// log, none of which belongs on a one-line slot row. So an empty, silly-long,
+    /// or merely-duplicate title falls back to the process name.
+    /// </para>
+    /// <para>
+    /// Trimmed, because window titles carry trailing whitespace often enough that
+    /// an untrimmed name would not match what the user types to find it again.
+    /// </para>
+    /// <para>
+    /// Lives here rather than on the window, where it was written. Naming a slot
+    /// from a window is slot logic, and having it in the window is what forced the
+    /// caller that needed it - <see cref="AddCurrentGame"/> - to reach into the UI
+    /// layer to get at a pure string function.
+    /// </para>
+    /// </summary>
+    public static string NameForCurrentGame(WatchedWindow window)
+    {
+        // A slot row is one line high and the name is what the user reads on the
+        // board, so this is a display limit rather than a storage one.
+        const int MaxNameLength = 60;
+
+        string process = window.ProcessName ?? string.Empty;
+        string title = (window.Title ?? string.Empty).Trim();
+
+        bool usable = title.Length > 0
+            && title.Length <= MaxNameLength
+            && !string.Equals(title, process, StringComparison.OrdinalIgnoreCase);
+
+        return usable ? title : process;
+    }
+
+
+    /// <summary>
+    /// Whether a path sits inside a directory, separator and all.
+    /// <para>
+    /// The separator is what stops "C:\Program Files (x86)" from counting as
+    /// inside "C:\Program Files", which a plain StartsWith would happily report.
+    /// Both sides are compared on their full form first, so a ".." that climbs
+    /// out and one that does not are told apart - the comparison here is on the
+    /// resolved paths, not on the text that was combined.
+    /// </para>
+    /// </summary>
     public static bool IsUnderFolder(string? exePath, string? folder)
     {
         if (string.IsNullOrWhiteSpace(exePath) || string.IsNullOrWhiteSpace(folder))

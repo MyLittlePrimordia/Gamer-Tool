@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Media;
@@ -40,6 +40,20 @@ public static class Icons
 
     public static Geometry Download { get; } = Freeze(
         "M 12 3.4 V 14.8 M 7.6 10.4 L 12 14.8 L 16.4 10.4 M 4 17.6 V 20.4 H 20 V 17.6");
+
+    /// <summary>
+    /// A crosshair, for "bind the game I am in right now".
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not the plus above it, which already means "add an empty slot"
+    /// one control to its right. Two crosses in a row with different meanings is the
+    /// one thing this button could not be, so the mark is a target instead: four
+    /// ticks and a ring, which reads as "the thing you are looking at" rather than
+    /// "another thing to add".
+    /// </remarks>
+    public static Geometry Crosshair { get; } = Freeze(
+        "M 12 2.8 V 7.4 M 12 16.6 V 21.2 M 2.8 12 H 7.4 M 16.6 12 H 21.2 " +
+        "M 12 7.6 A 4.4 4.4 0 1 1 12 16.4 A 4.4 4.4 0 1 1 12 7.6 Z");
 
     public static Geometry Restore { get; } = Freeze(
         "M 12 15.4 V 4 M 7.6 8.4 L 12 4 L 16.4 8.4 M 4 20.4 H 20");

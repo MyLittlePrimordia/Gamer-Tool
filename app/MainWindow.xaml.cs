@@ -1086,6 +1086,12 @@ private void HideToTray()
         if (index == 2)
         {
             BuildSlots();
+
+            // Opened on the Hotkeys tab, so this is the moment the "add what I am
+            // playing" control is actually looked at. Refreshing here rather than on
+            // a timer means it is current when it is seen and costs nothing when it
+            // is not.
+            RefreshAddPlayingState();
             _ = WarmAppList();
         }
 
