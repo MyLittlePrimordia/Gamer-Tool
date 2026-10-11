@@ -342,6 +342,38 @@ public sealed class DisplayPreview
     private const long MaxAnimatedBytes = 48L * 1024 * 1024;
 
     /// <summary>
+    /// Whether a clip of this size and length is kept whole, at full frame rate.
+    /// </summary>
+    /// <remarks>
+    /// The same arithmetic <see cref="FitWidth"/> and the stride below perform, out
+    /// here so it can be asserted against the asset that actually ships rather than
+    /// against a copy of the numbers.
+    /// <para>
+    /// This exists because the shipped loop was, for a long time, over the budget at
+    /// its own resolution: 600x346 held 122 frames wanted about 97 MB, so the app
+    /// downscaled every frame to roughly 417 wide and then halved the frame rate
+    /// twice over. A clip authored at 12 fps played as 40 frames. Nothing said so -
+    /// the code logged it only when it happened at run time, on a machine nobody was
+    /// watching during a build - and the symptom is a preview that looks slightly
+    /// choppy, which is indistinguishable from the clip being authored that way.
+    /// </para>
+    /// <para>
+    /// So the property worth holding is not "the file is small", it is "the clip is
+    /// played as authored". A test asserts this against the embedded clip; an author
+    /// re-encoding it can then see immediately whether the new size still plays whole.
+    /// </para>
+    /// </remarks>
+    internal static bool KeepsEveryFrame(int sourceWidth, int sourceHeight, int frames)
+    {
+        if (sourceWidth <= 0 || sourceHeight <= 0 || frames <= 0)
+        {
+            return false;
+        }
+
+        return (long)sourceWidth * sourceHeight * 4 * frames <= MaxAnimatedBytes;
+    }
+
+    /// <summary>
     /// As wide as the preview panel is at the window's usual size, and the
     /// point below which the loop is not scaled any further. The row is a fixed
     /// 230 high and the width is whatever the window leaves over, so this is a
