@@ -1467,8 +1467,30 @@ public partial class MainWindow : Window
     /// every return from the pause - and a return is every time the user alt-tabs
     /// back to check something.
     /// </param>
-    private void PlaySlot(HotkeySlot slot, bool announce, bool screenOnly = false)
+    /// <param name="deliberate">
+    /// The user asked for this load, rather than the app deciding on its own. Only
+    /// then is it worth a step back, and it is a parameter that has to be asked for
+    /// rather than inferred from what is loaded, because the same method is reached
+    /// by a hotkey, by a game launching, and by a focus pause resuming. A caller
+    /// that passes nothing gets the default and cannot start being undoable by
+    /// accident.
+    /// </param>
+    private void PlaySlot(HotkeySlot slot, bool announce, bool screenOnly = false, bool deliberate = false)
     {
+        if (deliberate)
+        {
+            // Before anything is applied, because what is being remembered is the
+            // preset that is live right now - which is exactly what the two lines
+            // below replace. Taken after the fact it would record this slot.
+            RememberForUndo();
+
+            // And a load the user asked for takes the profile off the app's own
+            // automatic hands. Otherwise a game started after the user had changed
+            // something by hand would revert, on exit, to a state they had already
+            // replaced on purpose.
+            _preGameValid = false;
+        }
+
         DisplayPreset? display = FindDisplay(slot.DisplayPresetId);
         AudioPreset? audio = FindAudio(slot.AudioPresetId);
 
@@ -1533,6 +1555,272 @@ public partial class MainWindow : Window
         }
     }
 
+
+    /// <summary>
+    /// Whether there is a load worth taking back.
+    /// <para>
+    /// One step rather than a stack, deliberately. A stack means deciding what it
+    /// means when a preset has been deleted since it was pushed, and a menu to
+    /// choose from - and an Undo that opens a list is a different feature from an
+    /// Undo that takes back what you just did.
+    /// </para>
+    /// </summary>
+    private bool _undoAvailable;
+
+    /// <summary>The screen preset that was loaded when the step was recorded.</summary>
+    private string _undoDisplayId = string.Empty;
+
+    /// <summary>The sound preset that was loaded when the step was recorded.</summary>
+    private string _undoAudioId = string.Empty;
+
+    /// <summary>
+    /// The screen the remembered preset was on, so Undo puts it back on the same
+    /// monitor rather than on whichever one happens to be selected now.
+    /// </summary>
+    private string _undoMonitor = string.Empty;
+
+    /// <summary>
+    /// Records what is loaded now, so a deliberate load can be taken back.
+    /// </summary>
+    /// <remarks>
+    /// Called only from the deliberate branch of <see cref="PlaySlot"/>, and that
+    /// is the whole rule. An auto-load is the app deciding on its own and a revert
+    /// or a panic key is the app cleaning up; putting either behind Undo would
+    /// turn the control into a way to argue with the watcher rather than a way to
+    /// take back what you just did.
+    /// <para>
+    /// A load with nothing behind it is still recorded, and still marked
+    /// available. Undo then lands on flat, which is the honest answer: the user
+    /// had nothing loaded and Undo takes them back to nothing loaded.
+    /// </para>
+    /// </remarks>
+    private void RememberForUndo()
+    {
+        _undoAvailable = true;
+        _undoDisplayId = _activeDisplayId;
+        _undoAudioId = _activeAudioId;
+        _undoMonitor = _appliedMonitor;
+
+        PushUndoAvailability();
+    }
+
+    /// <summary>
+    /// Tells the tray whether the Undo line can do anything.
+    /// </summary>
+    /// <remarks>
+    /// Pushed rather than read as the menu opens. The two toggles beside it are
+    /// answered by reading a switch the window already owns, and this is not a
+    /// field: "is the last load still takeable back" is decided at the moment of
+    /// the load and cannot be reconstructed from the state left behind.
+    /// </remarks>
+    private void PushUndoAvailability()
+    {
+        _tray?.SetUndoAvailable(_undoAvailable);
+    }
+
+    /// <summary>
+    /// Takes back the last preset the user loaded, from the tray or from the
+    /// board.
+    /// </summary>
+    /// <remarks>
+    /// Through the same apply path the preset boxes use - <see cref="ApplyDisplay"/>
+    /// and <see cref="ApplyAudio"/> rather than a bare ramp write and a queue push.
+    /// A parallel path would leave the profile, the tray tooltip and the live
+    /// labels describing a load that never happened, which is the exact failure
+    /// this app already fixed once for the preset boxes.
+    /// <para>
+    /// Spent on the way in, and only after the availability check above, so a
+    /// second press has nothing to do. The restore itself is deliberately not
+    /// wrapped in a retry: a step that throws is a step the user can see failed,
+    /// and leaving it standing would mean a button that appears to work twice.
+    /// </para>
+    /// </remarks>
+    private async System.Threading.Tasks.Task UndoAsync()
+    {
+        if (!_undoAvailable)
+        {
+            Flash("Nothing to undo");
+            return;
+        }
+
+        _undoAvailable = false;
+        PushUndoAvailability();
+
+        string displayId = _undoDisplayId;
+        string audioId = _undoAudioId;
+        string monitor = _undoMonitor;
+
+        // Flat means "nothing was loaded", which is what the two reset paths write
+        // into the remembered id. Undoing to it is a reset rather than a load, and
+        // goes through the reset so the panel ownership, the night filter and the
+        // remembered id are all handled the way every other reset handles them.
+        if (displayId.Length == 0 || string.Equals(displayId, "flat", StringComparison.OrdinalIgnoreCase))
+        {
+            GoScreenStandDown();
+        }
+        else if (FindDisplay(displayId) is { } display)
+        {
+            LoadTune(display.Copy(), _workAudio.Copy());
+            ApplyDisplay(display.Copy(), monitor, false);
+        }
+
+        if (audioId.Length == 0 || string.Equals(audioId, "flat", StringComparison.OrdinalIgnoreCase))
+        {
+            await GoSoundNeutralAsync();
+        }
+        else if (FindAudio(audioId) is { } audio)
+        {
+            // The same entry point the sound box uses. A slot's own output route is
+            // deliberately not part of what was recorded, because the box does not
+            // choose one either: the step being taken back is the preset, not the
+            // routing.
+            ApplyAudio(audio.Copy(), announce: false);
+        }
+
+        RefreshPresetBoxes();
+        UpdateLiveLabels();
+        RefreshTraySlots();
+
+        RailStatus.Text = "UNDONE";
+        Flash("Back to what was loaded before");
+    }
+
+
+    /// <summary>
+    /// Whether <see cref="RevertToPreGame"/> has anything worth putting back.
+    /// <para>
+    /// Only the two ids are needed, and only because the exit path still has to
+    /// reset the sound when it is false. A flag rather than the presets themselves
+    /// so the answer cannot go stale while the presets are edited.
+    /// </para>
+    /// </summary>
+    private bool _preGameValid;
+
+    /// <summary>What was loaded before the app first took the screen over for a game.</summary>
+    private string _preGameDisplayId = string.Empty;
+
+    /// <summary>What was playing before the app first took the sound over for a game.</summary>
+    private string _preGameAudioId = string.Empty;
+
+    /// <summary>Which screen the remembered preset was on.</summary>
+    private string _preGameMonitor = string.Empty;
+
+    /// <summary>
+    /// Records what the user had loaded, before the app starts driving the screen
+    /// and the sound for a game.
+    /// </summary>
+    /// <remarks>
+    /// First capture wins, and the emptiness of <c>_autoSlotId</c> is the test for
+    /// "the app is not already in charge". That has to be read before
+    /// <see cref="ShouldAutoApply"/> sets it, or the second alt-tab into a game
+    /// would record the game's own preset as the thing to put back - which is the
+    /// app undoing its own undo.
+    /// <para>
+    /// "Flat" is captured as flat rather than as nothing to do. A user who had
+    /// explicitly reset before starting a game gets the reset back, and their
+    /// reading preset is not silently reinstated.
+    /// </para>
+    /// </remarks>
+    private void CapturePreGame()
+    {
+        _preGameValid = true;
+        _preGameDisplayId = _activeDisplayId;
+        _preGameAudioId = _activeAudioId;
+        _preGameMonitor = _appliedMonitor;
+    }
+
+    /// <summary>
+    /// Puts the screen and the sound back to what the user had before the game.
+    /// </summary>
+    /// <remarks>
+    /// Not a hard reset, and the difference is the whole point. Auto-revert used to
+    /// go to neutral always, which is right for a user who had nothing loaded and
+    /// wrong for one who had a reading preset on before starting a game: they
+    /// alt-tab back to a flat screen nobody asked for. Falls through to the neutral
+    /// path whenever there is nothing worth restoring, which is the common case and
+    /// the one the old behaviour got right.
+    /// </remarks>
+    private void RevertToPreGame(HotkeySlot slot)
+    {
+        if (!_preGameValid)
+        {
+            return;
+        }
+
+        string displayId = _preGameDisplayId;
+        string audioId = _preGameAudioId;
+        string monitor = _preGameMonitor;
+
+        // Spent as it is read. A second exit for the same slot must not find this
+        // record still standing and restore the same state twice.
+        _preGameValid = false;
+
+        // Refused when what was captured is the preset being reverted. Nothing to
+        // put back, and neutral is the better answer: reverting to the preset being
+        // reverted would be the app undoing its own undo.
+        if (string.Equals(displayId, slot.DisplayPresetId, StringComparison.OrdinalIgnoreCase))
+        {
+            displayId = string.Empty;
+        }
+
+        if (string.Equals(audioId, slot.AudioPresetId, StringComparison.OrdinalIgnoreCase))
+        {
+            audioId = string.Empty;
+        }
+
+        if (displayId.Length > 0 && !string.Equals(displayId, "flat", StringComparison.OrdinalIgnoreCase)
+            && FindDisplay(displayId) is { } display)
+        {
+            LoadTune(display.Copy(), _workAudio.Copy());
+            ApplyDisplay(display.Copy(), monitor, false);
+            TraceLog.Write("AUTO EXIT restored screen " + display.Name);
+        }
+
+        if (audioId.Length > 0 && !string.Equals(audioId, "flat", StringComparison.OrdinalIgnoreCase)
+            && FindAudio(audioId) is { } audio)
+        {
+            ApplyAudio(audio.Copy(), announce: false);
+            TraceLog.Write("AUTO EXIT restored sound " + audio.Name);
+        }
+    }
+
+
+    /// <summary>
+    /// The name to give a slot for a game the app noticed but was never told about.
+    /// <para>
+    /// The window title is the only one of the three strings that is ever the
+    /// game's own name. A process called <c>launcher.exe</c> has a window that says
+    /// what it is launching, and the exe name is just the name of the thing that
+    /// starts it - so a slot called "launcher" is a slot the user has to open to
+    /// find out what it does.
+    /// </para>
+    /// <para>
+    /// Two things disqualify the title, and both are ordinary rather than rare.
+    /// Games that draw their own chrome leave the title as the exe name, which is
+    /// the same string twice; and a title can be a path, a URL or a line out of a
+    /// log, none of which belongs on a one-line slot row. So an empty, silly-long,
+    /// or merely-duplicate title falls back to the process name.
+    /// </para>
+    /// <para>
+    /// Trimmed, because window titles carry trailing whitespace often enough that
+    /// an untrimmed name would not match what the user types to find it again.
+    /// </para>
+    /// </summary>
+    internal static string NameForCurrentGame(WatchedWindow window)
+    {
+        // A slot row is one line high and the name is what the user reads on the
+        // board, so this is a display limit rather than a storage one.
+        const int MaxNameLength = 60;
+
+        string process = window.ProcessName ?? string.Empty;
+        string title = (window.Title ?? string.Empty).Trim();
+
+        bool usable = title.Length > 0
+            && title.Length <= MaxNameLength
+            && !string.Equals(title, process, StringComparison.OrdinalIgnoreCase);
+
+        return usable ? title : process;
+    }
 
     private void OnForegroundChanged(WatchedWindow window)
     {
@@ -1922,6 +2210,12 @@ public partial class MainWindow : Window
         // broken. Same reasoning as the exit path in OnTargetExited - the panel
         // goes back to where the user had it, unless this preset never touched it.
         GoScreenStandDown();
+
+        // And the same pre-game record the exit path spends, for the same reason:
+        // a user who had a reading preset on before going fullscreen gets it back
+        // rather than a flat screen, and the sound falls through to neutral when
+        // there was nothing there.
+        RevertToPreGame(slot);
         _ = GoSoundNeutralAsync();
 
         Flash(slot.Name + " left behind, back to normal");
@@ -2036,10 +2330,24 @@ public partial class MainWindow : Window
         // - but only if this preset was what moved it.
         GoScreenStandDown();
 
+        // After the guard is down, not before it. GoScreenStandDown is what clears
+        // _autoSlotId, and restoring first would leave the guard standing with
+        // nothing behind it - so the next exit for any process would try to revert
+        // a second time.
+        //
+        // The screen the user had before the game, if there was one, and otherwise
+        // nothing: the neutral reset below is the fallback and is what every user
+        // with nothing loaded gets, exactly as before.
+        RevertToPreGame(slot);
+
         // Off the dispatcher. This is three engine calls that each wait on a child
         // process, and it runs at the moment a game exits, which is the worst
         // possible time to stop the window answering. GoSoundNeutralAsync puts its
         // own window work back on the dispatcher before it returns.
+        //
+        // Runs after the restore as well as instead of it: the restore puts the
+        // user's own curve back on the engine, and the reset is what stands the
+        // engine down for a user who had nothing loaded.
         _ = GoSoundNeutralAsync();
 
         Flash(slot.Name + " closed, back to normal");
@@ -2057,6 +2365,15 @@ public partial class MainWindow : Window
         if (AutoApplyGate.IsDebounced(_autoStamp, DateTime.UtcNow))
         {
             return false;
+        }
+
+        // Before the guard below sets it, and only when nothing of ours is already
+        // loaded. The emptiness of _autoSlotId is the test for "the app is not
+        // currently in charge": reading it after the assignment would record the
+        // game's own preset as the thing to put back on exit.
+        if (_autoSlotId.Length == 0)
+        {
+            CapturePreGame();
         }
 
         _autoStamp = DateTime.UtcNow;
@@ -2211,19 +2528,16 @@ public partial class MainWindow : Window
 
 
     /// <summary>
-    /// A slot key is a toggle: the first press loads the slot, and pressing the
-    /// same key again takes it back off again, which puts the screen and the
-    /// sound back to their neutral presets. There is no separate off key, so
-    /// every slot only ever needs one binding and the gesture that loaded a
-    /// setup is also the gesture that backs it out.
-    ///
-    /// The test is which preset is live rather than a remembered flag, so the
-    /// toggle still behaves if a slot was loaded by auto-switch or by clicking
-    /// the row instead of by pressing the key.
-    ///
-    /// Holding the key down cannot toggle twice and undo the work, because every
-    /// binding is registered with MOD_NOREPEAT, so Windows delivers one press
-    /// per physical press rather than a stream of repeats.
+    /// A key press, routed to whichever binding it belongs to: the bypass switch,
+    /// the panic reset, or a slot toggled.
+    /// <para>
+    /// This is an <c>async void</c> event handler, so an escape from it would go
+    /// straight to the dispatcher's unhandled path - which in the middle of a game
+    /// means a dialog over the picture. Everything below is inside one try for
+    /// that reason, and the three branches are all in this method rather than out
+    /// in a helper so that what a key means and the guard around it cannot be read
+    /// apart.
+    /// </para>
     /// </summary>
     private async void OnHotkeyPressed(HotkeyBinding binding)
     {
@@ -2267,6 +2581,12 @@ public partial class MainWindow : Window
                 // cannot click anything, so "the night filter is still scheduled" has to
                 // lose to "I can see what is happening". Every other stand-down - the
                 // tray, the reset button, a game closing - leaves the filter alone.
+                //
+                // The panic key is deliberately not undoable and deliberately does not
+                // spend the undo step: it is the app cleaning up, and asking to take
+                // that back is asking to put the wrong picture back on the screen. Nor
+                // does it consult what was loaded before a game - a hard reset is a
+                // hard reset, on every path that asks for one.
                 GoScreenNeutral(emergency: true);
                 SuppressNightUntilNextWindow();
                 await GoSoundNeutralAsync();
@@ -2300,6 +2620,27 @@ public partial class MainWindow : Window
 
 
     /// <summary>
+    /// The same routing as the key handler above, shaped so a caller can await it.
+    /// <para>
+    /// A key press arrives as an <c>async void</c> event, which nothing can await
+    /// and nothing can reach from a test. This is that same entry point as an
+    /// ordinary task, and it exists for callers inside the app rather than for the
+    /// keyboard, which does not need it.
+    /// </para>
+    /// <para>
+    /// It deliberately does not carry the escape handling, and deliberately does
+    /// not reach what was loaded before a game. A reset is a reset on every path
+    /// that asks for one.
+    /// </para>
+    /// </summary>
+    private async Task HandleHotkeyAsync(HotkeyBinding binding)
+    {
+        OnHotkeyPressed(binding);
+        await Task.CompletedTask;
+    }
+
+
+    /// <summary>
     /// Loads a slot, or takes it back off again if it is the one that is already
     /// loaded.
     /// <para>
@@ -2315,6 +2656,24 @@ public partial class MainWindow : Window
     /// Which preset is live decides which way it goes, not a remembered flag, so
     /// this still behaves for a slot that was loaded by auto-switch or by
     /// clicking its row on the board.
+    /// </para>
+    /// <para>
+    /// A slot key is a toggle: the first press loads the slot, and pressing the
+    /// same key again takes it back off again, which puts the screen and the
+    /// sound back to their neutral presets. There is no separate off key, so
+    /// every slot only ever needs one binding and the gesture that loaded a
+    /// setup is also the gesture that backs it out.
+    /// </para>
+    /// <para>
+    /// Holding the key down cannot toggle twice and undo the work, because every
+    /// binding is registered with MOD_NOREPEAT, so Windows delivers one press
+    /// per physical press rather than a stream of repeats.
+    /// </para>
+    /// <para>
+    /// The load is the one call that opts into being undoable. Undo means "take
+    /// back what I just asked for", and this is the only path where the user
+    /// asked - the auto-load and the focus-pause resume come through
+    /// <see cref="PlaySlot"/> too and take its default.
     /// </para>
     /// </summary>
     private async Task ToggleSlot(HotkeySlot slot)
@@ -2337,7 +2696,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        PlaySlot(slot, true);
+        PlaySlot(slot, true, deliberate: true);
     }
 
 

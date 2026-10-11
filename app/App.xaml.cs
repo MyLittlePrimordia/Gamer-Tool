@@ -43,11 +43,17 @@ public partial class App : Application
         bool claimed;
         try
         {
-            // Not zero. A restart launches the replacement while this process is
-            // still tearing down, so the claim can still be in the outgoing
-            // process's hands for a moment. A genuine double launch only waits
-            // out this window and then gets the message.
-            claimed = _mutex.WaitOne(TimeSpan.FromSeconds(5));
+            // Not zero, and short. A restart launches the replacement while this
+            // process is still tearing down, so the claim can still be in the
+            // outgoing process's hands for a moment; a genuine double launch only
+            // waits out that window and then asks the running copy to come
+            // forward.
+            //
+            // It used to be five seconds, and five seconds was the most noticeable
+            // thing about starting the app a second time: that long of nothing at
+            // all, for a user who had only asked to see the window they could not
+            // find.
+            claimed = _mutex.WaitOne(TimeSpan.FromMilliseconds(1500));
         }
         catch (AbandonedMutexException)
         {
@@ -80,14 +86,23 @@ public partial class App : Application
 
         if (!claimed)
         {
-            MessageBox.Show("GAMER TOOL IS ALREADY RUNNING", "GAMER TOOL", MessageBoxButton.OK, MessageBoxImage.Information);
+            // The running copy owns the hotkeys, the ramp and the state, so this
+            // copy's whole job is to ask it to come forward and then get out of the
+            // way. Two copies running would mean two of everything.
+            //
+            // This used to be a modal saying the app was already
+            // running, which told the user something they had just done and did
+            // nothing about where the window was. The app lives in the tray, so
+            // the second launch is the normal way somebody gets it back, and that
+            // modal was a dead end on the most common path back to the app.
+            WindowMessage.BroadcastShowMe();
             Shutdown();
             return;
         }
 
         // Opened as early as it can be, so the first line in the file is the one that
         // explains a start that never got any further. It cannot be first: the
-        // single-instance claim above can block for five seconds or throw, and
+        // single-instance claim above can block or throw, and that comment
         // that comment claimed a guarantee the code did not keep.
         AppLog.Info("start " + (typeof(App).Assembly.GetName().Version?.ToString() ?? "?")
             + " on " + Environment.OSVersion.VersionString

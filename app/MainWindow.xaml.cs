@@ -492,10 +492,20 @@ public partial class MainWindow : Window
         // State is read as the menu opens rather than pushed from every place that
         // changes it. There are half a dozen of those and a missed push leaves a
         // tick beside a switch that says the opposite, which is worse than no tick.
-        _tray.MenuOpening += () => _tray.SetToggleStates(
-            effectsOn: BypassToggle.IsEngaged(_settings.EffectsEnabled),
-            effectsAvailable: _audio.IsInstalled,
-            nightOn: _settings.NightBlueLight);
+        //
+        // The undo line is the exception, and goes out through the push below
+        // rather than being read here. Everything above is a switch the window
+        // owns and can be asked about; whether a load is still takeable back is
+        // state that lives in the load, not in a field anything could read.
+        _tray.MenuOpening += () =>
+        {
+            _tray.SetToggleStates(
+                effectsOn: BypassToggle.IsEngaged(_settings.EffectsEnabled),
+                effectsAvailable: _audio.IsInstalled,
+                nightOn: _settings.NightBlueLight);
+
+            PushUndoAvailability();
+        };
 
         // The same dispatcher hop the two above use, and then ToggleSlot rather
         // than PlaySlot, so choosing a slot from the tray loads it the first
@@ -508,6 +518,18 @@ public partial class MainWindow : Window
                 await ToggleSlot(slot);
             }
         });
+
+        // Reachable from the tray because the window is usually closed while a
+        // game runs, which is the whole reason the undo lives here rather than as
+        // another button on a board that already scrolls. UndoAsync does the
+        // dispatcher hop itself, since it is also reached from the board.
+        _tray.UndoRequested += () => _ = UndoAsync();
+
+        // Pushed as it changes, rather than read as the menu opens like the two
+        // toggles above. "Is there a load worth taking back" is not a field: it is
+        // a decision made at the moment of the load, and once the load has been
+        // superseded the current state cannot reconstruct it.
+        _tray.SetUndoAvailable(false);
 
         _tray.QuitRequested += QuitApp;
 
@@ -660,6 +682,23 @@ private void HideToTray()
     /// the window is.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// How often the engine's state is re-read, given whether anyone can see it.
+    /// <para>
+    /// The window's own name for <see cref="FxPollPolicy"/>. The cadence is a
+    /// decision about this window rather than about the engine, and it is reached
+    /// from here, so it is named here and tested against the window it belongs to
+    /// instead of against a policy class that happens to hold the numbers.
+    /// </para>
+    /// <para>
+    /// Exposed rather than inlined at the one call site so the relationship can be
+    /// asserted as a relationship. Two hardcoded numbers next to each other can be
+    /// swapped independently and both still read as correct, while "hiding the
+    /// window slows the poll down" is the property that has to hold.
+    /// </para>
+    /// </summary>
+    internal static TimeSpan FxPollInterval(bool onScreen) => FxPollPolicy.IntervalFor(onScreen);
+
     private void RetuneFxPoll()
     {
         if (_stateTimer is null)
@@ -668,7 +707,7 @@ private void HideToTray()
         }
 
         bool onScreen = IsVisible && WindowState != WindowState.Minimized;
-        TimeSpan wanted = FxPollPolicy.IntervalFor(onScreen);
+        TimeSpan wanted = FxPollInterval(onScreen);
 
         if (_stateTimer.Interval == wanted)
         {
@@ -1101,17 +1140,65 @@ private void HideToTray()
     }
 
     /// <summary>
-    /// The window's message hook. Only display topology is interesting; everything
-    /// else is handed straight back to WPF.
+    /// The window's message hook. Display topology, and a second launch asking to
+    /// be shown, are the two things interesting here; everything else is handed
+    /// straight back to WPF.
     /// </summary>
     private IntPtr OnWindowMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        if (WindowMessage.IsShowMe(msg))
+        {
+            // Claimed, so nothing else sees it: the broadcast went to every window
+            // on the desktop, and this one is not going to do anything with it.
+            handled = true;
+            ShowFromSecondLaunch();
+            return IntPtr.Zero;
+        }
+
         if (WindowMessage.Matters(msg, wParam.ToInt64()))
         {
             _displayDebounce.Notify();
         }
 
         return IntPtr.Zero;
+    }
+
+    /// <summary>
+    /// The window the user came back to, because they started the app again.
+    /// <para>
+    /// Restores and activates rather than just showing, because "show" a window
+    /// that is already up does nothing visible, and this is the one moment the
+    /// window may well already be on screen behind whatever they were doing.
+    /// </para>
+    /// <para>
+    /// On the dispatcher rather than inline. The message arrives on the thread
+    /// that posted it - the second copy's, while it is already on its way out -
+    /// and touching a WPF window from there is not a thing that can be done
+    /// safely.
+    /// </para>
+    /// </summary>
+    private void ShowFromSecondLaunch()
+    {
+        _ = Dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                if (WindowState == WindowState.Minimized)
+                {
+                    WindowState = WindowState.Normal;
+                }
+
+                Show();
+                Activate();
+                Topmost = true;
+                Topmost = false;
+                Focus();
+            }
+            catch (Exception ex)
+            {
+                TraceLog.Write("SHOWME", ex);
+            }
+        }), DispatcherPriority.Normal);
     }
 
     /// <summary>

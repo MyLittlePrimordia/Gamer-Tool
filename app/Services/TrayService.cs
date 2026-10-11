@@ -56,6 +56,16 @@ public sealed class TrayService : IDisposable
 
     private readonly ToolStripSeparator _slotsSeparator;
 
+    /// <summary>
+    /// One step back from the preset the user loaded last.
+    /// <para>
+    /// Kept as a field rather than rebuilt with the slot lines because it is a
+    /// single fixed line, and because its enabled state is pushed from the window
+    /// as the undo becomes available and is spent.
+    /// </para>
+    /// </summary>
+    private readonly ToolStripMenuItem _undoItem;
+
     private bool _disposed;
 
     public event Action? ShowRequested;
@@ -67,6 +77,9 @@ public sealed class TrayService : IDisposable
     /// <summary>Raised with a slot id. The id, not the index, because the menu is rebuilt.</summary>
     public event Action<string>? SlotRequested;
 
+    /// <summary>Raised when the user picks Undo.</summary>
+    public event Action? UndoRequested;
+
     public event Action? QuitRequested;
 
     public TrayService()
@@ -75,6 +88,16 @@ public sealed class TrayService : IDisposable
         ToolStripMenuItem resetScreen = DarkTrayMenuRenderer.Item("Reset Display", (s, e) => ResetScreenRequested?.Invoke());
         ToolStripMenuItem resetSound = DarkTrayMenuRenderer.Item("Reset Sound", (s, e) => ResetSoundRequested?.Invoke());
         ToolStripMenuItem quit = DarkTrayMenuRenderer.Item("Quit", (s, e) => QuitRequested?.Invoke());
+
+        // Disabled rather than hidden when there is nothing to undo. A menu that
+        // grows and shrinks a line moves Reset and Quit about under the cursor,
+        // which is the same reason the slots separator is left standing when the
+        // list is empty.
+        _undoItem = DarkTrayMenuRenderer.Item(
+            "Undo last load",
+            (s, e) => UndoRequested?.Invoke());
+        _undoItem.Enabled = false;
+        _undoItem.ToolTipText = "Put back the preset that was loaded before the last one";
 
         _slotsItem = DarkTrayMenuRenderer.Submenu("Slots");
         _slotsSeparator = DarkTrayMenuRenderer.Separator();
@@ -104,6 +127,7 @@ public sealed class TrayService : IDisposable
         menu.Items.Add(_effectsItem);
         menu.Items.Add(_nightItem);
         menu.Items.Add(DarkTrayMenuRenderer.Separator());
+        menu.Items.Add(_undoItem);
         menu.Items.Add(resetScreen);
         menu.Items.Add(resetSound);
         menu.Items.Add(DarkTrayMenuRenderer.Separator());
@@ -171,6 +195,34 @@ public sealed class TrayService : IDisposable
             _effectsItem.Visible = effectsAvailable;
             _effectsItem.Checked = effectsOn;
             _nightItem.Checked = nightOn;
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("TRAY", ex);
+        }
+    }
+
+    /// <summary>
+    /// Enables or greys out the Undo line.
+    /// <para>
+    /// Pushed rather than read as the menu opens, unlike the two toggles above.
+    /// Those two are answered by reading a switch the window already owns.
+    /// "Is there a load worth taking back" is not a field anywhere: it is a
+    /// decision the window makes as the load happens, at the moment it happens,
+    /// and once the load has been superseded there is no way to reconstruct it
+    /// from the current state. So the window says so when it changes.
+    /// </para>
+    /// </summary>
+    public void SetUndoAvailable(bool available)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            _undoItem.Enabled = available;
         }
         catch (Exception ex)
         {

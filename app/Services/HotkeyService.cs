@@ -377,8 +377,36 @@ public sealed class HotkeyService : IDisposable
             return (Key)((int)Key.NumPad0 + (int)(trimmed[3] - '0'));
         }
 
-        // IsDefined, because Enum.TryParse also accepts raw numbers: "CTRL+57" in a
-        // hand-edited or restored settings file would otherwise become an arbitrary Key.
+        // A bare number is never a key name, whatever the enum says.
+        //
+        // Enum.TryParse accepts numeric text, and Enum.IsDefined then confirms that
+        // the number lands on a real member - so "57" became Key.N (0x4E is 'N'),
+        // "12" became Key.HanjaMode and "999" landed past the end of the enum. All
+        // three parse, all three are "defined", and a hand-edited or restored
+        // settings file saying "CTRL+57" bound a key the user never pressed.
+        //
+        // The two branches above are the deliberate numeric forms - one digit on
+        // its own is the D-row, and NUM0 to NUM9 is the keypad - so by the time
+        // control reaches here a digit cannot be part of a name either. Anything
+        // that is all digits is a number rather than a name.
+        bool allDigits = true;
+        foreach (char c in trimmed)
+        {
+            if (!char.IsDigit(c))
+            {
+                allDigits = false;
+                break;
+            }
+        }
+
+        if (allDigits)
+        {
+            return Key.None;
+        }
+
+        // IsDefined, because Enum.TryParse also accepts the numeric form of a
+        // defined member when it is spelled with a sign or a suffix that the check
+        // above does not catch (for example "+57"), and a key name is a word.
         if (Enum.TryParse(trimmed, ignoreCase: true, out Key parsed)
             && parsed != Key.None
             && Enum.IsDefined(parsed))
