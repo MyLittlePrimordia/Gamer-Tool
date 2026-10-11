@@ -25,3 +25,5 @@ Desktop.ini
 
 # Scratch space for asset re-encoding
 assetwork/
+*.tmp
+msg-*.txt
