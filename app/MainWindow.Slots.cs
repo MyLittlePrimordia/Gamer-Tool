@@ -2170,14 +2170,13 @@ public partial class MainWindow : Window
     /// </summary>
     private void RevertWildcardOnFocusLoss(WatchedWindow window)
     {
-        if (_autoWildcardProcess.Length == 0)
+        // Whether the wildcard should stand down at all, as one named question. The
+        // second half is the one that is easy to get wrong: the game having another
+        // window in front - its own launcher, a second instance of itself - is not a
+        // focus loss, and standing down for it would suspend the boost for looking
+        // at the game.
+        if (!AutoApplyDecision.WildcardShouldStandDown(_autoWildcardProcess, window.ProcessName))
         {
-            return;
-        }
-
-        if (string.Equals(_autoWildcardProcess, window.ProcessName, StringComparison.OrdinalIgnoreCase))
-        {
-            // Back to the game, or another window of it. Not a focus loss.
             return;
         }
 
@@ -2246,20 +2245,25 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnTargetExited(string processName)
     {
-        // The paused case, and it has to come first. A focus pause stands the
-        // screen down, and StandDownScreen clears _autoSlotId on its way through -
-        // so by the time a paused game's process exits, MatchProcessName finds the
-        // slot but the guard at the bottom ("this is the slot the app applied")
-        // does not, because _autoSlotId is empty. The exit would be ignored and the
-        // SOUND would stay boosted for whatever the user runs next, which is the
-        // one thing the whole exit path exists to prevent.
+        // The paused case is asked first, in this method, so that the order is
+        // visible where it matters rather than implied by a helper's parameter list.
+        // It has to come before the revert-on-exit guard below: a focus pause stands
+        // the screen down and clears the auto slot on its way through, so by the time
+        // a paused game exits there is no auto slot left to match, and with the guard
+        // first the exit would be ignored - leaving the sound boosted for whatever the
+        // user runs next, which is the one thing this path exists to prevent.
         //
-        // Sound only: the screen is already neutral, so pushing it again would be
+        // Sound only, because the screen is already neutral: pushing it again would be
         // doing work that is not needed.
-        if (_pausedSlotId.Length > 0
-            && string.Equals(_pausedProcess, processName, StringComparison.OrdinalIgnoreCase))
+        bool startedPaused = _pausedSlotId.Length > 0
+            && string.Equals(_pausedProcess, processName, StringComparison.OrdinalIgnoreCase);
+
+        if (startedPaused)
         {
             TraceLog.Write("AUTO EXIT while paused " + processName);
+
+            // Cleared either way. The pause is over whatever the setting says, and
+            // leaving the record standing would have the next exit match it again.
             ClearFocusPause();
 
             if (_settings.AutoRevertOnExit && !_quitting)
@@ -2276,37 +2280,53 @@ public partial class MainWindow : Window
             return;
         }
 
-        HotkeySlot? slot = SlotService.MatchProcessName(_settings.Slots, processName);
-        if (slot is null)
+        // Everything from here is a pure decision, so the remaining three answers and
+        // the order they are asked in are asserted by test rather than by a comment.
+        HotkeySlot? bound = SlotService.MatchProcessName(_settings.Slots, processName);
+
+        HotkeySlot? autoSlot = _settings.Slots.FirstOrDefault(s =>
+            string.Equals(s.Id, _autoSlotId, StringComparison.OrdinalIgnoreCase));
+
+        RevertDecision decision = AutoApplyDecision.ClassifyExit(
+            revertEnabled: true,
+            pausedExit: false,
+            pausedSlotId: string.Empty,
+            exitedProcess: processName,
+            wildcardProcess: _autoWildcardProcess,
+            autoSlotId: _autoSlotId,
+            boundSlotId: bound?.Id ?? string.Empty,
+            autoSlotIsWildcard: autoSlot?.IsAnyGameTarget == true);
+
+        if (!decision.ShouldRevert)
         {
-            // Not a bound game. It may still be a program a wildcard slot applied
-            // itself for, which MatchProcessName cannot find by construction - the
-            // wildcard matched something that is not bound to anything.
-            //
-            // Both halves have to agree: the process must be the one remembered at
-            // apply time, and the slot that applied it must still be the one
-            // loaded. Without the first, quitting any unbound program would revert
-            // the profile; without the second, a revert would fire for an
-            // application the user has since overridden with their own key press.
-            if (!string.Equals(_autoWildcardProcess, processName, StringComparison.OrdinalIgnoreCase))
+            // Said out loud because the common case for a watched process going away
+            // is that it was never ours, and "the app changed nothing" is the
+            // outcome the whole guard exists to produce.
+            if (autoSlot is not null || bound is not null)
             {
-                return;
+                TraceLog.Write("AUTO EXIT SKIP " + processName + " <- not the auto loaded slot");
             }
 
-            slot = _settings.Slots.FirstOrDefault(s =>
-                string.Equals(s.Id, _autoSlotId, StringComparison.OrdinalIgnoreCase));
-
-            if (slot is null || !slot.IsAnyGameTarget)
-            {
-                TraceLog.Write("AUTO WILDCARD EXIT SKIP " + processName + " <- no longer the loaded slot");
-                return;
-            }
+            return;
         }
 
-        if (!string.Equals(_autoSlotId, slot.Id, StringComparison.OrdinalIgnoreCase))
+        // The slot the decision named, which for the wildcard case is the wildcard
+        // rather than anything bound to the process - the wildcard matched something
+        // that is bound to nothing, which is why the name lookup cannot find it.
+        HotkeySlot? slot = _settings.Slots.FirstOrDefault(s =>
+            string.Equals(s.Id, decision.SlotId, StringComparison.OrdinalIgnoreCase));
+
+        if (slot is null)
         {
-            TraceLog.Write("AUTO EXIT SKIP " + processName + " <- not the auto loaded slot");
+            // Deleted between the apply and the exit. Nothing to revert and nothing
+            // to say; the guard above already decided this exit was ours.
+            TraceLog.Write("AUTO EXIT SKIP " + processName + " <- the slot has gone");
             return;
+        }
+
+        if (decision.Kind == RevertKind.Wildcard)
+        {
+            TraceLog.Write("AUTO WILDCARD EXIT " + slot.Name + " <- " + processName);
         }
 
         TraceLog.Write("AUTO EXIT " + slot.Name + " <- " + processName);
@@ -2351,8 +2371,12 @@ public partial class MainWindow : Window
 
     private bool ShouldAutoApply(HotkeySlot slot, string processName)
     {
-        if (string.Equals(_autoSlotId, slot.Id, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(_autoProcess, processName, StringComparison.OrdinalIgnoreCase))
+        // Whether this exact pair is already loaded, as a named question rather than
+        // as an inline comparison of two fields. Both halves are needed and the
+        // reason is worth keeping next to the answer: the slot id alone would refuse
+        // a second game started under a different process, and the process alone
+        // would refuse a different slot loaded for the same program.
+        if (AutoApplyDecision.AlreadyApplied(_autoSlotId, _autoProcess, slot.Id, processName))
         {
             return false;
         }
