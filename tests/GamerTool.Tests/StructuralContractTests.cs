@@ -153,6 +153,45 @@ public class StructuralContractTests
     }
 
     /// <summary>
+    /// The two paths where a preset actually becomes live go through the fan-out.
+    /// </summary>
+    /// <remarks>
+    /// This is the defect the fan-out exists for, stated as a rule rather than left
+    /// to the next reader. Both of these used to refresh some of the surfaces that
+    /// render which preset is loaded and not others - neither touched the dropdown -
+    /// so a preset loaded by a slot key could leave the box naming the previous one
+    /// until something else happened to rebuild it. Nothing caught it: the tests
+    /// that cover these methods assert on the apply, not on what the page shows
+    /// afterwards, and the refresh methods themselves cannot be reached from a test
+    /// without a window.
+    /// <para>
+    /// Caller-side, because there is nowhere else to put it. What it guarantees is
+    /// narrow and worth being honest about: that these two do not go back to naming
+    /// surfaces one at a time.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    [InlineData("MainWindow.Display.cs", "private bool ApplyDisplay(DisplayPreset preset, string monitorDevice, bool announce)")]
+    [InlineData("MainWindow.Audio.cs", "private void ApplyAudioCore(AudioPreset preset, bool announce, HotkeySlot? routeFrom)")]
+    public void APresetBecomingLiveGoesThroughTheFanOut(string file, string signature)
+    {
+        string source = File.ReadAllText(Path.Combine(AppRoot(), file));
+
+        int at = source.IndexOf(signature, StringComparison.Ordinal);
+        Assert.True(at >= 0, "not found: " + signature);
+
+        // The body runs to the next member declaration, which is the same way the
+        // other source-reading tests in this project bound a method.
+        int end = source.IndexOf("\n    private ", at + signature.Length, StringComparison.Ordinal);
+        string body = end < 0 ? source[at..] : source[at..end];
+
+        Assert.Contains("RefreshActivePreset();", body, StringComparison.Ordinal);
+
+        Assert.DoesNotContain("UpdateLiveLabels();", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("UpdatePresetChrome();", body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The repository root, found the same way the other source-reading tests find
     /// it: by walking up until the app project file turns up.
     /// </summary>

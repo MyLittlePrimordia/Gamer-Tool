@@ -2079,6 +2079,53 @@ private void HideToTray()
 
 
     /// <summary>
+    /// Every surface that renders which preset is loaded, in one call.
+    /// </summary>
+    /// <remarks>
+    /// This exists because those surfaces were four methods called by hand from
+    /// forty-two places across seven files, and nothing - not the compiler, not a
+    /// test - said which of them a given change was supposed to reach. The order
+    /// was recovered by reading the call sites, and it was not even consistent:
+    /// <c>ApplyDisplay</c> and <c>ApplyAudioCore</c>, the two places a preset
+    /// actually becomes live, refreshed the labels and the chrome but never the
+    /// dropdown, so a preset loaded by a slot key could leave the box naming the
+    /// previous one until something else happened to rebuild it.
+    /// <para>
+    /// That is the defect this closes: a new call site can no longer forget a
+    /// surface, because it does not name any of them. It says "the live preset
+    /// changed" and this decides what that means.
+    /// </para>
+    /// <para>
+    /// Deliberately not a general-purpose event bus. The three surfaces here are
+    /// owned by this window and rendered on its dispatcher thread, so a direct call
+    /// is the honest shape and an indirection layer would be a fourth thing to
+    /// learn for no behaviour.
+    /// </para>
+    /// <para>
+    /// <see cref="RefreshPresetBoxes"/> is the expensive one - it rebuilds both
+    /// dropdowns from the built-in and custom lists - and both callers already did
+    /// it, so it is included rather than left to be remembered. What it must not do
+    /// is run while a subscription it triggers is still being set up, which is why
+    /// the flag below is honoured first.
+    /// </para>
+    /// </remarks>
+    private void RefreshActivePreset()
+    {
+        // A refresh asked for while the controls are being populated is a refresh
+        // asked for halfway through setting them up. The flag is already honoured by
+        // every change handler on the page for the same reason.
+        if (_updating)
+        {
+            return;
+        }
+
+        RefreshPresetBoxes();
+        UpdateLiveLabels();
+        UpdatePresetChrome();
+    }
+
+
+    /// <summary>
     /// One short line of confirmation. The old pair of bracketed headline and
     /// shouted subline was two rows of text for something that only ever needed to
     /// say what just happened, so it is now a single trimmed sentence.

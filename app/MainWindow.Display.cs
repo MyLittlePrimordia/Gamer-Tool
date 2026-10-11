@@ -442,8 +442,12 @@ public partial class MainWindow : Window
         _settings.ActiveDisplayPresetId = preset.Id;
         _activeDisplayId = preset.Id;
         UpdateScreenLabels(preset);
-        UpdateLiveLabels();
-        UpdatePresetChrome();
+
+        // Through the fan-out rather than naming the surfaces here. This path - a
+        // preset becoming live - used to refresh the labels and the chrome but left
+        // the dropdown alone, so a slot key could load a preset and leave the box
+        // still naming the previous one.
+        RefreshActivePreset();
         Commit();
         if (announce)
         {
@@ -834,8 +838,7 @@ public partial class MainWindow : Window
         _presetOwnedPanelDevice = string.Empty;
 
         LoadTune(DisplayPreset.Flat(), _workAudio);
-        RefreshPresetBoxes();
-        UpdateLiveLabels();
+        RefreshActivePreset();
         UpdateScreenLabels(_workDisplay);
 
         // The warm tint has just been reset along with everything else.

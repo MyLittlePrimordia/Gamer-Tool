@@ -1671,9 +1671,10 @@ public partial class MainWindow : Window
             ApplyAudio(audio.Copy(), announce: false);
         }
 
-        RefreshPresetBoxes();
-        UpdateLiveLabels();
-        RefreshTraySlots();
+        // One call for every surface that renders which preset is loaded, rather
+        // than three the next reader has to keep in step. That includes the tray
+        // lines and both dropdowns, which are rebuilt from the ids just changed.
+        RefreshActivePreset();
 
         RailStatus.Text = "UNDONE";
         Flash("Back to what was loaded before");

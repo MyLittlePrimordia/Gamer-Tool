@@ -1233,7 +1233,11 @@ public partial class MainWindow : Window
         }
 
         UpdateSoundLabels(preset);
-        UpdatePresetChrome();
+
+        // Through the fan-out, so the dropdown, the labels and the tray all get the
+        // same answer. This path only refreshed the chrome, which left the sound box
+        // naming the previous preset after a slot key loaded one.
+        RefreshActivePreset();
 
         if (_audio.IsInstalled)
         {
@@ -1593,8 +1597,7 @@ public partial class MainWindow : Window
                 // the panel has now rather than the one it had several seconds ago.
                 int bands = _bandSliders.Count > 0 ? _bandSliders.Count : AudioPreset.PresetBandCount;
                 LoadTune(_workDisplay, AudioPreset.Flat(bands));
-                RefreshPresetBoxes();
-                UpdateLiveLabels();
+                RefreshActivePreset();
                 Commit();
             });
         }
