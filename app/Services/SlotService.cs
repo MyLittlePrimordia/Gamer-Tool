@@ -409,6 +409,60 @@ public static string TargetKey(HotkeySlot slot)
     /// its boost on every single launch.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// The name to give a slot for a game the app noticed but was never told about.
+    /// <para>
+    /// The window title is the only one of the three strings that is ever the
+    /// game's own name. A process called <c>launcher.exe</c> has a window that says
+    /// what it is launching, and the exe name is just the name of the thing that
+    /// starts it - so a slot called "launcher" is a slot the user has to open to
+    /// find out what it does.
+    /// </para>
+    /// <para>
+    /// Two things disqualify the title, and both are ordinary rather than rare.
+    /// Games that draw their own chrome leave the title as the exe name, which is
+    /// the same string twice; and a title can be a path, a URL or a line out of a
+    /// log, none of which belongs on a one-line slot row. So an empty, silly-long,
+    /// or merely-duplicate title falls back to the process name.
+    /// </para>
+    /// <para>
+    /// Trimmed, because window titles carry trailing whitespace often enough that
+    /// an untrimmed name would not match what the user types to find it again.
+    /// </para>
+    /// <para>
+    /// Lives here rather than on the window, where it was written. Naming a slot
+    /// from a window is slot logic, and having it in the window is what forced the
+    /// caller that needed it - <see cref="AddCurrentGame"/> - to reach into the UI
+    /// layer to get at a pure string function.
+    /// </para>
+    /// </summary>
+    public static string NameForCurrentGame(WatchedWindow window)
+    {
+        // A slot row is one line high and the name is what the user reads on the
+        // board, so this is a display limit rather than a storage one.
+        const int MaxNameLength = 60;
+
+        string process = window.ProcessName ?? string.Empty;
+        string title = (window.Title ?? string.Empty).Trim();
+
+        bool usable = title.Length > 0
+            && title.Length <= MaxNameLength
+            && !string.Equals(title, process, StringComparison.OrdinalIgnoreCase);
+
+        return usable ? title : process;
+    }
+
+
+    /// <summary>
+    /// Whether a path sits inside a directory, separator and all.
+    /// <para>
+    /// The separator is what stops "C:\Program Files (x86)" from counting as
+    /// inside "C:\Program Files", which a plain StartsWith would happily report.
+    /// Both sides are compared on their full form first, so a ".." that climbs
+    /// out and one that does not are told apart - the comparison here is on the
+    /// resolved paths, not on the text that was combined.
+    /// </para>
+    /// </summary>
     public static bool IsUnderFolder(string? exePath, string? folder)
     {
         if (string.IsNullOrWhiteSpace(exePath) || string.IsNullOrWhiteSpace(folder))
@@ -546,6 +600,91 @@ public static void ResolveAutoClaims(List<HotkeySlot> slots)
 
         return screen && sound;
     }
+
+    /// <summary>
+    /// The slots that use a given preset, in the order they appear on the board.
+    /// </summary>
+    /// <param name="slots">Every slot, enabled or not - a disabled slot still names the preset and still loses it.</param>
+    /// <param name="presetId">The preset being asked about.</param>
+    /// <param name="checkDisplay">
+    /// True to look at the screen half, false for the sound half. Which half a preset
+    /// belongs to is a property of how it is stored rather than of the id, so the
+    /// caller states it rather than this guessing from the string.
+    /// </param>
+    /// <remarks>
+    /// Exists so the delete confirmation can name what it is about to break. The
+    /// dialog already said the preset would come out of "any slot that points at
+    /// it", which is true and tells the user nothing they can act on - by the time
+    /// they read it the decision is already made, and afterwards the only evidence
+    /// is a slot that has quietly gone back to saying NOTHING SET.
+    /// <para>
+    /// Disabled slots are included deliberately. A disabled slot keeps its preset,
+    /// and deleting the preset out from under it means the user finds it empty the
+    /// day they switch it back on, with the deletion long out of mind.
+    /// </para>
+    /// <para>
+    /// An empty <paramref name="presetId"/> matches nothing, because that is what
+    /// "no preset" is stored as and it is not a preset anybody can delete.
+    /// </para>
+    /// </remarks>
+    public static List<HotkeySlot> SlotsUsingPreset(
+        IReadOnlyList<HotkeySlot> slots,
+        string? presetId,
+        bool checkDisplay)
+    {
+        List<HotkeySlot> inUse = new();
+
+        if (slots is null || string.IsNullOrWhiteSpace(presetId))
+        {
+            return inUse;
+        }
+
+        foreach (HotkeySlot slot in slots)
+        {
+            string? named = checkDisplay ? slot.DisplayPresetId : slot.AudioPresetId;
+
+            if (!string.IsNullOrWhiteSpace(named)
+                && string.Equals(named, presetId, StringComparison.OrdinalIgnoreCase))
+            {
+                inUse.Add(slot);
+            }
+        }
+
+        return inUse;
+    }
+
+    /// <summary>
+    /// The names of the slots that use a preset, for a confirmation message.
+    /// </summary>
+    /// <remarks>
+    /// Named rather than counted, where the count allows it. "3 slots" sends the
+    /// user hunting through the board to find which three; one name is something
+    /// they can picture. Long lists fall back to a count plus the first couple,
+    /// because a dialog is one line and five slot names in it is not a sentence.
+    /// </remarks>
+    public static string DescribeUsage(IReadOnlyList<HotkeySlot> inUse)
+    {
+        if (inUse is null || inUse.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        if (inUse.Count == 1)
+        {
+            return "It is loaded by " + Name(inUse[0]) + ".";
+        }
+
+        if (inUse.Count == 2)
+        {
+            return "It is loaded by " + Name(inUse[0]) + " and " + Name(inUse[1]) + ".";
+        }
+
+        return "It is loaded by " + inUse.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + " slots, including " + Name(inUse[0]) + " and " + Name(inUse[1]) + ".";
+    }
+
+    private static string Name(HotkeySlot slot) =>
+        string.IsNullOrWhiteSpace(slot.Name) ? "an unnamed slot" : slot.Name;
 
     /// <summary>
     /// The output device a slot should actually send sound to.

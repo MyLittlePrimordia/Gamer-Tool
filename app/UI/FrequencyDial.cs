@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Automation.Peers;
@@ -118,27 +118,21 @@ public sealed class FrequencyDial : Control
 
     private double _maximumHertz = 85.0;
 
-    /// <summary>Where the dial currently is, in hertz, for the read-back.</summary>
-    private double _currentHertz;
-
     /// <summary>Names the band, so a screen reader says which band it is on.</summary>
+    /// <param name="currentHertz">
+    /// Unused, and kept only so the call site does not have to change. It used to
+    /// feed a <c>CurrentHertz</c> property that nothing read, and a <c>TrackHertz</c>
+    /// that existed only to keep that property current. The automation peer reports
+    /// the window's two ends and never the current value, so the whole chain was
+    /// state written and never read. Removed rather than wired up, because there is
+    /// nothing to wire it to: a tooltip or a readout that wanted it does not exist.
+    /// </param>
     public void SetBand(string name, double minimumHertz, double maximumHertz, double currentHertz)
     {
+        _ = currentHertz;
         _minimumHertz = minimumHertz;
         _maximumHertz = maximumHertz;
-        _currentHertz = currentHertz;
         System.Windows.Automation.AutomationProperties.SetName(this, name);
-        TrackHertz();
-    }
-
-    /// <summary>Where the dial is now, in hertz, for a readout or a tooltip.</summary>
-    public double CurrentHertz => _currentHertz;
-
-    /// <summary>Moves the dial to a frequency rather than to a detent.</summary>
-    public void SetStepFromHertz(double hertz)
-    {
-        double clamped = Math.Clamp(hertz, _minimumHertz, _maximumHertz);
-        SetStep(AudioPreset.StepFromFrequency(new AudioPreset.BandWindow(_minimumHertz, _maximumHertz), clamped));
     }
 
     public FrequencyDial()
@@ -163,18 +157,7 @@ public sealed class FrequencyDial : Control
         }
 
         SetValue(StepProperty, clamped);
-        TrackHertz();
         ValueChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    /// <summary>
-    /// Keeps the hertz the automation peer reports in step with the detent, since
-    /// the two are related by the band window rather than by a fixed ratio.
-    /// </summary>
-    private void TrackHertz()
-    {
-        _currentHertz = AudioPreset.FrequencyFromStep(
-            new AudioPreset.BandWindow(_minimumHertz, _maximumHertz), Step);
     }
 
     protected override void OnRender(DrawingContext dc)
@@ -496,9 +479,6 @@ public sealed class FrequencyDial : Control
                 _owner._maximumHertz);
         }
     }
-
-    /// <summary>Reads the dial's detent, used when saving a tune.</summary>
-    public double CurrentStep => Step;
 
     /// <summary>A short description of the dial for screen readers and tooltips.</summary>
     public string Describe(double hertz) => hertz.ToString("0.##", CultureInfo.InvariantCulture) + " Hz";

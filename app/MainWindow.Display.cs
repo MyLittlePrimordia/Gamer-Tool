@@ -112,9 +112,18 @@ public partial class MainWindow : Window
         }
 
         string removed = mine.Name;
+
+        // Named where the board allows it. The dialog already said the preset would
+        // come out of any slot pointing at it, which is true and tells the user
+        // nothing they can act on; afterwards the only evidence is a slot that has
+        // quietly gone back to saying NOTHING SET.
+        List<HotkeySlot> inUse = SlotService.SlotsUsingPreset(_settings.Slots, mine.Id, checkDisplay: true);
+        string usage = SlotService.DescribeUsage(inUse);
+
         ShowConfirmModal(
             "DELETE \u201C" + removed.ToUpperInvariant() + "\u201D?",
-            "This takes the preset out of Gamer Tool and out of any slot that points at it.",
+            "This takes the preset out of Gamer Tool and out of any slot that points at it."
+                + (usage.Length > 0 ? "  " + usage : string.Empty),
             "Delete",
             () =>
             {

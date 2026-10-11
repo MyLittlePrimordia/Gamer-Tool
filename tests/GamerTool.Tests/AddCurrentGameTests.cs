@@ -53,7 +53,7 @@ public class AddCurrentGameTests
     {
         // The only one of the three that is ever the game's own name. A process
         // called launcher.exe has a window that says what it is launching.
-        Assert.Equal(expected, MainWindow.NameForCurrentGame(Window(title, process)));
+        Assert.Equal(expected, SlotService.NameForCurrentGame(Window(title, process)));
     }
 
     [Theory]
@@ -65,7 +65,7 @@ public class AddCurrentGameTests
         // Games that draw their own chrome leave the window title as the exe name,
         // and a slot called "witcher3" is better than one called "Witcher 3" that
         // is the same thing twice.
-        Assert.Equal("launcher", MainWindow.NameForCurrentGame(Window(title, "launcher")));
+        Assert.Equal("launcher", SlotService.NameForCurrentGame(Window(title, "launcher")));
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public class AddCurrentGameTests
         // high and the name is what the user reads on the board.
         string enormous = new('x', 400);
 
-        Assert.Equal("game", MainWindow.NameForCurrentGame(Window(enormous, "game")));
+        Assert.Equal("game", SlotService.NameForCurrentGame(Window(enormous, "game")));
     }
 
     [Fact]

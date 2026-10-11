@@ -120,7 +120,7 @@ public class StructuralContractTests
     [InlineData("MainWindow.Slots.cs", "private void RegisterHotkeys()")]
     [InlineData("MainWindow.Slots.cs", "private async void OnHotkeyPressed(HotkeyBinding binding)")]
     [InlineData("MainWindow.Slots.cs", "private void WireKeycap(TextBox box, KeycapCapture which)")]
-    [InlineData("MainWindow.Slots.cs", "internal static string NameForCurrentGame(WatchedWindow window)")]
+    [InlineData("Services/SlotService.cs", "public static string NameForCurrentGame(WatchedWindow window)")]
     [InlineData("MainWindow.Slots.cs", "internal static bool ShouldPauseForFocusLoss(")]
     [InlineData("MainWindow.Slots.cs", "private static void ResolveAppIcons(List<AppCandidate> candidates)")]
     [InlineData("MainWindow.Slots.cs", "private void WarmAppIcons()")]
