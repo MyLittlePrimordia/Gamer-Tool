@@ -80,6 +80,55 @@ public sealed class WatchedWindow
 
     private int _processTick;
 
+    /// <summary>
+    /// The last window that was neither this app nor the shell.
+    /// <para>
+    /// This is the whole reason the "add the game that is playing" button can
+    /// work at all. The button is a button the user has to press, and pressing it
+    /// takes the game out of the foreground - so the answer has to have been
+    /// noticed beforehand, not asked for at the moment of clicking.
+    /// </para>
+    /// <para>
+    /// Fed from <see cref="Read"/>'s answer rather than from a second read of its
+    /// own. That method already refuses this app's own window and the shell, which
+    /// is precisely what makes it the right source: a remembered window can never
+    /// be the one place the user is trying to get to in order to turn the boost
+    /// off. A separate lookup would also be a second foreground sample that could
+    /// land on something else entirely between the two reads.
+    /// </para>
+    /// </summary>
+    private WatchedWindow? _lastForeign;
+
+    private DateTime _lastForeignAt = DateTime.MinValue;
+
+    /// <summary>
+    /// How stale <see cref="LastForeign"/> may be and still be worth offering.
+    /// <para>
+    /// The button is still on screen long after the user has walked away from
+    /// the machine. An answer from an hour ago is a wrong answer with a confident
+    /// look about it, so it is treated as no answer at all rather than as a game.
+    /// </para>
+    /// </summary>
+    internal static readonly TimeSpan RecentForeignWindow = TimeSpan.FromMinutes(15);
+
+    /// <summary>The last foreign window this watcher saw, or null if it has seen none.</summary>
+    internal WatchedWindow? LastForeign => _lastForeign;
+
+    /// <summary>
+    /// When that window was seen. <see cref="DateTime.MinValue"/> when there has
+    /// never been one, so "has this ever happened" and "has this just happened"
+    /// are different questions and stay different.
+    /// </summary>
+    internal DateTime LastForeignAt => _lastForeignAt;
+
+    /// <summary>
+    /// Whether there is a remembered window recent enough to still be worth
+    /// offering. Separate from <see cref="LastForeign"/> being non-null because a
+    /// remembered window outliving its usefulness is the case that matters.
+    /// </summary>
+    internal bool HasRecentForeign =>
+        _lastForeign is not null && DateTime.Now - _lastForeignAt < RecentForeignWindow;
+
     public event Action<WatchedWindow>? ForegroundChanged;
 
     /// <summary>
@@ -253,6 +302,13 @@ public sealed class WatchedWindow
         {
             if (window is not null)
             {
+                // Every tick, not only on the change below. Recording only on a
+                // change would date the memory from when the user arrived, and a
+                // game left running for longer than the window would grey out the
+                // button while they were still sitting in front of it.
+                _lastForeign = window;
+                _lastForeignAt = DateTime.Now;
+
                 string key = window.ExePath + "|" + window.ProcessName;
                 if (!string.Equals(key, _lastKey, StringComparison.OrdinalIgnoreCase))
                 {
@@ -336,7 +392,7 @@ public sealed class WatchedWindow
                 return string.Empty;
             }
 
-            string name = Path.GetFileNameWithoutExtension(path);
+            string name = NameFromImagePath(path);
 
             foreach (string shell in ShellProcessNames)
             {
@@ -436,7 +492,7 @@ public sealed class WatchedWindow
 
                     // The name as the process itself spells it, which is what the
                     // foreground read reports too, so the two agree on casing.
-                    string actual = Path.GetFileNameWithoutExtension(path);
+                    string actual = NameFromImagePath(path);
 
                     // Recorded only once the launch is genuinely being announced, so a
                     // process whose image path could not be read gets another chance
@@ -534,6 +590,13 @@ public sealed class WatchedWindow
         _knownProcesses.Clear();
         _firedProcesses.Clear();
 
+        // With the rest of it. ApplyWatchState calls Reset on both arms of a turn,
+        // so a remembered game that survived it would be offered to a user who had
+        // just turned auto-load off - describing what was in the foreground before
+        // they did, which is the one moment the answer is least wanted.
+        _lastForeign = null;
+        _lastForeignAt = DateTime.MinValue;
+
         // Included because Reset is what ApplyWatchState calls on both arms of a
         // turn. An unbound watch that survived it would keep raising exits for a
         // program the app has stopped tracking, and the exit handler would revert a
@@ -568,7 +631,7 @@ public sealed class WatchedWindow
                 return null;
             }
 
-            string name = Path.GetFileNameWithoutExtension(path);
+            string name = NameFromImagePath(path);
 
             // Gamer Tool is excluded here and deliberately NOT part of
             // ShellProcessNames. Opening this window is not the user leaving the
@@ -729,6 +792,41 @@ public sealed class WatchedWindow
 
     private const uint MonitorDefaultToNearest = 0x00000002;
 
+
+    /// <summary>
+    /// The process name an image path spells out.
+    /// <para>
+    /// Everything in this class asks the same question - what is this window's
+    /// program called - and the answer is the file name of the path read on the
+    /// line above it. That used to be spelled out at each of those sites, and the
+    /// comparisons built on the result are the ones that matter: recognising this
+    /// app by name so it does not read as the user leaving a game, and recognising
+    /// the shell so a desktop does not either.
+    /// </para>
+    /// <para>
+    /// It used to ask a <see cref="Process"/> instead: open one, read
+    /// <c>ProcessName</c>, throw it away. That ran on every tick for the
+    /// foreground window and on every pass over every process on the machine for
+    /// the scan - an OS handle per process per pass, for a string the path already
+    /// had. Only the final extension goes, which is what <c>ProcessName</c> did
+    /// too, so a dot in the middle of a file name is left alone.
+    /// </para>
+    /// <para>
+    /// Empty rather than a thrown <see cref="ArgumentNullException"/>, because every
+    /// caller is on the foreground tick or the scan and both already treat an
+    /// unreadable path as "I do not know". A name of nothing is the answer they
+    /// act on.
+    /// </para>
+    /// </summary>
+    internal static string NameFromImagePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        return Path.GetFileNameWithoutExtension(path);
+    }
 
     public static string ReadImagePath(uint processId)
     {

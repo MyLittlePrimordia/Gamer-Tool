@@ -34,6 +34,67 @@ public sealed class SessionState
     public bool ShuttingDown { get; set; }
 
     /// <summary>
+    /// The engine as the user had it before this app touched it, or null if that
+    /// was never known.
+    /// <para>
+    /// Taken by <see cref="CaptureFxBefore"/> before the first thing this app does
+    /// to FxSound, and read on the way out to decide whether the user gets their
+    /// sound back rather than a flat curve.
+    /// </para>
+    /// <para>
+    /// Null is the common case and is not a failure. The engine may not have been
+    /// running, may not have reported its power state, or may have left only a
+    /// status file this app will not trust - and none of those is knowledge. The
+    /// exit path falls back to what it has always done, which is at least not worse
+    /// than before.
+    /// </para>
+    /// </summary>
+    public FxSnapshot? FxBefore { get; set; }
+
+    /// <summary>
+    /// Records the engine's current state, once, before this app changes anything.
+    /// <para>
+    /// First capture wins, and that is the whole point. A second capture would
+    /// record this app's own work as the user's preference - by the time a preset
+    /// has been pushed once, the engine's selected preset is
+    /// <see cref="FxPresetFile.PresetName"/>, and restoring that on exit would mean
+    /// quitting with a game's equaliser still on the screen. That is the single
+    /// outcome this feature exists to prevent.
+    /// </para>
+    /// <para>
+    /// Safe to call more than once, safe to call with nothing, and never throws.
+    /// It is reached from the apply path, and an exception here would take the
+    /// apply down with it.
+    /// </para>
+    /// </summary>
+    public void CaptureFxBefore(AudioService? audio)
+    {
+        if (FxBefore is not null || audio is null)
+        {
+            return;
+        }
+
+        try
+        {
+            FxSoundState? state = audio.ReadState(force: true);
+
+            // Not reporting its power state means the status file was absent or
+            // stale. Recording what is left would be recording a guess, and a guess
+            // on the exit path is worse than the old behaviour it replaces.
+            if (state is null || !state.ReportsPower)
+            {
+                return;
+            }
+
+            FxBefore = new FxSnapshot(state.Power, state.SelectedPreset, state.SelectedOutput);
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("FX SNAPSHOT", ex);
+        }
+    }
+
+    /// <summary>
     /// Cancelled once the app starts going away, so a reset already in flight
     /// stops rather than running on past the exit path.
     /// <para>
@@ -96,6 +157,57 @@ public sealed class SessionState
 
 public static class EmergencyReset
 {
+    /// <summary>
+    /// Whether the engine should be handed back what the user had, rather than
+    /// flattened and powered down.
+    /// <para>
+    /// A snapshot that cannot be trusted falls through to the old behaviour, and
+    /// the old behaviour is still correct for a machine that only has FxSound
+    /// because this app put it there.
+    /// </para>
+    /// <para>
+    /// Three things have to hold, and the third is the important one.
+    /// </para>
+    /// <para>
+    /// The engine must have been powered on. If the user had it switched off, they
+    /// chose that, and restoring into it would be this app deciding otherwise on
+    /// the way out.
+    /// </para>
+    /// <para>
+    /// There must be a preset that is plausibly the user's own. No preset selected
+    /// means there is nothing to hand back, and the flat reset is the honest
+    /// outcome rather than an invented one.
+    /// </para>
+    /// <para>
+    /// And the preset must not be this app's. If the process died while a game
+    /// preset was loaded, the engine's selected preset is
+    /// <see cref="FxPresetFile.PresetName"/> - restoring that would mean quitting
+    /// with a game's equaliser still on the screen. Case insensitively, because the
+    /// name comes out of a file another program wrote.
+    /// </para>
+    /// <para>
+    /// The output device is deliberately not part of it. Requiring one as well
+    /// would mean every user on the engine's default device - which is most of them
+    /// - quietly stopped getting their sound back.
+    /// </para>
+    /// </summary>
+    public static bool ShouldRestoreUserEngine(FxSnapshot? snapshot)
+    {
+        if (snapshot is null || !snapshot.Power)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(snapshot.Preset))
+        {
+            return false;
+        }
+
+        return !string.Equals(
+            snapshot.Preset,
+            FxPresetFile.PresetName,
+            StringComparison.OrdinalIgnoreCase);
+    }
     /// <summary>Per-call budget for the exit path. See <see cref="AudioService"/>.</summary>
     private const int ShutdownWaitMs = 1200;
 
@@ -167,62 +279,79 @@ public static class EmergencyReset
                 AudioService audio = state.Audio ?? new AudioService();
                 if (audio.IsInstalled)
                 {
-                    AudioPreset flat = AudioPreset.Flat();
+                    // The user's own engine, handed back, if we ever recorded one
+                    // that can be trusted. Checked before the flat reset rather
+                    // than after, because the reset writes a GamerTool.fac and
+                    // selects it: by the time that has happened the evidence of what
+                    // the user had is gone.
+                    FxSnapshot? restore = ShouldRestoreUserEngine(state.FxBefore)
+                        ? state.FxBefore
+                        : null;
 
-                    // The bypass has to come off before the command is built, or it
+                    // The bypass has to come off before any command is built, or it
                     // is built as a bypassed one: ExpectedMasterGain returns 0.0
                     // while EffectsEnabled is false, so quitting with the switch
                     // thrown wrote a flat, silent, bypassed preset rather than
-                    // putting the engine back. The engine is powered down on the
-                    // next line, so what is left in its preset folder is what the
-                    // next launch reads - which makes the state this leaves behind
-                    // the one that matters, not the one the user saw a moment ago.
+                    // putting the engine back. The engine's state on disk is what
+                    // the next launch reads - which makes the state this leaves
+                    // behind the one that matters, not the one the user saw a
+                    // moment ago.
                     //
-                    // Forced rather than read back afterwards: this is the exit
-                    // path and restoring is its whole purpose. The user's own
-                    // bypass state is still in the profile and returns on the next
-                    // launch.
+                    // Forced rather than read back afterwards: this is the exit path
+                    // and restoring is its whole purpose. The user's own bypass
+                    // state is still in the profile and returns on the next launch.
                     bool wasBypassed = audio.EffectsEnabled;
                     audio.EffectsEnabled = true;
 
-                    // The curve is written before it is selected, and the gains are
-                    // sent as a command of their own, for the same reason the reset
-                    // does it: selecting a preset makes the engine apply that file's
-                    // state after it finishes parsing the command line. Quitting
-                    // with only BuildApplyCommand selected a GamerTool.fac that
-                    // still held the last tune, so the engine was handed that
-                    // curve on the way out - the one moment where leaving a game's
-                    // equaliser in place is least wanted and least noticed.
-                    bool wroteCurve = FxPresetFile.Write(
-                        flat,
-                        AudioService.BandFrequencies(flat),
-                        true) is not null;
-
-                    IReadOnlyList<string> reset = audio.BuildApplyCommands(
-                        flat,
-                        string.Empty,
-                        wroteCurve);
-
-                    // The short budget, deliberately. This runs from the exit path
-                    // with no window left to show a wait, and it now makes more
-                    // calls than it used to, so at the normal budget quitting would
-                    // hang for seconds after the last pixel had gone. The engine is
-                    // started on its way out either way; how long it takes to
-                    // accept the command is not worth the user watching nothing
-                    // happen.
                     try
                     {
-                        foreach (string command in reset)
+                        if (restore is not null)
                         {
-                            audio.Run(command, ShutdownWaitMs);
+                            // Nothing written. The flat path has to write a preset
+                            // file because the documented way to push an equaliser
+                            // is to write one and select it; here there is a curve
+                            // to put back rather than invent, so the file this app
+                            // owns is deleted afterwards and the user's file is
+                            // what remains selected. Power comes on second, because
+                            // selecting while the engine is off does nothing.
+                            audio.Run("--preset=" + restore.Preset, ShutdownWaitMs);
+                            audio.Run("--power=1", ShutdownWaitMs);
+                            TraceLog.Write("FX RESTORED " + restore.Preset);
+                        }
+                        else
+                        {
+                            // The original exit behaviour, and still the right
+                            // answer for a machine that only has FxSound because
+                            // this app installed it.
+                            AudioPreset flat = AudioPreset.Flat();
+
+                            // The curve is written before it is selected, and the
+                            // gains are sent as a command of their own: selecting a
+                            // preset makes the engine apply that file's state after
+                            // it finishes parsing the command line. Quitting with
+                            // only BuildApplyCommands selected a GamerTool.fac that
+                            // still held the last tune, so the engine was handed
+                            // that curve on the way out.
+                            bool wroteCurve = FxPresetFile.Write(
+                                flat,
+                                AudioService.BandFrequencies(flat),
+                                true) is not null;
+
+                            foreach (string command in audio.BuildApplyCommands(
+                                flat,
+                                string.Empty,
+                                wroteCurve))
+                            {
+                                audio.Run(command, ShutdownWaitMs);
+                            }
+
+                            audio.Run("--power=0", ShutdownWaitMs);
                         }
                     }
                     finally
                     {
                         audio.EffectsEnabled = wasBypassed;
                     }
-
-                    audio.Run("--power=0", ShutdownWaitMs);
                 }
             }
 

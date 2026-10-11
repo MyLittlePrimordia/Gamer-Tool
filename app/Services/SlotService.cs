@@ -372,10 +372,91 @@ public static string TargetKey(HotkeySlot slot)
 
         if (string.IsNullOrWhiteSpace(slot.AppExePath))
         {
-            return string.Empty;
+            // A folder rule is its own kind of target and gets its own key. Returning
+            // the empty string here would make ResolveAutoClaims switch auto-activate
+            // off for every folder-bound slot, which is the one thing the feature
+            // cannot be for.
+            return string.IsNullOrWhiteSpace(slot.TargetFolder)
+                ? string.Empty
+                : "folder:" + slot.TargetFolder.TrimEnd('\\', '/').ToLowerInvariant();
         }
 
         return AppProfileTools.ProcessNameOf(slot.AppExePath).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Whether an executable lives inside a folder.
+    /// <para>
+    /// The whole implementation is the trailing separator, and that is what this is
+    /// for. A prefix comparison alone would let a slot bound to
+    /// <c>D:\Games\Foo</c> claim every game on the drive that happens to start
+    /// with those same letters, and a broad folder rule firing on the wrong game is
+    /// the exact failure a specific binding is supposed to prevent.
+    /// </para>
+    /// <para>
+    /// Text rather than <see cref="Path"/> arithmetic, deliberately. This is
+    /// reached from the foreground tick with a string out of a hand-editable
+    /// settings file, so it has to survive whatever that file says: a null, a
+    /// stray NUL, a path with a character no path may contain. Resolving either
+    /// side throws on all three, and an exception here takes the whole tick down.
+    /// Every one of those answers false instead, which is the safe answer - a rule
+    /// that cannot be understood does not match.
+    /// </para>
+    /// <para>
+    /// A drive root is rejected rather than honoured. "Everything under C:\" is
+    /// not a folder rule, it is the machine, and a profile carrying it would fire
+    /// on everything the user ever runs - which for this app means a game loading
+    /// its boost on every single launch.
+    /// </para>
+    /// </summary>
+    public static bool IsUnderFolder(string? exePath, string? folder)
+    {
+        if (string.IsNullOrWhiteSpace(exePath) || string.IsNullOrWhiteSpace(folder))
+        {
+            return false;
+        }
+
+        string root = TrimTrailingSeparators(folder);
+
+        // "C:" and "C:\" both trim down to this, and it has to be recognised
+        // before anything else, or a drive root becomes the prefix that claims
+        // every path on that drive. Length is the test, not the colon: every
+        // absolute path has a colon at index 1.
+        if (root.Length <= 2)
+        {
+            return false;
+        }
+
+        string exe = TrimTrailingSeparators(exePath);
+        if (exe.Length <= root.Length || !exe.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        // Which also covers the folder itself: the rule is "runs out of here", and
+        // a path equal to the folder is a directory rather than something that can
+        // be executed.
+        return exe[root.Length] == '\\' || exe[root.Length] == '/';
+    }
+
+    /// <summary>
+    /// Drops the trailing directory separators, which a folder rule may or may not
+    /// carry depending on whether the user typed them or a picker produced them.
+    /// <para>
+    /// Never returns an empty string: it stops at one character, so a drive root
+    /// trims to "C:" rather than to nothing and then reads as a relative folder
+    /// under the current directory.
+    /// </para>
+    /// </summary>
+    private static string TrimTrailingSeparators(string path)
+    {
+        int end = path.Length;
+        while (end > 1 && (path[end - 1] == '\\' || path[end - 1] == '/'))
+        {
+            end--;
+        }
+
+        return end == path.Length ? path : path[..end];
     }
 
 public static void ResolveAutoClaims(List<HotkeySlot> slots)
@@ -531,6 +612,17 @@ public static HashSet<string> TargetProcessNames(IEnumerable<HotkeySlot> slots)
                 continue;
             }
 
+            // A folder rule for the same reason, and it is worth saying out loud
+            // because it looks like an omission. A folder says "when something from
+            // here is in the foreground", not "watch this folder for processes
+            // starting", and the second is not a thing this app does on a timer -
+            // there is no event for it and no cheap way to ask. So a folder-bound
+            // slot is matched from the foreground window and nothing else.
+            if (!string.IsNullOrWhiteSpace(slot.TargetFolder))
+            {
+                continue;
+            }
+
             if (!string.IsNullOrWhiteSpace(slot.AppName))
             {
                 names.Add(slot.AppName);
@@ -579,6 +671,26 @@ public static HashSet<string> TargetProcessNames(IEnumerable<HotkeySlot> slots)
             if (!string.IsNullOrWhiteSpace(processName)
                 && !string.IsNullOrWhiteSpace(slot.AppExePath)
                 && string.Equals(AppProfileTools.ProcessNameOf(slot.AppExePath), processName, StringComparison.OrdinalIgnoreCase))
+            {
+                return slot;
+            }
+        }
+
+        // Last, and only after both specific bindings have been given their chance.
+        // The order is the whole design and it is the same one MatchWildcard
+        // follows: a folder rule is broader than a path, so letting list order
+        // decide between them would make every specific binding on the machine
+        // pointless the moment anyone added a wide folder rule.
+        for (int i = 0; i < slots.Count; i++)
+        {
+            HotkeySlot slot = slots[i];
+            if (!slot.Enabled || !slot.AutoActivate || !slot.HasWork)
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(slot.TargetFolder)
+                && IsUnderFolder(exePath, slot.TargetFolder))
             {
                 return slot;
             }

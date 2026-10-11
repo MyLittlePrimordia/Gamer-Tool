@@ -66,6 +66,14 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Before the switch, because what is being remembered is the preset that is
+        // loaded right now - which is the one the two lines below replace. Both
+        // boxes do this, because a user can be moving the screen and the sound
+        // independently and an Undo that only covered half of what they just did
+        // would be worse than none.
+        RememberForUndo();
+        _preGameValid = false;
+
         _activeDisplayId = preset.Id;
         LoadTune(preset.Copy(), _workAudio.Copy());
         UpdatePresetChrome();

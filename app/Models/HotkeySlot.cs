@@ -24,6 +24,24 @@ public sealed class HotkeySlot
 
     public string? AppExePath { get; set; }
 
+    /// <summary>
+    /// Bind this slot to anything running out of this folder, or empty.
+    /// <para>
+    /// The third way to say what a slot is for, after an exact exe path and a
+    /// process name. It exists for the installs where neither of those works:
+    /// Ubisoft Connect and the EA app describe a game as a folder rather than an
+    /// executable, and a game behind a launcher has its binary somewhere no scan
+    /// looks and under a name nothing predicts.
+    /// </para>
+    /// <para>
+    /// Only ever consulted in the foreground. It deliberately contributes nothing
+    /// to the launch and exit scan, which stays name-based: "when something from
+    /// here is in the foreground" is not "watch this drive for processes starting",
+    /// and the second is not a thing this app does on a timer.
+    /// </para>
+    /// </summary>
+    public string? TargetFolder { get; set; }
+
     public string? AppName { get; set; }
 
     public bool AutoActivate { get; set; }
@@ -86,7 +104,8 @@ public sealed class HotkeySlot
             return IsSelfTarget
                 || IsAnyGameTarget
                 || !string.IsNullOrWhiteSpace(AppExePath)
-                || !string.IsNullOrWhiteSpace(AppName);
+                || !string.IsNullOrWhiteSpace(AppName)
+                || !string.IsNullOrWhiteSpace(TargetFolder);
         }
     }
 
@@ -118,6 +137,18 @@ public sealed class HotkeySlot
             if (!HasTarget)
             {
                 return "NO GAME";
+            }
+
+            if (!string.IsNullOrWhiteSpace(TargetFolder)
+                && string.IsNullOrWhiteSpace(AppExePath)
+                && string.IsNullOrWhiteSpace(AppName))
+            {
+                // Only the leaf, because the whole path is several lines wide on a
+                // slot row and the drive letter tells the user nothing they did not
+                // already pick.
+                string leaf = TargetFolder.TrimEnd('\\', '/');
+                int cut = leaf.LastIndexOfAny(new[] { '\\', '/' });
+                return (cut >= 0 && cut < leaf.Length - 1 ? leaf[(cut + 1)..] : leaf).ToUpperInvariant();
             }
 
             return string.IsNullOrWhiteSpace(AppName) ? AppProfileTools.ProcessNameOf(AppExePath ?? string.Empty).ToUpperInvariant() : AppName.ToUpperInvariant();
@@ -161,6 +192,7 @@ public sealed class HotkeySlot
             Hotkey = Hotkey,
             AppExePath = AppExePath,
             AppName = AppName,
+            TargetFolder = TargetFolder,
             AutoActivate = AutoActivate,
             ApplyOnStart = ApplyOnStart,
             IsSelfTarget = IsSelfTarget,

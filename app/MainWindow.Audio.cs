@@ -945,6 +945,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        // The sound half of the same step the screen box records, for the same
+        // reason and in the same place: before the switch, so what is remembered is
+        // the preset that was loaded and not the one being loaded.
+        RememberForUndo();
+        _preGameValid = false;
+
         _activeAudioId = preset.Id;
         LoadTune(_workDisplay.Copy(), preset.Copy());
         UpdatePresetChrome();
@@ -1234,6 +1240,18 @@ public partial class MainWindow : Window
         {
             _liveAudioName = preset.Name.ToUpperInvariant();
             SessionState.Current.AudioTouched = true;
+
+            // Before the queue below, and before anything else in this app writes
+            // to the engine: this is the last moment at which the user's own preset
+            // is still selected, and it is the only chance to record it. Once a
+            // tune has been pushed the engine reads as being on GamerTool.fac, and
+            // a snapshot taken then would record this app's work as the user's
+            // preference - which on exit means quitting with a game's equaliser
+            // still on the screen.
+            //
+            // Only the first call does any work, so this is not a cost per apply.
+            SessionState.Current.CaptureFxBefore(_audio);
+
             QueueAudioPush(preset.Copy(), device);
         }
         else

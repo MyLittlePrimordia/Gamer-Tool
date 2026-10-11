@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
 using GamerTool.Models;
@@ -130,6 +131,18 @@ public sealed class AppLibraryService
                 {
                     all.Add(candidate);
                 }
+            }
+        }
+
+        // Unconditional, and through the fail-soft wrapper, because a launcher is
+        // not something the user opts into per scan: they installed the launcher,
+        // and the only reason their games are not listed is that this app does not
+        // know how to look yet.
+        foreach (AppCandidate candidate in ScanLaunchers())
+        {
+            if (seen.Add(candidate.ExePath))
+            {
+                all.Add(candidate);
             }
         }
 
@@ -455,6 +468,350 @@ public sealed class AppLibraryService
         }
 
         return found;
+    }
+
+    public IReadOnlyList<AppCandidate> ScanLaunchers()
+    {
+        List<AppCandidate> all = new();
+        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+
+        // One source per try rather than one around the lot. This is what the
+        // Scan button calls, and a single launcher throwing out of here would take
+        // Steam and the installed programs down with it - so the per-source
+        // wrapper has to actually be per source for it to buy anything.
+        foreach (Func<IReadOnlyList<AppCandidate>> source in new Func<IReadOnlyList<AppCandidate>>[]
+        {
+            ScanEpic,
+            ScanGog
+        })
+        {
+            try
+            {
+                foreach (AppCandidate candidate in source())
+                {
+                    if (seen.Add(candidate.ExePath))
+                    {
+                        all.Add(candidate);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                TraceLog.Write("LAUNCHER", ex);
+            }
+        }
+
+        return all;
+    }
+
+    /// <summary>
+    /// Games the Epic Games Launcher has installed.
+    /// <para>
+    /// Reads the manifest files the launcher writes, which is the only place the
+    /// install location appears. It is not a documented API and the format is
+    /// whatever the launcher felt like writing, so the property that matters here
+    /// is not "works" but "fails quietly": a machine without Epic must get an
+    /// empty list and a log that says nothing alarming, and a machine whose Epic
+    /// has moved must get an empty list rather than an exception.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<AppCandidate> ScanEpic()
+    {
+        List<AppCandidate> found = new();
+        try
+        {
+            foreach (string folder in EpicManifestFolders())
+            {
+                string[] manifests;
+                try
+                {
+                    manifests = Directory.GetFiles(folder, "*.item");
+                }
+                catch (Exception ex)
+                {
+                    TraceLog.Write("EPIC", ex);
+                    continue;
+                }
+
+                foreach (string manifest in manifests)
+                {
+                    AppCandidate? candidate = ReadEpicManifest(manifest);
+                    if (candidate is not null)
+                    {
+                        found.Add(candidate);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // No launcher installed is the ordinary case and has nothing to say.
+            TraceLog.Write("EPIC", ex);
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// Games GOG has installed.
+    /// <para>
+    /// Two sources, because GOG has two. Galaxy is a client that keeps a
+    /// <c>game.info</c> per title in its own folder; the older standalone
+    /// installers register a key per title instead. A machine can have either, both
+    /// or neither, and all three have to look the same from here.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<AppCandidate> ScanGog()
+    {
+        List<AppCandidate> found = new();
+        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string galaxy in GogGalaxyFolders())
+        {
+            string[] games;
+            try
+            {
+                games = Directory.GetDirectories(galaxy);
+            }
+            catch (Exception ex)
+            {
+                TraceLog.Write("GOG", ex);
+                continue;
+            }
+
+            foreach (string game in games)
+            {
+                string info = Path.Combine(game, "game.info");
+                string? install = File.Exists(info) ? ReadGogInstallPath(info) : null;
+                AddLauncherEntry(found, seen, install, null, "GOG");
+            }
+        }
+
+        try
+        {
+            using RegistryKey? key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WOW6432Node\GOG.com\Games");
+            if (key is not null)
+            {
+                foreach (string name in key.GetSubKeyNames())
+                {
+                    using RegistryKey? game = key.OpenSubKey(name);
+                    AddLauncherEntry(found, seen, game?.GetValue(null) as string, null, "GOG");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("GOG", ex);
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// Where the Epic launcher keeps its manifests, if it is installed at all.
+    /// <para>
+    /// The default location first and the registry second, because Epic is
+    /// relocatable and the registry is the only place that knows where to. An
+    /// empty result is the normal answer on most machines.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyList<string> EpicManifestFolders()
+    {
+        List<string> folders = new();
+
+        void Add(string? data)
+        {
+            if (string.IsNullOrWhiteSpace(data))
+            {
+                return;
+            }
+
+            string manifests = Path.Combine(Normalize(data), "Manifests");
+            foreach (string existing in folders)
+            {
+                if (string.Equals(existing, manifests, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
+            if (Directory.Exists(manifests))
+            {
+                folders.Add(manifests);
+            }
+        }
+
+        Add(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "Epic", "EpicGamesLauncher", "Data"));
+
+        try
+        {
+            using RegistryKey? key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Epic Games\EpicGamesLauncher");
+            Add(key?.GetValue("AppDataPath") as string);
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("EPIC registry", ex);
+        }
+
+        return folders;
+    }
+
+    /// <summary>
+    /// Where GOG Galaxy keeps its per-title folders, if it is installed.
+    /// </summary>
+    private static IReadOnlyList<string> GogGalaxyFolders()
+    {
+        List<string> folders = new();
+
+        foreach (string programFiles in new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles)
+        })
+        {
+            if (string.IsNullOrWhiteSpace(programFiles))
+            {
+                continue;
+            }
+
+            string galaxy = Path.Combine(programFiles, "GOG Galaxy", "Games");
+            if (Directory.Exists(galaxy) && !folders.Contains(galaxy, StringComparer.OrdinalIgnoreCase))
+            {
+                folders.Add(galaxy);
+            }
+        }
+
+        return folders;
+    }
+
+    /// <summary>
+    /// One Epic manifest, read for the two fields this app needs.
+    /// <para>
+    /// A malformed or half-written manifest returns null rather than throwing: the
+    /// launcher rewrites these while it installs something, and a scan that dies on
+    /// a file being replaced is a scan that fails exactly when the user is using
+    /// it.
+    /// </para>
+    /// </summary>
+    private static AppCandidate? ReadEpicManifest(string manifest)
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(BoundedRead.AllText(manifest));
+            JsonElement root = document.RootElement;
+
+            return LauncherEntry(
+                JsonString(root, "DisplayName"),
+                JsonString(root, "InstallLocation"),
+                "EPIC");
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("EPIC manifest", ex);
+            return null;
+        }
+    }
+
+    private static string JsonString(JsonElement root, string name)
+    {
+        return root.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
+    }
+
+    /// <summary>
+    /// The install path out of a GOG <c>game.info</c>.
+    /// <para>
+    /// A section header followed by <c>key=value</c> lines, which is all that is
+    /// needed from it. The file carries more than that and is not a documented
+    /// format, so it is read for the one field rather than modelled.
+    /// </para>
+    /// </summary>
+    private static string? ReadGogInstallPath(string info)
+    {
+        try
+        {
+            foreach (string line in BoundedRead.AllText(info).Split('\n'))
+            {
+                string trimmed = line.Trim();
+                if (!trimmed.StartsWith("path=", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string path = trimmed["path=".Length..].Trim();
+                return string.IsNullOrWhiteSpace(path) ? null : path;
+            }
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("GOG info", ex);
+        }
+
+        return null;
+    }
+
+    private static void AddLauncherEntry(
+        List<AppCandidate> found,
+        HashSet<string> seen,
+        string? installLocation,
+        string? name,
+        string source)
+    {
+        AppCandidate? candidate = LauncherEntry(name, installLocation, source);
+        if (candidate is not null && seen.Add(candidate.ExePath))
+        {
+            found.Add(candidate);
+        }
+    }
+
+    /// <summary>
+    /// Turns a launcher's idea of an install into a candidate, or nothing.
+    /// <para>
+    /// The install location is a string out of a file another program wrote, so it
+    /// is resolved and checked rather than trusted - a title that has been
+    /// uninstalled, or moved, leaves the manifest behind and its path names a
+    /// folder that is not there. An entry whose executable is missing is worse
+    /// than no entry: it would bind a slot to a program that cannot be launched.
+    /// </para>
+    /// </summary>
+    private static AppCandidate? LauncherEntry(string? name, string? installLocation, string source)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(installLocation))
+            {
+                return null;
+            }
+
+            string folder = Normalize(installLocation);
+            if (!Directory.Exists(folder))
+            {
+                return null;
+            }
+
+            string? exe = PickExecutable(folder);
+            if (string.IsNullOrWhiteSpace(exe) || !File.Exists(exe))
+            {
+                return null;
+            }
+
+            string leaf = Path.GetFileName(folder.TrimEnd('\\', '/'));
+            return new AppCandidate
+            {
+                Name = string.IsNullOrWhiteSpace(name) ? leaf : name,
+                ExePath = exe,
+                ProcessName = AppProfileTools.ProcessNameOf(exe),
+                Source = source
+            };
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write(source, ex);
+            return null;
+        }
     }
 
     public IReadOnlyList<string> SteamRoots()
