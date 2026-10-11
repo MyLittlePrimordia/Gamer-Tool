@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 using GamerTool.Services;
@@ -325,6 +325,73 @@ public sealed class AppSettings
     /// under the new name.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Whether every setting is still the value a fresh install starts with.
+    /// </summary>
+    /// <remarks>
+    /// Read once at launch to decide whether to explain the panic key, and it is
+    /// deliberately a measurement rather than a remembered flag. A stored "have I
+    /// shown the hint" boolean is another field in the profile, another thing to
+    /// migrate, and one more piece of state that can be wrong - and this question
+    /// can simply be asked of the settings that are already there.
+    /// <para>
+    /// The definition is "nothing has been changed yet", which is a narrower set
+    /// than "never launched": a user who has been running this for a year without
+    /// touching a single setting still reads as untouched. That is the right way
+    /// round for a one-line hint. The worst case is a long-time user seeing a tip
+    /// about a key that is genuinely still on its default, once - and the moment
+    /// they change anything, including the panic key itself, it stops.
+    /// </para>
+    /// <para>
+    /// Compared against a fresh instance rather than against a list of numbers, so
+    /// a default that is changed later moves this with it instead of silently
+    /// leaving the comparison wrong.
+    /// </para>
+    /// </remarks>
+    public bool IsUntouched()
+    {
+        AppSettings fresh = new();
+
+        return Schema == fresh.Schema
+            && ActiveDisplayPresetId == fresh.ActiveDisplayPresetId
+            && ActiveAudioPresetId == fresh.ActiveAudioPresetId
+            && OutputDeviceId == fresh.OutputDeviceId
+            && OutputDeviceName == fresh.OutputDeviceName
+            && FxSoundPath == fresh.FxSoundPath
+            && GammaLock == fresh.GammaLock
+            && ShowOsd == fresh.ShowOsd
+            && StartHidden == fresh.StartHidden
+            && CloseToTray == fresh.CloseToTray
+            && AutoSwitch == fresh.AutoSwitch
+            && AutoRevertOnExit == fresh.AutoRevertOnExit
+            && EmergencyHotkey == fresh.EmergencyHotkey
+            && AutoPauseOnFocusLoss == fresh.AutoPauseOnFocusLoss
+            && BypassHotkey == fresh.BypassHotkey
+            && AntiClip == fresh.AntiClip
+            && LoudGuard == fresh.LoudGuard
+            && EffectsEnabled == fresh.EffectsEnabled
+            && HardwareBrightnessEnabled == fresh.HardwareBrightnessEnabled
+            && BlueLightFilter == fresh.BlueLightFilter
+            && NightBlueLight == fresh.NightBlueLight
+            && NightStartMinutes == fresh.NightStartMinutes
+            && NightEndMinutes == fresh.NightEndMinutes
+            && NightFadeMinutes == fresh.NightFadeMinutes
+            && FxPromptDisabled == fresh.FxPromptDisabled
+            && CustomDisplayPresets.Count == 0
+            && CustomAudioPresets.Count == 0
+            && CustomCombos.Count == 0
+            && AppProfiles.Count == 0
+
+            // Empty rather than compared against the shipped slots, and the
+            // difference matters. A profile that has been through the engine has its
+            // shipped slots materialised into the list, so comparing counts would
+            // call a long-used install untouched; an empty list means no profile has
+            // ever been saved, which is the thing actually being asked about. The
+            // caller pairs this with a check that the slots are still the factory
+            // ones, so a hand-written profile with no slots is not mistaken for new.
+            && Slots.Count == 0;
+    }
+
     public void Migrate()
     {
         if (Schema >= CurrentSchema)

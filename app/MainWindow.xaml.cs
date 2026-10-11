@@ -1445,6 +1445,30 @@ private void HideToTray()
                 Flash(_settingsRescue, _profiles.Quarantined);
             }
         }
+        else if (_settings.IsUntouched() && !_settings.StartHidden)
+        {
+            // Nothing has ever been saved and the window is actually on screen, so
+            // this is a first look at the app and the one moment worth spending a
+            // line on.
+            //
+            // The line names the panic key, which is the app's safety net and the
+            // one control a user needs to have heard of before they need it. It is
+            // set to CTRL+ALT+F12 out of the box, but it lives on the Hotkeys tab
+            // and the app opens on Display, so a new user has no way to discover it
+            // short of clicking every tab - and the moment they want it is the
+            // moment the screen is wrong and they are not in the mood to go looking.
+            //
+            // IsUntouched rather than a stored "have I shown this" flag, so there is
+            // no new profile field to migrate and nothing that can go stale. A
+            // standard install's slots are materialised into the profile by the
+            // engine, so this stops after the first save either way.
+            RailStatus.Text = "PANIC KEY " + _settings.EmergencyHotkey + " PUTS EVERYTHING BACK";
+
+            if (_settings.ShowOsd)
+            {
+                Flash("CTRL+ALT+F12 resets the screen and sound if anything goes wrong");
+            }
+        }
 
         HotkeySlot? startSlot = _settings.Slots.FirstOrDefault(s => s.Enabled && s.ApplyOnStart && s.HasWork);
         if (startSlot is not null)
