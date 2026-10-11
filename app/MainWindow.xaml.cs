@@ -190,9 +190,6 @@ public partial class MainWindow : Window
     private string _liveDisplayName = "NOTHING";
 
 
-    private string _liveAudioName = "NOTHING";
-
-
     /// <summary>
     /// The result of the update check, or null when none has run this launch.
     /// <para>
@@ -341,22 +338,7 @@ public partial class MainWindow : Window
         _activeDisplayId = _workDisplay.Id;
         _activeAudioId = _workAudio.Id;
 
-        BuildBandStrip(AudioPreset.PresetBandCount);
-        BandCountBox.ItemsSource = AudioPreset.BandCounts.ToList();
-        BandCountBox.SelectedItem = AudioPreset.PresetBandCount;
-        BlueLightBox.ItemsSource = DisplayPreset.BlueLightNames.ToList();
-        BlueLightBox.SelectedItem = DisplayPreset.BlueLightNames[
-            Math.Clamp(_settings.BlueLightFilter, 0, DisplayPreset.BlueLightNames.Length - 1)];
-
-        // The two hour pickers, filled here rather than in the sync below.
-        // SyncNightScheduleControls only ever sets SelectedItem, and a selection
-        // with nothing behind it is silently dropped - so with the list left
-        // empty the two boxes rendered as empty bordered rectangles and the
-        // schedule had no times to work from. Both halves of a combo are needed
-        // to make one.
-        NightStartBox.ItemsSource = NightSchedule.TimeLabels;
-        NightEndBox.ItemsSource = NightSchedule.TimeLabels;
-        BuildModal();
+        PopulatePickers();
 
         _display.StatusChanged += SetRailStatus;
         _audio.StatusChanged += SetRailStatus;
@@ -447,6 +429,61 @@ public partial class MainWindow : Window
 
         SyncControlsFromSettings();
 
+        WireTray();
+
+        // The output list is not filled here. Working it out means reading the
+        // audio engine, which is slow, and doing that before Show() is what made
+        // the window take seconds to appear. FinishStartupAsync does it once the
+        // window is up. Nothing below this line depends on it.
+        LoadTune(_workDisplay, _workAudio);
+        RefreshPresetBoxes();
+        BuildSlots();
+        RegisterHotkeys();
+        ApplyWatchState();
+
+        UpdatePreviewPills();
+        UpdateAudioPreviewState();
+        UpdateLiveLabels();
+        RenderDisplayPreview();
+        _audioPreview.StateChanged += UpdateAudioPreviewState;
+        // No "check the assets folder" any more. There is no assets folder: the
+        // loops are read out of the executable, so the only thing that can make
+        // one fail is a damaged build.
+        _audioPreview.Failed += text => Flash(text + " failed, the app may be damaged", true);
+        _audioPreview.Prepare();
+        UpdatePreviewTrackButton();
+
+    _spectrum = new SpectrumView(SpectrumHost, new LoopbackSampleFeed());
+
+
+        _ready = true;
+
+        SelectPage(StartPage());
+
+        if (StartHidden())
+        {
+            HideToTray();
+        }
+    }
+
+
+    /// <summary>
+    /// Builds the tray icon and subscribes every line of its menu.
+    /// </summary>
+    /// <remarks>
+    /// Split out of the constructor, which had grown to 262 lines doing five
+    /// different jobs. This is all seven of the tray's subscriptions in one place,
+    /// which is the shape they are read in: the menu has seven lines and the two
+    /// halves of each - what the line does and what it reports - are easier to
+    /// check against each other when they are adjacent.
+    /// <para>
+    /// Called after <see cref="_settings"/> is loaded and after
+    /// <see cref="SyncControlsFromSettings"/>, because two of these read a switch
+    /// the sync has just set.
+    /// </para>
+    /// </remarks>
+    private void WireTray()
+    {
         _tray = new TrayService();
         _tray.ShowRequested += RestoreFromTray;
 
@@ -532,40 +569,41 @@ public partial class MainWindow : Window
         _tray.SetUndoAvailable(false);
 
         _tray.QuitRequested += QuitApp;
-
-        // The output list is not filled here. Working it out means reading the
-        // audio engine, which is slow, and doing that before Show() is what made
-        // the window take seconds to appear. FinishStartupAsync does it once the
-        // window is up. Nothing below this line depends on it.
-        LoadTune(_workDisplay, _workAudio);
-        RefreshPresetBoxes();
-        BuildSlots();
-        RegisterHotkeys();
-        ApplyWatchState();
-
-        UpdatePreviewPills();
-        UpdateAudioPreviewState();
-        UpdateLiveLabels();
-        RenderDisplayPreview();
-        _audioPreview.StateChanged += UpdateAudioPreviewState;
-        // No "check the assets folder" any more. There is no assets folder: the
-        // loops are read out of the executable, so the only thing that can make
-        // one fail is a damaged build.
-        _audioPreview.Failed += text => Flash(text + " failed, the app may be damaged", true);
-        _audioPreview.Prepare();
-        UpdatePreviewTrackButton();
-
-    _spectrum = new SpectrumView(SpectrumHost, new LoopbackSampleFeed());
+    }
 
 
-        _ready = true;
+    /// <summary>
+    /// Fills the controls declared in the page that are not filled from a service.
+    /// </summary>
+    /// <remarks>
+    /// Split out of the constructor, which had grown to 262 lines doing five
+    /// different jobs. This is the one of the five that touches only XAML and
+    /// <see cref="_settings"/>, so it is the safest to lift, and lifting it is what
+    /// lets the constructor be read as a sequence of phases rather than as a wall.
+    /// <para>
+    /// Called after the settings are loaded and before anything reads a selection,
+    /// because three of these write a <c>SelectedItem</c> that the sync later
+    /// relies on. Order within the method is not load-bearing beyond that.
+    /// </para>
+    /// </remarks>
+    private void PopulatePickers()
+    {
+        BuildBandStrip(AudioPreset.PresetBandCount);
+        BandCountBox.ItemsSource = AudioPreset.BandCounts.ToList();
+        BandCountBox.SelectedItem = AudioPreset.PresetBandCount;
+        BlueLightBox.ItemsSource = DisplayPreset.BlueLightNames.ToList();
+        BlueLightBox.SelectedItem = DisplayPreset.BlueLightNames[
+            Math.Clamp(_settings.BlueLightFilter, 0, DisplayPreset.BlueLightNames.Length - 1)];
 
-        SelectPage(StartPage());
-
-        if (StartHidden())
-        {
-            HideToTray();
-        }
+        // The two hour pickers, filled here rather than in the sync below.
+        // SyncNightScheduleControls only ever sets SelectedItem, and a selection
+        // with nothing behind it is silently dropped - so with the list left
+        // empty the two boxes rendered as empty bordered rectangles and the
+        // schedule had no times to work from. Both halves of a combo are needed
+        // to make one.
+        NightStartBox.ItemsSource = NightSchedule.TimeLabels;
+        NightEndBox.ItemsSource = NightSchedule.TimeLabels;
+        BuildModal();
     }
 
 

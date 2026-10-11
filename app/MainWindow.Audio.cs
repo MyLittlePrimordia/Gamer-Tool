@@ -1184,7 +1184,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        _liveAudioName = _workAudio.Name.ToUpperInvariant();
         SessionState.Current.AudioTouched = true;
         QueueAudioPush(_workAudio.Copy(), SelectedDeviceName());
     }
@@ -1238,7 +1237,6 @@ public partial class MainWindow : Window
 
         if (_audio.IsInstalled)
         {
-            _liveAudioName = preset.Name.ToUpperInvariant();
             SessionState.Current.AudioTouched = true;
 
             // Before the queue below, and before anything else in this app writes
@@ -1582,7 +1580,6 @@ public partial class MainWindow : Window
                 }
 
                 SessionState.Current.AudioTouched = false;
-                _liveAudioName = "FLAT";
                 _activeAudioId = "flat";
 
                 // Persisted as well as set in memory, for the same reason the screen
