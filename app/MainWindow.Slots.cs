@@ -3167,10 +3167,10 @@ public partial class MainWindow : Window
 
 
     /// <summary>
-    /// Gives the panic keycap the same behaviour as a slot keycap: click to
-    /// listen, Esc cancels, Backspace clears, never free text. Wired once here
-    /// rather than rebuilt with the rest of the page, because the box is declared
-    /// in the page and lives as long as the window does.
+    /// Points the crosshair show/hide key at a new combo. Refused outright if it
+    /// is the panic key's or the bypass key's, because those two have to keep
+    /// working; it takes the combo from a slot or from the cycle key, since the
+    /// user is pointing at it.
     /// </summary>
     private void BindCrosshairHotkey(string text)
     {
@@ -3217,6 +3217,10 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>
+    /// Points the crosshair cycle key at a new combo. Same refusals as the show/hide
+    /// key, plus that key itself; it takes the combo from a slot.
+    /// </summary>
     private void BindCrosshairCycleHotkey(string text)
     {
         string wanted = HotkeyService.Normalise(text);

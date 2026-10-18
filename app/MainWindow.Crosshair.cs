@@ -1046,15 +1046,40 @@ public partial class MainWindow
     /// <summary>Counts up each time the browser fills, so a fill that was interrupted knows to stop.</summary>
     private int _xhPackLoad;
 
-    private void OnXhPackClick(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// The folder listing taken when the browser opened. Typing in the filter box
+    /// narrows this rather than reading the disk again on every keystroke. Null
+    /// while the listing is still being read, and after the browser has closed.
+    /// </summary>
+    private List<string>? _xhPackFiles;
+
+    private async void OnXhPackClick(object sender, RoutedEventArgs e)
     {
         if (!_xhReady)
         {
             return;
         }
 
-        CrosshairPack.EnsureFolder();
+        // Open first and read after. The first launch unpacks the starter pictures
+        // in the background, and EnsureFolder waits for that copy, so doing it on
+        // this thread would freeze the window for as long as the copy takes.
+        int generation = ++_xhPackLoad;
+        _xhPackFiles = null;
+        XhPackPanel.Children.Clear();
+        XhPackCount.Text = string.Empty;
+        XhPackEmpty.Text = "Loading pack...";
+        XhPackEmpty.Visibility = Visibility.Visible;
         XhPackPopup.IsOpen = true;
+
+        List<string> files = await Task.Run(CrosshairPack.List);
+
+        if (generation != _xhPackLoad)
+        {
+            // Closed (or reopened) while the folder was being read.
+            return;
+        }
+
+        _xhPackFiles = files;
         FillXhPack();
     }
 
@@ -1062,6 +1087,7 @@ public partial class MainWindow
     {
         // Let go of every thumbnail. They are rebuilt from the folder next time.
         _xhPackLoad++;
+        _xhPackFiles = null;
         XhPackPanel.Children.Clear();
         if (XhPackFilter is not null)
         {
@@ -1081,7 +1107,7 @@ public partial class MainWindow
                 UseShellExecute = true
             });
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
         {
             AppLog.Error("CROSSHAIR PACK OPEN", ex);
             Flash("Could not open the folder", true);
@@ -1097,7 +1123,9 @@ public partial class MainWindow
     /// </summary>
     private void OnXhPackFilterChanged(object sender, TextChangedEventArgs e)
     {
-        if (XhPackPopup.IsOpen)
+        // Nothing to filter until the listing has arrived; FillXhPack runs then
+        // and reads the box as it stands.
+        if (XhPackPopup.IsOpen && _xhPackFiles is not null)
         {
             FillXhPack();
         }
@@ -1108,7 +1136,7 @@ public partial class MainWindow
         int generation = ++_xhPackLoad;
         XhPackPanel.Children.Clear();
 
-        List<string> files = CrosshairPack.List();
+        List<string> files = _xhPackFiles is null ? new List<string>() : new List<string>(_xhPackFiles);
         string filter = (XhPackFilter?.Text ?? string.Empty).Trim();
         if (filter.Length > 0)
         {
@@ -1279,10 +1307,18 @@ public partial class MainWindow
 
             Flash("Crosshair exported");
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The place the user chose would not take the file: read-only folder,
+            // full disk, a file held open elsewhere.
+            AppLog.Error("CROSSHAIR EXPORT WRITE", ex);
+            Flash("Could not save that file", true);
+        }
         catch (Exception ex)
         {
+            // Rendering or encoding failed, which a different folder would not fix.
             AppLog.Error("CROSSHAIR EXPORT", ex);
-            Flash("Could not save that file", true);
+            Flash("Could not export the crosshair", true);
         }
     }
 

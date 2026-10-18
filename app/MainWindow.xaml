@@ -1816,15 +1816,23 @@
                                             <Grid.RowDefinitions>
                                                 <RowDefinition Height="Auto" />
                                                 <RowDefinition Height="410" />
-                                                <RowDefinition Height="Auto" />
                                             </Grid.RowDefinitions>
+                                            <!-- Same three part header as the Audio spectrum card: title
+                                                 left, a short centred note, the scene pill right. The
+                                                 note used to be a third row under the picture, which
+                                                 made this card taller than the Display and Audio ones
+                                                 and gave it a different bottom edge. The long form is
+                                                 the tooltip on the picture. -->
                                             <Grid Grid.Row="0" Margin="0,0,0,10">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Grid.Column="0" Style="{StaticResource SectionHeader}" Text="PREVIEW" Margin="0" VerticalAlignment="Center" />
-                                                <Button x:Name="XhSceneButton" Grid.Column="1"
+                                                <TextBlock Grid.Column="1" Style="{StaticResource CardSub}" VerticalAlignment="Center"
+                                                           Text="Shown 2x larger" />
+                                                <Button x:Name="XhSceneButton" Grid.Column="2" HorizontalAlignment="Right"
                                                         Style="{StaticResource PillTab}"
                                                         AutomationProperties.Name="Change the preview scene"
                                                         Click="OnXhSceneClick" ToolTip="Day scene">
@@ -1832,6 +1840,7 @@
                                                 </Button>
                                             </Grid>
                                             <Border Grid.Row="1" CornerRadius="10" Background="#020202"
+                                                    ToolTip="Shown 2x larger here. Use Show on screen for true size."
                                                     SizeChanged="OnXhPreviewFrameSizeChanged">
                                                 <Grid x:Name="XhPreviewClip">
                                                     <Image x:Name="XhPreviewImage" Stretch="UniformToFill"
@@ -1839,9 +1848,6 @@
                                                     <ui:CrosshairView x:Name="XhPreview" Magnification="2" />
                                                 </Grid>
                                             </Border>
-                                            <TextBlock Grid.Row="2" Style="{StaticResource CardSub}" Margin="0,8,0,0"
-                                                       HorizontalAlignment="Center"
-                                                       Text="Shown 2x larger here. Use Show on screen for true size." />
                                         </Grid>
                                     </Border>
                                 </StackPanel>
@@ -1937,6 +1943,8 @@
                                                PopupAnimation="Fade" Closed="OnXhColorPopupClosed">
                                             <Border Style="{StaticResource Hero}" Padding="14" Margin="0,8,16,16">
                                                 <StackPanel>
+                                                    <!-- Titled like the pack browser, so the two crosshair popups read as a family. -->
+                                                    <TextBlock Style="{StaticResource SectionHeader}" Text="CUSTOM COLOR" Margin="0,0,0,10" />
                                                     <ui:HsvPicker x:Name="XhHsv" ColorChanged="OnXhHsvChanged" />
                                                     <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                                                         <Border x:Name="XhPickPreview" Width="28" Height="28" CornerRadius="14"

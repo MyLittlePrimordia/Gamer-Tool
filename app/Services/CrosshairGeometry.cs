@@ -23,6 +23,13 @@ public static class CrosshairGeometry
     private const int Margin = 12;
 
     /// <summary>
+    /// How far a turned shape can reach, as a multiple of its upright reach: the
+    /// diagonal of its square, which is the square root of two (1.414...), rounded
+    /// up so the window is never a pixel short.
+    /// </summary>
+    private const double TurnedReach = 1.42;
+
+    /// <summary>
     /// The side of the overlay window, in pixels. Always even, so the centre falls
     /// on a pixel boundary the same way the middle of an even-width monitor does.
     /// </summary>
@@ -30,7 +37,7 @@ public static class CrosshairGeometry
     {
         // A turned crosshair reaches further from the middle than an upright one,
         // up to the corner of its square, so the window grows to hold it.
-        double reach = preset.Rotation % 90 == 0 ? 1.0 : 1.42;
+        double reach = preset.Rotation % 90 == 0 ? 1.0 : TurnedReach;
         int half = (int)Math.Ceiling(preset.Size / 2.0 * reach);
         int side = 2 * (half + preset.Thickness + Margin);
         if (side % 2 != 0)
