@@ -526,7 +526,9 @@ public class SlotRowFitsTests
         // is showing a stale list for as long as the tab stays open.
         string source = File.ReadAllText(FindRepoFile(Path.Combine("app", "MainWindow.Audio.cs")));
 
-        Assert.Contains("Pages.SelectedIndex == 2", source);
+        // Hotkeys tab is PageId.Hotkeys (= 2). Assert the named form so a raw
+        // "SelectedIndex == 2" cannot drift if another tab is inserted.
+        Assert.Contains("Pages.SelectedIndex == (int)PageId.Hotkeys", source);
         Assert.Contains("BuildSlots();", source);
     }
 
