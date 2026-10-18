@@ -1,0 +1,25 @@
+<Window x:Class="GamerTool.UI.CrosshairOverlay"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:GamerTool.UI"
+        Title="Gamer Tool Crosshair"
+        Width="64"
+        Height="64"
+        SizeToContent="Manual"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        ResizeMode="NoResize"
+        Topmost="True"
+        Focusable="False"
+        IsHitTestVisible="False"
+        WindowStartupLocation="Manual"
+        UseLayoutRounding="False"
+        SnapsToDevicePixels="False">
+
+    <!-- Nothing but the drawing. No chrome, no effects, no animation: the window
+         exists to hold one element that paints once. -->
+    <ui:CrosshairView x:Name="View" />
+</Window>

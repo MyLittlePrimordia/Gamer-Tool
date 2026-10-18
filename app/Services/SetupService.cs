@@ -82,6 +82,27 @@ public sealed class SetupService
 
     public const string WingetId = "FxSound.FxSound";
 
+    /// <summary>FxSound GitHub releases API for the lightweight version check (U-002).</summary>
+    public const string FxSoundReleasesApi = "https://api.github.com/repos/fxsound2/fxsound-app/releases/latest";
+
+    /// <summary>Gamer Tool's own releases API for the self-update check (U-002).</summary>
+    public const string SelfReleasesApi = "https://api.github.com/repos/MyLittlePrimordia/Gamer-Tool/releases/latest";
+
+    /// <summary>
+    /// Oldest FxSound with the CLI this app needs (U-001).
+    /// --status + --set_* arrived in 1.2.11; running-instance commands in
+    /// 1.2.10; --normalization removed in 1.2.12 (we use --volume_leveling).
+    /// Older engines fail silently by design (ignored flags), so gate them.
+    /// </summary>
+    public const string MinFxSoundVersion = "1.2.11";
+
+    /// <summary>
+    /// True when the installed FxSound is too old for EQ control.
+    /// Pure so the gate is unit-testable without touching disk.
+    /// </summary>
+    public static bool IsFxSoundTooOld(string installedVersion)
+        => installedVersion.Length > 0 && Compare(installedVersion, MinFxSoundVersion) < 0;
+
     /// <summary>Who the downloaded installer has to be signed by.</summary>
     public const string PublisherHint = "FxSound";
 
@@ -707,6 +728,70 @@ public sealed class SetupService
     }
 
     /// <summary>
+    /// Latest published version from a GitHub releases API URL, or empty.
+    /// User-triggered only: called from the update button path, never at
+    /// launch or in the background, per the no-telemetry promise.
+    /// Pure parse lives in <see cref="ParseReleaseTag"/> for tests.
+    /// </summary>
+    internal static async Task<string> FetchLatestReleaseVersionAsync(string apiUrl, CancellationToken token)
+    {
+        try
+        {
+            using HttpClient client = new();
+            client.Timeout = TimeSpan.FromSeconds(20);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("GamerTool/1.0");
+            using HttpResponseMessage response = await client.GetAsync(apiUrl, token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return string.Empty;
+            }
+
+            string json = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+            return ParseReleaseTag(json);
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Version out of a `releases/latest` JSON body (`tag_name` like "v1.2.16").
+    /// Strips leading v, stops at first non-version char. Pure for tests.
+    /// </summary>
+    internal static string ParseReleaseTag(string json)
+    {
+        try
+        {
+            using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("tag_name", out var tag))
+            {
+                return string.Empty;
+            }
+
+            string raw = (tag.GetString() ?? string.Empty).Trim().TrimStart('v', 'V');
+            var sb = new System.Text.StringBuilder();
+            foreach (char c in raw)
+            {
+                if (char.IsDigit(c) || c == '.')
+                {
+                    sb.Append(c);
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            return sb.ToString().Trim('.');
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
     /// The no-winget path: fetch the installer, read its version, throw it away.
     /// <para>
     /// The download host publishes nothing a client can read a version out of, so
@@ -736,10 +821,19 @@ public sealed class SetupService
 
         try
         {
-            TraceLog.Write("UPDATE CHECK no winget, fetching the installer to read its version");
+            TraceLog.Write("UPDATE CHECK no winget, trying GitHub releases API first");
 
-            string available = await DownloadInstallerVersionAsync(progress: null, CancellationToken.None)
+            // U-002: tiny JSON instead of a ~70MB download. Only falls back to
+            // the installer download when the API fails. Still user-triggered
+            // only (allowDownload), so the no-telemetry promise holds.
+            string available = await FetchLatestReleaseVersionAsync(FxSoundReleasesApi, CancellationToken.None)
                 .ConfigureAwait(false);
+            if (available.Length == 0)
+            {
+                TraceLog.Write("UPDATE CHECK releases API failed, fetching the installer to read its version");
+                available = await DownloadInstallerVersionAsync(progress: null, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
 
             if (available.Length == 0)
             {

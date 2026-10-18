@@ -358,6 +358,14 @@ public partial class MainWindow : Window
                 {
                     ClearBypassHotkey();
                 }
+                else if (_capturingKeycap == KeycapCapture.Crosshair)
+                {
+                    ClearCrosshairHotkey();
+                }
+                else if (_capturingKeycap == KeycapCapture.CrosshairCycle)
+                {
+                    ClearCrosshairCycleHotkey();
+                }
                 else
                 {
                     ClearCapturedHotkey();
@@ -396,6 +404,20 @@ public partial class MainWindow : Window
         if (_capturingKeycap == KeycapCapture.Bypass)
         {
             BindBypassHotkey(text);
+            e.Handled = true;
+            return;
+        }
+
+        if (_capturingKeycap == KeycapCapture.Crosshair)
+        {
+            BindCrosshairHotkey(text);
+            e.Handled = true;
+            return;
+        }
+
+        if (_capturingKeycap == KeycapCapture.CrosshairCycle)
+        {
+            BindCrosshairCycleHotkey(text);
             e.Handled = true;
             return;
         }
@@ -455,6 +477,14 @@ public partial class MainWindow : Window
             else if (_capturingKeycap == KeycapCapture.Bypass)
             {
                 ShowSlotKey(_captureBox, _settings.BypassHotkey);
+            }
+            else if (_capturingKeycap == KeycapCapture.Crosshair)
+            {
+                ShowSlotKey(_captureBox, _settings.CrosshairHotkey);
+            }
+            else if (_capturingKeycap == KeycapCapture.CrosshairCycle)
+            {
+                ShowSlotKey(_captureBox, _settings.CrosshairCycleHotkey);
             }
             else if (_captureSlotId is not null)
             {

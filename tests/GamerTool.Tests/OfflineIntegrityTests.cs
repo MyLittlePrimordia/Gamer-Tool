@@ -128,9 +128,10 @@ public class OfflineIntegrityTests
     [Fact]
     public void There_is_still_exactly_one_thing_that_can_reach_the_network()
     {
-        // The installer download. This is a count rather than a search for
-        // "download.fxsound.com" so that a second endpoint added later has to be a
-        // deliberate edit to this test.
+        // The installer download + the two GitHub releases-API checks (FxSound
+        // version, Gamer Tool self version). All three are user-triggered only
+        // (install/upgrade button, update button) — never at launch or on a
+        // timer. This is a count so a new endpoint must deliberately edit here.
         int endpoints = 0;
 
         foreach (string file in ProductionSources())
@@ -151,6 +152,6 @@ public class OfflineIntegrityTests
             }
         }
 
-        Assert.Equal(1, endpoints);
+        Assert.Equal(3, endpoints);
     }
 }

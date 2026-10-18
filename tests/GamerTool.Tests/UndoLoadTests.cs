@@ -56,8 +56,10 @@ public class UndoLoadTests
             slots,
             StringComparison.Ordinal);
 
-        // Exactly one call site opts in. Every other call takes the default, so an
-        // auto-load cannot start being undoable by accident.
+        // Exactly two call sites opt in, and both are in ToggleSlot, which is only
+        // reached from a hotkey, the tray or the board: the branch for a slot that
+        // only puts up a crosshair, and the normal path. Every other call takes the
+        // default, so an auto-load cannot start being undoable by accident.
         int optIns = 0;
         int at = 0;
         while (true)
@@ -72,7 +74,16 @@ public class UndoLoadTests
             at = found + 1;
         }
 
-        Assert.Equal(1, optIns);
+        Assert.Equal(2, optIns);
+
+        int toggle = slots.IndexOf("private async Task ToggleSlot(", StringComparison.Ordinal);
+        Assert.True(toggle >= 0, "ToggleSlot has moved");
+
+        int toggleEnd = slots.IndexOf("\n    private ", toggle + 1, StringComparison.Ordinal);
+        Assert.True(toggleEnd > toggle, "ToggleSlot has no end");
+
+        string body = slots.Substring(toggle, toggleEnd - toggle);
+        Assert.Equal(2, CountOccurrences(body, "deliberate: true"));
     }
 
     [Fact]

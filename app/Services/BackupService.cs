@@ -256,7 +256,7 @@ public sealed class BackupService
     private static readonly string[] ProfileMarkers =
     {
         "Schema", "Slots", "UserHotkeys", "ActiveDisplayPresetId", "ActiveAudioPresetId",
-        "CustomDisplayPresets", "CustomAudioPresets", "AppProfiles", "CustomCombos",
+        "CustomDisplayPresets", "CustomAudioPresets", "AppProfiles", "CustomCombos", "CustomCrosshairs",
         "GammaLock", "ShowOsd", "StartHidden", "CloseToTray", "AntiClip", "BlueLightFilter"
     };
 
@@ -354,6 +354,21 @@ public sealed class BackupService
             sounds.Add(preset.Id);
         }
 
+        // A slot's crosshair has to name one that exists. The built in five are
+        // always there; the rest travel in the backup, so one that is missing was
+        // deleted before the backup was made.
+        settings.CustomCrosshairs ??= new List<CrosshairPreset>();
+        HashSet<string> crosshairs = new(StringComparer.OrdinalIgnoreCase);
+        foreach (CrosshairPreset preset in CrosshairPreset.BuiltIns)
+        {
+            crosshairs.Add(preset.Id);
+        }
+
+        foreach (CrosshairPreset preset in settings.CustomCrosshairs)
+        {
+            crosshairs.Add(preset.Id);
+        }
+
         HashSet<string> monitorSet = new(validMonitors, StringComparer.OrdinalIgnoreCase);
         HashSet<string> usedKeys = new(StringComparer.OrdinalIgnoreCase);
 
@@ -369,6 +384,11 @@ public sealed class BackupService
             {
                 slot.AudioPresetId = null;
                 report.SlotsLostSound++;
+            }
+
+            if (!string.IsNullOrWhiteSpace(slot.CrosshairPresetId) && !crosshairs.Contains(slot.CrosshairPresetId))
+            {
+                slot.CrosshairPresetId = null;
             }
 
             if (slot.MonitorDevice.Length > 0 && !monitorSet.Contains(slot.MonitorDevice))

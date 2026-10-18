@@ -66,12 +66,22 @@ jobs:
           $mb = [math]::Round((Get-Item $exe).Length / 1MB, 1)
           Write-Host "GamerTool.exe = $mb MB"
           if ($mb -lt 1) { throw "GamerTool.exe is only $mb MB, which is far too small." }
+          # The exe must stand alone: everything it needs is embedded and unpacked
+          # to %AppData% on first launch. A loose Assets folder here means a file
+          # slipped back in as Content and a release would be missing it.
+          if (Test-Path './publish/Assets') { throw 'publish/Assets exists: assets must be embedded, not shipped as loose files.' }
+          # U-004a: hash beside the EXE so downloads are verifiable.
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  GamerTool.exe" | Out-File './publish/GamerTool.exe.sha256' -Encoding ascii
+          Write-Host "sha256: $hash"
 
       - name: Upload GamerTool Artifact
         uses: actions/upload-artifact@v4
         with:
           name: GamerTool-Standalone
-          path: ./publish/GamerTool.exe
+          path: |
+            ./publish/GamerTool.exe
+            ./publish/GamerTool.exe.sha256
           if-no-files-found: error
 
       - name: Upload test results
@@ -122,8 +132,17 @@ jobs:
             "- Branch: $($env:GITHUB_REF_NAME)"
             "- Built: $stamp"
             ''
+            'Verify: `certutil -hashfile GamerTool.exe SHA256` must match `GamerTool.exe.sha256`.'
+            ''
             "[View the workflow run]($runUrl)"
           ) -join "`n"
+
+          # Keep the tag on the commit that was built. The release is created once
+          # and reused, so without this its tag (and the "Source code" archives
+          # under it) would stay on whatever commit made the first release.
+          git tag -f $tag $env:GITHUB_SHA
+          git push origin "refs/tags/$tag" --force
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to move the latest tag.' }
 
           # Find the existing release, or create it once.
           $release = gh release view $tag --json id --jq '.id'
@@ -139,6 +158,8 @@ jobs:
           # --clobber replaces the EXE already attached to the release.
           gh release upload $tag $exe --clobber
           if ($LASTEXITCODE -ne 0) { throw 'Failed to upload the EXE.' }
+          gh release upload $tag './publish/GamerTool.exe.sha256' --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to upload the hash.' }
 
           # Refresh the notes with this build's commit and keep it flagged latest.
           gh release edit $tag --title 'Gamer Tool (latest)' --notes $notes --latest

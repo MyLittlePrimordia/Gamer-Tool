@@ -190,14 +190,14 @@ public class SlotRowFitsTests
     [Fact]
     public void The_output_picker_gets_a_column_of_its_own()
     {
-        // Column 10, between the monitor and the flexible game picker. A fixed
+        // Column 12, between the monitor and the flexible game picker. A fixed
         // column after the star is the one that gets the leftover rather than
         // sharing it, which is how a row ends up looking correct and being 40px
         // too wide.
         double?[] row = Columns("SlotColumns");
 
-        Assert.NotNull(row[10]);
-        Assert.Null(row[12]);
+        Assert.NotNull(row[12]);
+        Assert.Null(row[14]);
     }
 
     [Fact]
@@ -258,7 +258,7 @@ public class SlotRowFitsTests
         string source = Source();
 
         Assert.Contains("ApplySlotColumns(head);", source);
-        Assert.Equal("NAME HOTKEY DISPLAY SOUND MONITOR OUTPUT AUTOSTART", CaptionText());
+        Assert.Equal("NAME HOTKEY DISPLAY SOUND CROSSHAIR MONITOR OUTPUT AUTOSTART", CaptionText());
 
         // Nothing is captioned over the delete button. A caption there would name
         // what the icon beside it has always said, and a label that repeats a
@@ -274,7 +274,7 @@ public class SlotRowFitsTests
         // column the user has to be told - the switch that used to sit beside it
         // is gone, so the caption is the last place that says this column loads
         // the slot by itself.
-        Assert.Contains("(12, \"AUTOSTART\")", Source());
+        Assert.Contains("(14, \"AUTOSTART\")", Source());
         Assert.DoesNotContain("\"GAME\"", Source());
     }
 
@@ -400,18 +400,18 @@ public class SlotRowFitsTests
     [Fact]
     public void Every_picker_that_can_carry_a_long_name_scrolls()
     {
-        // The row is one line and four of these carry text the user wrote or a
+        // The row is one line and five of these carry text the user wrote or a
         // driver supplied. Without the marquee the width the row was made to fit
         // would come straight out of the names, turning this back into the
         // clipping it was meant to avoid.
         //
-        // Four of them: the display preset, the monitor, the output device and
-        // the game. The sound picker is the fifth name on the row and is
-        // deliberately not one, because those names are all short and set by the
-        // app.
+        // Five of them: the display preset, the monitor, the output device, the
+        // game and the crosshair (its names are the user's to write). The sound
+        // picker is the sixth name on the row and is deliberately not one,
+        // because those names are all short and set by the app.
         string source = Source();
 
-        Assert.Equal(4, Regex.Matches(source, "MarqueeBox.SetAllowMarquee\\(box, true\\)").Count);
+        Assert.Equal(5, Regex.Matches(source, "MarqueeBox.SetAllowMarquee\\(box, true\\)").Count);
     }
 
     [Fact]

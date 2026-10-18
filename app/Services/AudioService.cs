@@ -121,8 +121,27 @@ public sealed class AudioService
 
     private static string Clean(string text)
     {
-        return text.Replace("\"", string.Empty).Trim();
+        if (string.IsNullOrEmpty(text))
+        {
+            return string.Empty;
+        }
+
+        // Only the quote goes, plus any trailing backslash and control chars.
+        // Under the C runtime rules a value ending in \ makes \" a literal
+        // quote, so the closing quote is eaten and following args are
+        // swallowed into the value. Inner quotes are NOT escaped as \"
+        // (that broke band lists and device names on FxSound 1.2.15).
+        string noControls = new string(text.Where(c => !char.IsControl(c)).ToArray());
+        return noControls.Replace("\"", string.Empty).Trim().TrimEnd('\\');
     }
+
+    /// <summary>
+    /// Whether the status file changed between two observations.
+    /// Pure so the DST fall-back is testable: local timestamps go backwards
+    /// for an hour when clocks go back, so callers must pass UTC values;
+    /// given UTC, newer means strictly greater.
+    /// </summary>
+    internal static bool IsFileNewer(DateTime before, DateTime now) => now > before;
 
     public void StartEngine()
     {
@@ -178,6 +197,18 @@ public sealed class AudioService
     //
     // Where a scalar still has to be pushed on its own, the call is one line at
     // the point of use, which is where it can be seen to be used.
+
+    /// <summary>
+    /// U-003 opt-in true power-off. Flatten-bypass (default) keeps FxSound's
+    /// virtual device in the path, so its latency/CPU stays; --power=0 removes
+    /// processing at the cost of a device switch games may notice.
+    /// Slots must power on first: preset commands are no-ops while power is
+    /// off (per FxSound CLI doc). Callers run this off the UI thread via Run.
+    /// </summary>
+    public bool SetPowerOff() => Run("--power=0");
+
+    /// <summary>Counterpart to <see cref="SetPowerOff"/>; also sent by every apply.</summary>
+    public bool SetPowerOn() => Run("--power=1");
 
     /// <summary>
     /// The effect list for the engine, honouring the bypass.
@@ -1068,18 +1099,34 @@ public sealed class AudioService
 
     public FxSoundState? ReadState(bool force = false)
     {
+#if DEBUG
+        try
+        {
+            if (System.Windows.Application.Current?.Dispatcher.CheckAccess() == true)
+            {
+                throw new InvalidOperationException("AudioService.ReadState must not run on the UI thread.");
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
+        }
+        catch
+        {
+        }
+#endif
         if (!IsInstalled)
         {
             return null;
         }
 
-        if (!force && _cached is not null && (DateTime.Now - _cachedAt).TotalSeconds < 3.0)
+        if (!force && _cached is not null && (DateTime.UtcNow - _cachedAt).TotalSeconds < 3.0)
         {
             return _cached;
         }
 
         string path = FxSoundState.StatusPath;
-        DateTime before = File.Exists(path) ? File.GetLastWriteTime(path) : DateTime.MinValue;
+        DateTime before = File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
 
         Run(StatusArguments);
 
@@ -1091,8 +1138,8 @@ public sealed class AudioService
                 continue;
             }
 
-            DateTime now = File.GetLastWriteTime(path);
-            if (now <= before)
+            DateTime now = File.GetLastWriteTimeUtc(path);
+            if (!IsFileNewer(before, now))
             {
                 continue;
             }
@@ -1101,7 +1148,7 @@ public sealed class AudioService
             if (state is not null)
             {
                 _cached = state;
-                _cachedAt = DateTime.Now;
+                _cachedAt = DateTime.UtcNow;
                 return state;
             }
         }
@@ -1113,7 +1160,7 @@ public sealed class AudioService
             // snapshot as live engine state: mark it by zeroing the freshness stamp.
             fallback.FileWrittenUtc = DateTime.MinValue;
             _cached = fallback;
-            _cachedAt = DateTime.Now;
+            _cachedAt = DateTime.UtcNow;
         }
 
         return fallback;
@@ -1153,9 +1200,27 @@ public sealed class AudioService
     /// Hands a command to the engine and waits for it. The wait is bounded and
     /// the process is simply abandoned if it overruns, because the point of the
     /// call is to have started the engine, not to supervise it.
+    /// Must run off the UI thread: waits up to 4s per command (I-001).
+    /// Debug-only guard turns a dispatcher-thread call into a loud failure.
     /// </summary>
     public bool Run(string arguments, int waitMs)
     {
+#if DEBUG
+        try
+        {
+            if (System.Windows.Application.Current?.Dispatcher.CheckAccess() == true)
+            {
+                throw new InvalidOperationException("AudioService.Run must not run on the UI thread.");
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
+        }
+        catch
+        {
+        }
+#endif
         if (!IsInstalled)
         {
             StatusChanged?.Invoke("NO FXSOUND");

@@ -549,10 +549,10 @@ settings.CustomDisplayPresets ??= new List<DisplayPreset>();
         // entry and hands out a fresh one when it is blank, so a null slot has to
         // be gone by the time it runs rather than by the time anything downstream
         // looks at the list.
-        settings.CustomDisplayPresets.RemoveAll(p => p is null);
-        settings.CustomAudioPresets.RemoveAll(p => p is null);
-        settings.CustomCombos.RemoveAll(p => p is null);
-        settings.AppProfiles.RemoveAll(p => p is null);
+        settings.CustomDisplayPresets.RemoveAll(entry => entry is null);
+        settings.CustomAudioPresets.RemoveAll(entry => entry is null);
+        settings.CustomCombos.RemoveAll(entry => entry is null);
+        settings.AppProfiles.RemoveAll(entry => entry is null);
         settings.Slots.RemoveAll(s => s is null);
 
         // RemoveAll rather than Remove inside the loop, which throws. Removing
@@ -575,6 +575,19 @@ settings.CustomDisplayPresets ??= new List<DisplayPreset>();
         settings.ActiveDisplayPresetId ??= string.Empty;
         settings.ActiveAudioPresetId ??= string.Empty;
         settings.EmergencyHotkey ??= string.Empty;
+        settings.CrosshairHotkey ??= string.Empty;
+        settings.CrosshairCycleHotkey ??= string.Empty;
+        settings.ActiveCrosshairId ??= string.Empty;
+
+        // The same defence for the crosshair list: a null list or a blank entry
+        // in a hand edited file, or a restored backup from a build that had no
+        // crosshairs at all, must not reach the code that enumerates them.
+        settings.CustomCrosshairs ??= new List<CrosshairPreset>();
+        settings.CustomCrosshairs.RemoveAll(entry => entry is null);
+        foreach (CrosshairPreset crosshair in settings.CustomCrosshairs)
+        {
+            crosshair.Sanitised();
+        }
 
         foreach (HotkeySlot slot in settings.Slots)
         {

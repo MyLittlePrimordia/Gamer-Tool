@@ -38,7 +38,7 @@
              The frame line is the card showing through a one pixel inset rather
              than a Border brush, because a border is drawn on the card's own
              edge and the card is what the rounded clip has to line up with. -->
-    <Border CornerRadius="{StaticResource RadiusFrame}" Background="{StaticResource LineStrong}">
+    <Border x:Name="ShellFrame" CornerRadius="{StaticResource RadiusFrame}" Background="{StaticResource LineStrong}">
         <Grid x:Name="ShellGrid" Margin="1" Background="{StaticResource AppBg}">
         <!-- A Border's CornerRadius does not clip its child, so the contents get
              their own matching clip. The numbers are the card's inner size: the
@@ -75,10 +75,11 @@
             </StackPanel>
 
             <Border Grid.Column="1" Style="{StaticResource NavTrack}" VerticalAlignment="Center">
-                <UniformGrid Columns="4" Rows="1">
+                <UniformGrid Columns="5" Rows="1">
                     <ui:NavPill x:Name="NavDisplay" Style="{StaticResource NavDisplay}" GroupName="Nav" AutomationProperties.Name="Display tab"
                                 IsChecked="True" Checked="OnNavChanged" />
                     <ui:NavPill x:Name="NavAudio" Style="{StaticResource NavAudio}" GroupName="Nav" AutomationProperties.Name="Audio tab" Checked="OnNavChanged" />
+                    <ui:NavPill x:Name="NavCrosshair" Style="{StaticResource NavCrosshair}" GroupName="Nav" AutomationProperties.Name="Crosshair tab" Checked="OnNavChanged" />
                     <ui:NavPill x:Name="NavHotkeys" Style="{StaticResource NavHotkeys}" GroupName="Nav" AutomationProperties.Name="Hotkeys tab" Checked="OnNavChanged" />
                     <ui:NavPill x:Name="NavSettings" Style="{StaticResource NavSettings}" GroupName="Nav" AutomationProperties.Name="Settings tab" Checked="OnNavChanged" />
                 </UniformGrid>
@@ -144,11 +145,11 @@
                                               ToolTip="Screen preset" />
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <ui:IconButton Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Plus}"
-                                                       Margin="0,0,6,0" Click="OnSaveAsScreenClick" ToolTip="Save Preset" AutomationProperties.Name="Save this screen preset" />
+                                                       Margin="0,0,6,0" Click="OnSaveAsScreenClick" ToolTip="Save" AutomationProperties.Name="Save this screen preset" />
                                         <ui:IconButton x:Name="DisplayRenameButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Pencil}"
-                                                       Margin="0,0,6,0" Click="OnRenameScreenClick" ToolTip="Rename Preset" AutomationProperties.Name="Rename this screen preset" />
+                                                       Margin="0,0,6,0" Click="OnRenameScreenClick" ToolTip="Rename" AutomationProperties.Name="Rename this screen preset" />
                                         <ui:IconButton x:Name="DisplayDeleteButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Trash}"
-                                                       Click="OnDeleteScreenClick" ToolTip="Delete Preset" AutomationProperties.Name="Delete this screen preset" />
+                                                       Click="OnDeleteScreenClick" ToolTip="Delete" AutomationProperties.Name="Delete this screen preset" />
                                     </StackPanel>
                                 </StackPanel>
                             </Grid>
@@ -436,7 +437,7 @@
                                                        HorizontalAlignment="Center" Margin="0,0,0,6" />
                                             <Slider x:Name="RedSlider" ui:SliderSnap.Neutral="1.0" ui:SliderSnap.Threshold="0.012" Style="{StaticResource BandSliderVertical}" Foreground="#F87171"
                                                     Width="28" Height="92" Minimum="0.7" Maximum="1.3" TickFrequency="0.01"
-                                                    IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged" ToolTip="Red" AutomationProperties.Name="Red channel trim" />
+                                                    IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged" AutomationProperties.Name="Red channel trim" />
                                             <TextBlock x:Name="RedValue" Style="{StaticResource Value}" Text="1.00"
                                                        HorizontalAlignment="Center" Margin="0,6,0,0" />
                                         </StackPanel>
@@ -447,7 +448,7 @@
                                                        HorizontalAlignment="Center" Margin="0,0,0,6" />
                                             <Slider x:Name="GreenSlider" ui:SliderSnap.Neutral="1.0" ui:SliderSnap.Threshold="0.012" Style="{StaticResource BandSliderVertical}" Foreground="#34D399"
                                                     Width="28" Height="92" Minimum="0.7" Maximum="1.3" TickFrequency="0.01"
-                                                    IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged" ToolTip="Green" AutomationProperties.Name="Green channel trim" />
+                                                    IsSnapToTickEnabled="True" ValueChanged="OnScreenSliderChanged" AutomationProperties.Name="Green channel trim" />
                                             <TextBlock x:Name="GreenValue" Style="{StaticResource Value}" Text="1.00"
                                                        HorizontalAlignment="Center" Margin="0,6,0,0" />
                                         </StackPanel>
@@ -607,11 +608,11 @@
                                              it to assert the presets row still has its
                                              three buttons after the capture button went. -->
                                         <ui:IconButton x:Name="AudioSaveButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Plus}"
-                                                       Margin="0,0,6,0" Click="OnSaveAsSoundClick" ToolTip="Save Preset" AutomationProperties.Name="Save this sound preset" />
+                                                       Margin="0,0,6,0" Click="OnSaveAsSoundClick" ToolTip="Save" AutomationProperties.Name="Save this sound preset" />
                                         <ui:IconButton x:Name="AudioRenameButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Pencil}"
-                                                       Margin="0,0,6,0" Click="OnRenameSoundClick" ToolTip="Rename Preset" AutomationProperties.Name="Rename this sound preset" />
+                                                       Margin="0,0,6,0" Click="OnRenameSoundClick" ToolTip="Rename" AutomationProperties.Name="Rename this sound preset" />
                                         <ui:IconButton x:Name="AudioDeleteButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Trash}"
-                                                       Click="OnDeleteSoundClick" ToolTip="Delete Preset" AutomationProperties.Name="Delete this sound preset" />
+                                                       Click="OnDeleteSoundClick" ToolTip="Delete" AutomationProperties.Name="Delete this sound preset" />
                                     </StackPanel>
                                 </StackPanel>
                             </Grid>
@@ -1756,6 +1757,312 @@
                                 </StackPanel>
                             </Grid>
                             </ScrollViewer>
+                        </Grid>
+                    </Border>
+                </TabItem>
+
+                <!-- ================================================================
+                     CROSSHAIR  ·  preview on the left, controls on the right
+                     Last in the page list so every earlier page index is unchanged;
+                     its pill is drawn between Audio and Hotkeys.
+                     ================================================================ -->
+                <TabItem>
+                    <Border Style="{StaticResource PagePanel}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="54" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="56" />
+                            </Grid.RowDefinitions>
+
+                            <Grid Grid.Row="0" Margin="18,0">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                    <ComboBox x:Name="XhPresetBox" Style="{StaticResource PresetCombo}"
+                                              ItemContainerStyle="{StaticResource ModernComboItem}"
+                                              ItemTemplate="{StaticResource PresetChoiceItem}"
+                                              Width="300" Margin="0,0,12,0"
+                                              HorizontalContentAlignment="Center" SelectionChanged="OnXhPresetSelected" AutomationProperties.Name="Crosshair preset" />
+                                    <ui:IconButton Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Plus}"
+                                                   Margin="0,0,6,0" Click="OnXhSaveAsClick" ToolTip="Save" AutomationProperties.Name="Save this crosshair preset" />
+                                    <ui:IconButton x:Name="XhRenameButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Pencil}"
+                                                   Margin="0,0,6,0" Click="OnXhRenameClick" ToolTip="Rename" AutomationProperties.Name="Rename this crosshair preset" />
+                                    <ui:IconButton x:Name="XhDeleteButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Trash}"
+                                                   Click="OnXhDeleteClick" ToolTip="Delete" AutomationProperties.Name="Delete this crosshair preset" />
+                                </StackPanel>
+                            </Grid>
+                            <Border Grid.Row="0" Style="{StaticResource Hairline}" VerticalAlignment="Bottom" Margin="18,0" />
+
+                            <Grid Grid.Row="1" Margin="18,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="430" />
+                                    <ColumnDefinition Width="24" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <!-- left: a square preview. The picture is square, so the box is,
+                                     and nothing is cropped. -->
+                                <StackPanel Grid.Column="0" VerticalAlignment="Top" Margin="0,18,0,18">
+                                    <Border Style="{StaticResource Hero}" Padding="10">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="410" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <Grid Grid.Row="0" Margin="0,0,0,10">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Style="{StaticResource SectionHeader}" Text="PREVIEW" Margin="0" VerticalAlignment="Center" />
+                                                <Button x:Name="XhExportButton" Grid.Column="1" Content="Export PNG" Style="{StaticResource GhostButton}"
+                                                        Margin="0,0,8,0" Click="OnXhExportClick"
+                                                        AutomationProperties.Name="Export the crosshair as a PNG" />
+                                                <Button x:Name="XhSceneButton" Grid.Column="2"
+                                                        Style="{StaticResource PillTab}"
+                                                        AutomationProperties.Name="Change the preview scene"
+                                                        Click="OnXhSceneClick" ToolTip="Day scene">
+                                                    <ui:EmojiImage x:Name="XhSceneGlyph" Glyph="sun" Width="18" Height="18" />
+                                                </Button>
+                                            </Grid>
+                                            <Border Grid.Row="1" CornerRadius="10" Background="#020202"
+                                                    SizeChanged="OnXhPreviewFrameSizeChanged">
+                                                <Grid x:Name="XhPreviewClip">
+                                                    <Image x:Name="XhPreviewImage" Stretch="UniformToFill"
+                                                           RenderOptions.BitmapScalingMode="HighQuality" />
+                                                    <ui:CrosshairView x:Name="XhPreview" Magnification="2" />
+                                                </Grid>
+                                            </Border>
+                                            <TextBlock Grid.Row="2" Style="{StaticResource CardSub}" Margin="0,8,0,0"
+                                                       HorizontalAlignment="Center"
+                                                       Text="Shown 2x larger here. Use Show on screen for true size." />
+                                        </Grid>
+                                    </Border>
+                                </StackPanel>
+
+                                <Border Grid.Column="1" Style="{StaticResource VHairline}" Margin="0,18" />
+
+                                <!-- right: shape, colour, then the numbers -->
+                                <StackPanel Grid.Column="2" Margin="0,18,0,18">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Style="{StaticResource SectionHeader}" Text="SHAPE" Margin="0" VerticalAlignment="Center" />
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                            <Button x:Name="XhPackButton" Content="Browse pack..." Style="{StaticResource GhostButton}"
+                                                    Margin="0,0,8,0" Click="OnXhPackClick"
+                                                    AutomationProperties.Name="Browse the crosshair pack" />
+                                            <Button x:Name="XhImportButton" Content="Import PNG..." Style="{StaticResource GhostButton}"
+                                                    Click="OnXhImportClick"
+                                                    AutomationProperties.Name="Import a PNG as a crosshair" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <StackPanel x:Name="XhTilePanel" Orientation="Horizontal" Margin="0,10,0,0" />
+
+                                    <!-- The pack browser. Rebuilt from the folder every time it opens, so
+                                         a picture dropped in since last time is simply there. -->
+                                    <Popup x:Name="XhPackPopup" PlacementTarget="{Binding ElementName=XhTilePanel}"
+                                           Placement="Bottom" StaysOpen="False" AllowsTransparency="True"
+                                           PopupAnimation="Fade" Closed="OnXhPackClosed">
+                                        <Border Style="{StaticResource Hero}" Padding="14" Margin="0,8,16,16" Width="620" Height="450">
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="*" />
+                                                </Grid.RowDefinitions>
+                                                <Grid Margin="0,0,0,12">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Style="{StaticResource SectionHeader}" Text="CROSSHAIR PACK" Margin="0" VerticalAlignment="Center" />
+                                                    <TextBlock x:Name="XhPackCount" Grid.Column="1" Style="{StaticResource CardSub}" Margin="12,0,0,0" VerticalAlignment="Center" />
+                                                    <Button Grid.Column="2" Content="Open folder" Style="{StaticResource GhostButton}"
+                                                            Click="OnXhPackFolderClick" ToolTip="Open pack folder"
+                                                            AutomationProperties.Name="Open the crosshair pack folder" />
+                                                </Grid>
+                                                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                                    <Grid>
+                                                        <WrapPanel x:Name="XhPackPanel" />
+                                                        <TextBlock x:Name="XhPackEmpty" Style="{StaticResource CardSub}" TextWrapping="Wrap"
+                                                                   Visibility="Collapsed" Margin="4,8,4,0"
+                                                                   Text="No pictures yet. Add PNGs with Open folder, then reopen." />
+                                                    </Grid>
+                                                </ScrollViewer>
+                                            </Grid>
+                                        </Border>
+                                    </Popup>
+
+                                    <TextBlock Style="{StaticResource SectionHeader}" Text="COLOR" Margin="0,22,0,0" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <RadioButton x:Name="XhSwatch0" GroupName="XhColor" Style="{StaticResource XhSwatch}" Background="#FF3B3B" Tag="0" Checked="OnXhSwatchChecked" AutomationProperties.Name="Red" />
+                                        <RadioButton x:Name="XhSwatch1" GroupName="XhColor" Style="{StaticResource XhSwatch}" Background="#3CFF5A" Tag="1" Checked="OnXhSwatchChecked" AutomationProperties.Name="Green" />
+                                        <RadioButton x:Name="XhSwatch2" GroupName="XhColor" Style="{StaticResource XhSwatch}" Background="#1FE0FF" Tag="2" Checked="OnXhSwatchChecked" AutomationProperties.Name="Cyan" />
+                                        <RadioButton x:Name="XhSwatch3" GroupName="XhColor" Style="{StaticResource XhSwatch}" Background="#FF2BB0" Tag="3" Checked="OnXhSwatchChecked" AutomationProperties.Name="Magenta" />
+                                        <RadioButton x:Name="XhSwatch4" GroupName="XhColor" Style="{StaticResource XhSwatch}" Background="#FFE633" Tag="4" Checked="OnXhSwatchChecked" AutomationProperties.Name="Yellow" />
+                                        <RadioButton x:Name="XhSwatch5" GroupName="XhColor" Style="{StaticResource XhSwatch}" Background="#FFFFFF" Tag="5" Checked="OnXhSwatchChecked" AutomationProperties.Name="White" />
+                                        <RadioButton x:Name="XhSwatchCustom" GroupName="XhColor" Style="{StaticResource XhSwatch}" Background="#262626" Tag="6" Click="OnXhCustomSwatchClick" ToolTip="Custom color" AutomationProperties.Name="Pick a custom color">
+                                            <Path x:Name="XhSwatchPlus" Data="M0,5 H10 M5,0 V10" Width="10" Height="10" Stroke="{StaticResource TextMid}" StrokeThickness="2" SnapsToDevicePixels="True" />
+                                        </RadioButton>
+
+                                        <!-- The colour picker. Opens under the plus swatch, changes the
+                                             crosshair live as the mouse moves, and closes on a click
+                                             anywhere else, so there is nothing to confirm. -->
+                                        <Popup x:Name="XhColorPopup" PlacementTarget="{Binding ElementName=XhSwatchCustom}"
+                                               Placement="Bottom" StaysOpen="False" AllowsTransparency="True"
+                                               PopupAnimation="Fade" Closed="OnXhColorPopupClosed">
+                                            <Border Style="{StaticResource Hero}" Padding="14" Margin="0,8,16,16">
+                                                <StackPanel>
+                                                    <ui:HsvPicker x:Name="XhHsv" ColorChanged="OnXhHsvChanged" />
+                                                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                                        <Border x:Name="XhPickPreview" Width="28" Height="28" CornerRadius="14"
+                                                                BorderBrush="#33FFFFFF" BorderThickness="1" Margin="0,0,10,0" />
+                                                        <TextBox x:Name="XhPickHex" Style="{StaticResource ModernTextBox}" Width="104" Height="28" MaxLength="7"
+                                                                 VerticalContentAlignment="Center" Margin="0,0,10,0"
+                                                                 KeyDown="OnXhPickHexKeyDown" LostFocus="OnXhPickHexCommit" AutomationProperties.Name="Picker hex" />
+                                                        <Button Content="Done" Style="{StaticResource PrimaryButton}" MinWidth="70" Click="OnXhColorDoneClick"
+                                                                AutomationProperties.Name="Close the color picker" />
+                                                    </StackPanel>
+                                                </StackPanel>
+                                            </Border>
+                                        </Popup>
+                                    </StackPanel>
+
+                                    <TextBlock Style="{StaticResource SectionHeader}" Text="TUNING" Margin="0,22,0,0" />
+                                    <Grid Margin="0,10,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="32" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,0,18">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Style="{StaticResource Label}" Text="Size" />
+                                                <TextBlock x:Name="XhSizeValue" Grid.Column="1" Style="{StaticResource Value}" Text="20 px" />
+                                            </Grid>
+                                            <Slider x:Name="XhSizeSlider" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentCrosshair}"
+                                                    Minimum="6" Maximum="64" TickFrequency="1" IsSnapToTickEnabled="True"
+                                                    ValueChanged="OnXhSliderChanged" AutomationProperties.Name="Crosshair size" />
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Row="0" Grid.Column="2" Margin="0,0,0,18">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Style="{StaticResource Label}" Text="Thickness" />
+                                                <TextBlock x:Name="XhThicknessValue" Grid.Column="1" Style="{StaticResource Value}" Text="2 px" />
+                                            </Grid>
+                                            <Slider x:Name="XhThicknessSlider" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentCrosshair}"
+                                                    Minimum="1" Maximum="8" TickFrequency="1" IsSnapToTickEnabled="True"
+                                                    ValueChanged="OnXhSliderChanged" AutomationProperties.Name="Crosshair thickness" />
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,0,18">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Style="{StaticResource Label}" Text="Gap" />
+                                                <TextBlock x:Name="XhGapValue" Grid.Column="1" Style="{StaticResource Value}" Text="4 px" />
+                                            </Grid>
+                                            <Slider x:Name="XhGapSlider" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentCrosshair}"
+                                                    Minimum="0" Maximum="16" TickFrequency="1" IsSnapToTickEnabled="True"
+                                                    ValueChanged="OnXhSliderChanged" ToolTip="Space in the center" AutomationProperties.Name="Crosshair gap" />
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,0,0,18">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Style="{StaticResource Label}" Text="Opacity" />
+                                                <TextBlock x:Name="XhOpacityValue" Grid.Column="1" Style="{StaticResource Value}" Text="100%" />
+                                            </Grid>
+                                            <Slider x:Name="XhOpacitySlider" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentCrosshair}"
+                                                    Minimum="20" Maximum="100" TickFrequency="5" IsSnapToTickEnabled="True"
+                                                    ValueChanged="OnXhSliderChanged" AutomationProperties.Name="Crosshair opacity" />
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Row="2" Grid.Column="0">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Style="{StaticResource Label}" Text="Rotation" />
+                                                <TextBlock x:Name="XhRotationValue" Grid.Column="1" Style="{StaticResource Value}" Text="0&#176;" />
+                                            </Grid>
+                                            <Slider x:Name="XhRotationSlider" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentCrosshair}"
+                                                    Minimum="0" Maximum="359" TickFrequency="1" IsSnapToTickEnabled="True"
+                                                    ValueChanged="OnXhSliderChanged" AutomationProperties.Name="Crosshair rotation" />
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,24,0,0">
+                                        <ui:SwitchToggle x:Name="XhOutlineBox" Style="{StaticResource SwitchTrack}" Accent="{StaticResource AccentCrosshair}"
+                                                         VerticalAlignment="Center" IsChecked="True"
+                                                         Checked="OnXhToggleChanged" Unchecked="OnXhToggleChanged"
+                                                         ToolTip="Dark edge for bright scenes" AutomationProperties.Name="Outline" />
+                                        <TextBlock Style="{StaticResource Label}" Text="OUTLINE" VerticalAlignment="Center" Margin="8,0,28,0" />
+                                        <ui:SwitchToggle x:Name="XhGlowBox" Style="{StaticResource SwitchTrack}" Accent="{StaticResource AccentCrosshair}"
+                                                         VerticalAlignment="Center"
+                                                         Checked="OnXhToggleChanged" Unchecked="OnXhToggleChanged" AutomationProperties.Name="Glow" />
+                                        <TextBlock Style="{StaticResource Label}" Text="GLOW" VerticalAlignment="Center" Margin="8,0,28,0" />
+                                        <ui:SwitchToggle x:Name="XhCenterDotBox" Style="{StaticResource SwitchTrack}" Accent="{StaticResource AccentCrosshair}"
+                                                         VerticalAlignment="Center"
+                                                         Checked="OnXhToggleChanged" Unchecked="OnXhToggleChanged" AutomationProperties.Name="Center dot" />
+                                        <TextBlock Style="{StaticResource Label}" Text="CENTER DOT" VerticalAlignment="Center" Margin="8,0,0,0" />
+                                    </StackPanel>
+
+                                    <TextBlock Style="{StaticResource CardSub}" Margin="0,22,0,0" TextWrapping="Wrap"
+                                               Text="Works in borderless and windowed games. Exclusive fullscreen hides it." />
+                                </StackPanel>
+                            </Grid>
+
+                            <Border Grid.Row="2" Style="{StaticResource Hairline}" VerticalAlignment="Top" Margin="18,0" />
+                            <Grid Grid.Row="2" Margin="18,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Ellipse x:Name="XhLiveDot" Width="6" Height="6" Fill="{StaticResource TextLow}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <TextBlock x:Name="XhStatusText" Style="{StaticResource CardSub}" VerticalAlignment="Center" Text="Hidden" />
+                                </StackPanel>
+                                <Button x:Name="XhShowButton" Grid.Column="1" Content="Show on screen" Style="{StaticResource PrimaryButton}" MinWidth="150"
+                                        VerticalAlignment="Center" Click="OnXhShowClick" AutomationProperties.Name="Show or hide the crosshair" />
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right">
+                                    <TextBlock Style="{StaticResource Label}" Text="KEY" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <TextBox x:Name="CrosshairKeyBox" Style="{StaticResource KeyCap}"
+                                             Width="112" MinWidth="112" Height="26"
+                                             ToolTip="Key to show or hide"
+                                             AutomationProperties.Name="Crosshair key" />
+                                    <TextBlock Style="{StaticResource Label}" Text="CYCLE" VerticalAlignment="Center" Margin="18,0,8,0" />
+                                    <TextBox x:Name="CrosshairCycleKeyBox" Style="{StaticResource KeyCap}"
+                                             Width="112" MinWidth="112" Height="26"
+                                             ToolTip="Key for next crosshair"
+                                             AutomationProperties.Name="Crosshair cycle key" />
+                                </StackPanel>
+                            </Grid>
                         </Grid>
                     </Border>
                 </TabItem>

@@ -166,6 +166,10 @@ public partial class MainWindow : Window
 
         /// <summary>The bypass key, beside the panic key.</summary>
         Bypass,
+
+        Crosshair,
+
+        CrosshairCycle,
     }
 
     /// <summary>
@@ -393,6 +397,14 @@ public partial class MainWindow : Window
         Closing += OnClosing;
         Loaded += OnWindowLoaded;
 
+        // Fit-to-screen for small / scaled displays (B-002). The design is a
+        // fixed 1200x790; on a 1080p@150% laptop the work area is ~1280x680
+        // DIPs, so without scaling the Apply bar is off-screen with NoResize.
+        // Uniform LayoutTransform on the frame keeps aspect + hit-testing;
+        // DpiChanged + display change re-fit. Pure math lives in WindowFit.
+        Loaded += (_, _) => ApplyWindowFit();
+        DpiChanged += (_, _) => ApplyWindowFit();
+
         // The display-change hook. On the window's own HwndSource rather than a
         // hidden one, because this window is always alive - it hides to the tray
         // rather than closing - and a second source would be a second thing to
@@ -452,6 +464,7 @@ public partial class MainWindow : Window
         UpdateAudioPreviewState();
         UpdateLiveLabels();
         RenderDisplayPreview();
+        InitCrosshairTab();
         _audioPreview.StateChanged += UpdateAudioPreviewState;
         // No "check the assets folder" any more. There is no assets folder: the
         // loops are read out of the executable, so the only thing that can make
@@ -533,6 +546,19 @@ public partial class MainWindow : Window
         _tray.NightToggleRequested += () => Dispatcher.Invoke(() =>
             NightBox.IsChecked = NightBox.IsChecked != true);
 
+        // U-003 opt-in power actions. Off the UI thread (Run waits), and the
+        // banner is refreshed after so the power readout cannot lie.
+        _tray.FxPowerOffRequested += () => _ = Task.Run(() =>
+        {
+            _audio.SetPowerOff();
+            return Dispatcher.InvokeAsync(() => UpdateFxBanner());
+        });
+        _tray.FxPowerOnRequested += () => _ = Task.Run(() =>
+        {
+            _audio.SetPowerOn();
+            return Dispatcher.InvokeAsync(() => UpdateFxBanner());
+        });
+
         // State is read as the menu opens rather than pushed from every place that
         // changes it. There are half a dozen of those and a missed push leaves a
         // tick beside a switch that says the opposite, which is worse than no tick.
@@ -543,6 +569,8 @@ public partial class MainWindow : Window
         // state that lives in the load, not in a field anything could read.
         _tray.MenuOpening += () =>
         {
+            _tray.SetCrosshairs(_xhVisible, BuildTrayCrosshairEntries());
+
             _tray.SetToggleStates(
                 effectsOn: BypassToggle.IsEngaged(_settings.EffectsEnabled),
                 effectsAvailable: _audio.IsInstalled,
@@ -574,6 +602,13 @@ public partial class MainWindow : Window
         // a decision made at the moment of the load, and once the load has been
         // superseded the current state cannot reconstruct it.
         _tray.SetUndoAvailable(false);
+
+        // Crosshair, from the tray, because the window is usually closed while a
+        // game runs. Show/Hide and Next go through the same methods the hotkeys
+        // use, so the flash, the overlay and the saved choice behave the same.
+        _tray.CrosshairToggleRequested += () => Dispatcher.Invoke(ToggleCrosshairFromKey);
+        _tray.CrosshairNextRequested += () => Dispatcher.Invoke(CycleCrosshairFromKey);
+        _tray.CrosshairPresetRequested += id => Dispatcher.Invoke(() => PickCrosshairFromTray(id));
 
         _tray.QuitRequested += QuitApp;
     }
@@ -936,6 +971,8 @@ private void HideToTray()
         // launch to trust.
         Commit();
 
+        CloseCrosshair();
+
         _tray?.Dispose();
         _tray = null;
         Application.Current.Shutdown();
@@ -1043,7 +1080,7 @@ private void HideToTray()
         {
             if (args[i].Equals("--page", StringComparison.OrdinalIgnoreCase)
                 && int.TryParse(args[i + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int page)
-                && page >= 0 && page <= 3)
+                && page >= 0 && page <= 4)
             {
                 return page;
             }
@@ -1055,13 +1092,18 @@ private void HideToTray()
 
     private void SelectPage(int index)
     {
-        RadioButton[] nav = { NavDisplay, NavAudio, NavHotkeys, NavSettings };
+        RadioButton[] nav = { NavDisplay, NavAudio, NavHotkeys, NavSettings, NavCrosshair };
         foreach (RadioButton item in nav)
         {
             item.IsChecked = ReferenceEquals(item, nav[index]);
         }
 
         Pages.SelectedIndex = index;
+
+        if (index == 4)
+        {
+            RenderCrosshairPreview();
+        }
 
         // The backlight is probed when its own tab is opened, not at launch and
         // not until the option is flipped. That way the I2C bus is never touched
@@ -1176,6 +1218,7 @@ private void HideToTray()
 
         _displayHookSource = source;
         source.AddHook(OnWindowMessage);
+        ApplyWindowFit();
 
         // Started here rather than in the constructor so the debounce timer does
         // not exist until there is a window to receive the messages. One second,
@@ -1209,9 +1252,66 @@ private void HideToTray()
         if (WindowMessage.Matters(msg, wParam.ToInt64()))
         {
             _displayDebounce.Notify();
+            // A topology change can move the window to a smaller monitor.
+            _ = Dispatcher.BeginInvoke(new Action(ApplyWindowFit), DispatcherPriority.Background);
         }
 
         return IntPtr.Zero;
+    }
+
+    /// <summary>
+    /// Scales the fixed-design frame to the current monitor work area.
+    /// 1.0 when it fits; uniform shrink clamped by <see cref="WindowFit.MinScale"/>.
+    /// Window size is left at design size so layout tests stay valid; only the
+    /// frame's LayoutTransform changes. Also recenters when shrunk.
+    /// </summary>
+    private void ApplyWindowFit()
+    {
+        try
+        {
+            if (ShellFrame is null)
+            {
+                return;
+            }
+
+            // Work area in DIPs of the monitor the window is on (or nearest).
+            Rect work;
+            try
+            {
+                var screen = System.Windows.Forms.Screen.FromHandle(
+                    new WindowInteropHelper(this).Handle);
+                // Screen.WorkingArea is pixels; convert with current DPI.
+                var src = PresentationSource.FromVisual(this);
+                double dx = 1.0, dy = 1.0;
+                if (src?.CompositionTarget is not null)
+                {
+                    dx = src.CompositionTarget.TransformFromDevice.M11;
+                    dy = src.CompositionTarget.TransformFromDevice.M22;
+                }
+
+                work = new Rect(0, 0, screen.WorkingArea.Width * dx, screen.WorkingArea.Height * dy);
+            }
+            catch
+            {
+                work = new Rect(0, 0, SystemParameters.WorkArea.Width, SystemParameters.WorkArea.Height);
+            }
+
+            double scale = WindowFit.ScaleFor(work.Width, work.Height);
+            ShellFrame.LayoutTransform = scale >= 1.0
+                ? System.Windows.Media.Transform.Identity
+                : new System.Windows.Media.ScaleTransform(scale, scale);
+
+            if (scale < 1.0)
+            {
+                // Keep design Width/Height; shrink visual only + center.
+                Left = Math.Max(work.Left, (work.Width - WindowFit.DesignWidth * scale) / 2 + work.Left);
+                Top = Math.Max(work.Top, (work.Height - WindowFit.DesignHeight * scale) / 2 + work.Top);
+            }
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("FIT", ex);
+        }
     }
 
     /// <summary>
