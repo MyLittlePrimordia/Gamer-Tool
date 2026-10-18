@@ -1046,6 +1046,15 @@
                                                        HorizontalAlignment="Left" VerticalAlignment="Center" />
                                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"
                                                         HorizontalAlignment="Right">
+                                                <!-- FxSound engine power (same idea as the tray Power on/off).
+                                                     Distinct from BYPASS: power stops the engine entirely;
+                                                     bypass only mutes processing while the engine stays up. -->
+                                                <ui:IconButton x:Name="EqPowerButton" Icon="{x:Static ui:Icons.Power}"
+                                                               Style="{StaticResource IconButton}" Width="30" Height="30"
+                                                               Margin="0,0,14,0" VerticalAlignment="Center"
+                                                               Click="OnEqPowerClick"
+                                                               ToolTip="Turn the FxSound engine on or off"
+                                                               AutomationProperties.Name="FxSound engine power" />
                                                 <ui:SwitchToggle x:Name="BypassBox" Style="{StaticResource SwitchTrack}" Accent="{StaticResource AccentAudio}"
                                                                 VerticalAlignment="Center"
                                                                 Checked="OnBypassChanged" Unchecked="OnBypassChanged"
@@ -1813,13 +1822,9 @@
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="Auto" />
-                                                    <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Grid.Column="0" Style="{StaticResource SectionHeader}" Text="PREVIEW" Margin="0" VerticalAlignment="Center" />
-                                                <Button x:Name="XhExportButton" Grid.Column="1" Content="Export PNG" Style="{StaticResource GhostButton}"
-                                                        Margin="0,0,8,0" Click="OnXhExportClick"
-                                                        AutomationProperties.Name="Export the crosshair as a PNG" />
-                                                <Button x:Name="XhSceneButton" Grid.Column="2"
+                                                <Button x:Name="XhSceneButton" Grid.Column="1"
                                                         Style="{StaticResource PillTab}"
                                                         AutomationProperties.Name="Change the preview scene"
                                                         Click="OnXhSceneClick" ToolTip="Day scene">
@@ -1856,8 +1861,11 @@
                                                     Margin="0,0,8,0" Click="OnXhPackClick"
                                                     AutomationProperties.Name="Browse the crosshair pack" />
                                             <Button x:Name="XhImportButton" Content="Import PNG..." Style="{StaticResource GhostButton}"
-                                                    Click="OnXhImportClick"
+                                                    Margin="0,0,8,0" Click="OnXhImportClick"
                                                     AutomationProperties.Name="Import a PNG as a crosshair" />
+                                            <Button x:Name="XhExportButton" Content="Export PNG" Style="{StaticResource GhostButton}"
+                                                    Click="OnXhExportClick"
+                                                    AutomationProperties.Name="Export the crosshair as a PNG" />
                                         </StackPanel>
                                     </Grid>
                                     <StackPanel x:Name="XhTilePanel" Orientation="Horizontal" Margin="0,10,0,0" />
@@ -1871,9 +1879,10 @@
                                             <Grid>
                                                 <Grid.RowDefinitions>
                                                     <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
                                                     <RowDefinition Height="*" />
                                                 </Grid.RowDefinitions>
-                                                <Grid Margin="0,0,0,12">
+                                                <Grid Margin="0,0,0,10">
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="*" />
@@ -1885,7 +1894,11 @@
                                                             Click="OnXhPackFolderClick" ToolTip="Open pack folder"
                                                             AutomationProperties.Name="Open the crosshair pack folder" />
                                                 </Grid>
-                                                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                                <TextBox x:Name="XhPackFilter" Grid.Row="1" Style="{StaticResource ModernTextBox}"
+                                                         Height="28" Margin="0,0,0,10" Tag="Filter by name..."
+                                                         TextChanged="OnXhPackFilterChanged"
+                                                         AutomationProperties.Name="Filter crosshair pack by name" />
+                                                <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                                                     <Grid>
                                                         <WrapPanel x:Name="XhPackPanel" />
                                                         <TextBlock x:Name="XhPackEmpty" Style="{StaticResource CardSub}" TextWrapping="Wrap"
@@ -1905,8 +1918,15 @@
                                         <RadioButton x:Name="XhSwatch3" GroupName="XhColor" Style="{StaticResource XhSwatch}" Background="#FF2BB0" Tag="3" Checked="OnXhSwatchChecked" AutomationProperties.Name="Magenta" />
                                         <RadioButton x:Name="XhSwatch4" GroupName="XhColor" Style="{StaticResource XhSwatch}" Background="#FFE633" Tag="4" Checked="OnXhSwatchChecked" AutomationProperties.Name="Yellow" />
                                         <RadioButton x:Name="XhSwatch5" GroupName="XhColor" Style="{StaticResource XhSwatch}" Background="#FFFFFF" Tag="5" Checked="OnXhSwatchChecked" AutomationProperties.Name="White" />
-                                        <RadioButton x:Name="XhSwatchCustom" GroupName="XhColor" Style="{StaticResource XhSwatch}" Background="#262626" Tag="6" Click="OnXhCustomSwatchClick" ToolTip="Custom color" AutomationProperties.Name="Pick a custom color">
-                                            <Path x:Name="XhSwatchPlus" Data="M0,5 H10 M5,0 V10" Width="10" Height="10" Stroke="{StaticResource TextMid}" StrokeThickness="2" SnapsToDevicePixels="True" />
+                                        <RadioButton x:Name="XhSwatchCustom" GroupName="XhColor" Style="{StaticResource XhSwatchCustom}" Background="#262626" Tag="6" Click="OnXhCustomSwatchClick" ToolTip="Custom color" AutomationProperties.Name="Pick a custom color">
+                                            <!-- No permanent ring on this style; + is a simple cross centred in the disc. -->
+                                            <Path x:Name="XhSwatchPlus" Data="M 5,1.5 V 8.5 M 1.5,5 H 8.5"
+                                                  Width="10" Height="10"
+                                                  Stroke="{StaticResource TextMid}" StrokeThickness="1.6"
+                                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                  Stretch="None"
+                                                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                  SnapsToDevicePixels="True" />
                                         </RadioButton>
 
                                         <!-- The colour picker. Opens under the plus swatch, changes the
@@ -1924,7 +1944,7 @@
                                                         <TextBox x:Name="XhPickHex" Style="{StaticResource ModernTextBox}" Width="104" Height="28" MaxLength="7"
                                                                  VerticalContentAlignment="Center" Margin="0,0,10,0"
                                                                  KeyDown="OnXhPickHexKeyDown" LostFocus="OnXhPickHexCommit" AutomationProperties.Name="Picker hex" />
-                                                        <Button Content="Done" Style="{StaticResource PrimaryButton}" MinWidth="70" Click="OnXhColorDoneClick"
+                                                        <Button Content="Done" Style="{StaticResource PrimaryButtonCrosshair}" MinWidth="70" Click="OnXhColorDoneClick"
                                                                 AutomationProperties.Name="Close the color picker" />
                                                     </StackPanel>
                                                 </StackPanel>
@@ -1959,7 +1979,7 @@
                                                     ValueChanged="OnXhSliderChanged" AutomationProperties.Name="Crosshair size" />
                                         </StackPanel>
 
-                                        <StackPanel Grid.Row="0" Grid.Column="2" Margin="0,0,0,18">
+                                        <StackPanel x:Name="XhThicknessPanel" Grid.Row="0" Grid.Column="2" Margin="0,0,0,18">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -1973,7 +1993,7 @@
                                                     ValueChanged="OnXhSliderChanged" AutomationProperties.Name="Crosshair thickness" />
                                         </StackPanel>
 
-                                        <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,0,18">
+                                        <StackPanel x:Name="XhGapPanel" Grid.Row="1" Grid.Column="0" Margin="0,0,0,18">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -2001,7 +2021,7 @@
                                                     ValueChanged="OnXhSliderChanged" AutomationProperties.Name="Crosshair opacity" />
                                         </StackPanel>
 
-                                        <StackPanel Grid.Row="2" Grid.Column="0">
+                                        <StackPanel x:Name="XhRotationPanel" Grid.Row="2" Grid.Column="0">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -2048,7 +2068,7 @@
                                     <Ellipse x:Name="XhLiveDot" Width="6" Height="6" Fill="{StaticResource TextLow}" VerticalAlignment="Center" Margin="0,0,8,0" />
                                     <TextBlock x:Name="XhStatusText" Style="{StaticResource CardSub}" VerticalAlignment="Center" Text="Hidden" />
                                 </StackPanel>
-                                <Button x:Name="XhShowButton" Grid.Column="1" Content="Show on screen" Style="{StaticResource PrimaryButton}" MinWidth="150"
+                                <Button x:Name="XhShowButton" Grid.Column="1" Content="Show on screen" Style="{StaticResource PrimaryButtonCrosshair}" MinWidth="150"
                                         VerticalAlignment="Center" Click="OnXhShowClick" AutomationProperties.Name="Show or hide the crosshair" />
                                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right">
                                     <TextBlock Style="{StaticResource Label}" Text="KEY" VerticalAlignment="Center" Margin="0,0,8,0" />

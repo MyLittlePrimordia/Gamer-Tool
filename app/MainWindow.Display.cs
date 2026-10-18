@@ -331,7 +331,7 @@ public partial class MainWindow : Window
     {
         bool wanted = _previewScene == PreviewScene.Transition
             && _displayPreview.IsAnimated(PreviewScene.Transition)
-            && Pages.SelectedIndex == 0;
+            && Pages.SelectedIndex == (int)PageId.Display;
 
         if (!wanted)
         {

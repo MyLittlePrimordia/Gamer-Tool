@@ -173,6 +173,22 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Stable page identifiers. Visual nav order (Display → Audio → Crosshair →
+    /// Hotkeys → Settings) is independent of these values; the TabControl order
+    /// and every SelectedIndex comparison use this enum so inserting or moving a
+    /// tab cannot silently break AudioTabVisible, WarmAppList, spectrum freeze,
+    /// or SelectPage.
+    /// </summary>
+    private enum PageId
+    {
+        Display = 0,
+        Audio = 1,
+        Hotkeys = 2,
+        Settings = 3,
+        Crosshair = 4,
+    }
+
+    /// <summary>
     /// Which non-slot keycap is currently listening. Null when the one listening is
     /// a slot's.
     /// </summary>
@@ -693,7 +709,7 @@ private void HideToTray()
     private bool AudioTabVisible =>
         IsVisible
         && WindowState != WindowState.Minimized
-        && Pages.SelectedIndex == 1;
+        && Pages.SelectedIndex == (int)PageId.Audio;
 
     /// <summary>
     /// The one decision about whether the Audio tab is doing background work.
@@ -1092,7 +1108,24 @@ private void HideToTray()
 
     private void SelectPage(int index)
     {
-        RadioButton[] nav = { NavDisplay, NavAudio, NavHotkeys, NavSettings, NavCrosshair };
+        // Index order matches PageId / TabControl: Display, Audio, Hotkeys,
+        // Settings, Crosshair. Visual nav order is different (Crosshair sits
+        // between Audio and Hotkeys) but Tags and this array stay aligned to
+        // PageId so a future reorder cannot break SelectedIndex checks.
+        RadioButton[] nav =
+        {
+            NavDisplay,   // PageId.Display = 0
+            NavAudio,     // PageId.Audio = 1
+            NavHotkeys,   // PageId.Hotkeys = 2
+            NavSettings,  // PageId.Settings = 3
+            NavCrosshair, // PageId.Crosshair = 4
+        };
+
+        if (index < 0 || index >= nav.Length)
+        {
+            return;
+        }
+
         foreach (RadioButton item in nav)
         {
             item.IsChecked = ReferenceEquals(item, nav[index]);
@@ -1100,7 +1133,7 @@ private void HideToTray()
 
         Pages.SelectedIndex = index;
 
-        if (index == 4)
+        if (index == (int)PageId.Crosshair)
         {
             RenderCrosshairPreview();
         }
@@ -1109,7 +1142,7 @@ private void HideToTray()
         // not until the option is flipped. That way the I2C bus is never touched
         // before the user has actually gone looking at the thing that needs it,
         // and an option that was left on still works on the next run.
-        if (index == 0 && Backlight.IsEnabled && !Backlight.HasProbed)
+        if (index == (int)PageId.Display && Backlight.IsEnabled && !Backlight.HasProbed)
         {
             _ = Task.Run(() =>
             {
@@ -1117,7 +1150,7 @@ private void HideToTray()
                 Dispatcher.InvokeAsync(AfterBacklightProbe);
             });
         }
-        else if (index == 0)
+        else if (index == (int)PageId.Display)
         {
             RefreshBacklightRows();
             RefreshBacklightNote();
@@ -1186,7 +1219,8 @@ private void HideToTray()
     private async System.Threading.Tasks.Task WarmAppList()
     {
         await EnsureAppList();
-        if (Pages.SelectedIndex == 2)
+        // Slots live on the Hotkeys page (PageId.Hotkeys = 2).
+        if (Pages.SelectedIndex == (int)PageId.Hotkeys)
         {
             BuildSlots();
         }

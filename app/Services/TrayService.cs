@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace GamerTool.Services;
@@ -39,6 +40,8 @@ public sealed class TrayService : IDisposable
     private const int MaxTipLength = 127;
 
     private readonly NotifyIcon _icon;
+
+    private readonly ContextMenuStrip _menu;
 
     /// <summary>
     /// The line that opens the slot list, and the rule above it.
@@ -140,39 +143,42 @@ public sealed class TrayService : IDisposable
         // before the first state push; MenuOpening replaces it with the live list.
         SetCrosshairs(false, Array.Empty<TraySlotEntry>());
 
-        ContextMenuStrip menu = DarkTrayMenuRenderer.Menu();
-        menu.Items.Add(show);
-        menu.Items.Add(_slotsSeparator);
-        menu.Items.Add(_slotsItem);
-        menu.Items.Add(DarkTrayMenuRenderer.Separator());
-        menu.Items.Add(_crosshairItem);
-        menu.Items.Add(_effectsItem);
-        menu.Items.Add(_nightItem);
+        _menu = DarkTrayMenuRenderer.Menu();
+        _menu.Items.Add(show);
+        _menu.Items.Add(_slotsSeparator);
+        _menu.Items.Add(_slotsItem);
+        _menu.Items.Add(DarkTrayMenuRenderer.Separator());
+        _menu.Items.Add(_crosshairItem);
+        _menu.Items.Add(_effectsItem);
+        _menu.Items.Add(_nightItem);
         // U-003: second, clearly labelled power action beside the flatten
         // bypass. Off the default path on purpose: power-off switches the
         // device and games with open streams may notice.
-        menu.Items.Add(DarkTrayMenuRenderer.Item(
+        _menu.Items.Add(DarkTrayMenuRenderer.Item(
             "Power off FxSound",
             (s, e) => FxPowerOffRequested?.Invoke()));
-        menu.Items.Add(DarkTrayMenuRenderer.Item(
+        _menu.Items.Add(DarkTrayMenuRenderer.Item(
             "Power on FxSound",
             (s, e) => FxPowerOnRequested?.Invoke()));
-        menu.Items.Add(DarkTrayMenuRenderer.Separator());
-        menu.Items.Add(_undoItem);
-        menu.Items.Add(resetScreen);
-        menu.Items.Add(resetSound);
-        menu.Items.Add(DarkTrayMenuRenderer.Separator());
-        menu.Items.Add(quit);
+        _menu.Items.Add(DarkTrayMenuRenderer.Separator());
+        _menu.Items.Add(_undoItem);
+        _menu.Items.Add(resetScreen);
+        _menu.Items.Add(resetSound);
+        _menu.Items.Add(DarkTrayMenuRenderer.Separator());
+        _menu.Items.Add(quit);
 
         _icon = new NotifyIcon
         {
             Icon = IconFactory.CreateRuntimeIcon(32),
             Text = Title,
             Visible = true,
-            ContextMenuStrip = menu
+            // Menu is shown from MouseUp rather than ContextMenuStrip, so a
+            // fullscreen game cannot keep the popup buried under its surface.
+            ContextMenuStrip = null
         };
 
         _icon.DoubleClick += (s, e) => ShowRequested?.Invoke();
+        _icon.MouseUp += OnTrayMouseUp;
 
         // Opening, not a state push from every place that changes it.
         //
@@ -182,8 +188,103 @@ public sealed class TrayService : IDisposable
         // switch end up disagreeing, and the tick is the one the user trusts. The
         // menu can only be opened by the user, so reading the state as it is at that
         // moment is both cheaper and the only version that cannot drift.
-        menu.Opening += (s, e) => MenuOpening?.Invoke();
+        _menu.Opening += (s, e) =>
+        {
+            MenuOpening?.Invoke();
+            BringMenuAboveFullscreen();
+        };
     }
+
+    private void OnTrayMouseUp(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Right)
+        {
+            return;
+        }
+
+        // Show at the cursor after forcing foreground. Assigning ContextMenuStrip
+        // to NotifyIcon lets the shell place the menu; under a borderless or
+        // exclusive fullscreen game that often ends up behind the game window.
+        BringMenuAboveFullscreen();
+        _menu.Show(Control.MousePosition);
+    }
+
+    /// <summary>
+    /// Make the tray menu the foreground window so it draws above a fullscreen game.
+    /// <para>
+    /// Other tray apps appear on top because their host process briefly becomes
+    /// foreground when the menu opens. Without that step, a ContextMenuStrip from a
+    /// background WPF process stays under the game's topmost surface.
+    /// </para>
+    /// </summary>
+    private void BringMenuAboveFullscreen()
+    {
+        if (!_menu.IsHandleCreated)
+        {
+            _ = _menu.Handle;
+        }
+
+        IntPtr menuHwnd = _menu.Handle;
+        if (menuHwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        IntPtr foreground = GetForegroundWindow();
+        uint menuThread = GetWindowThreadProcessId(menuHwnd, IntPtr.Zero);
+        uint foregroundThread = GetWindowThreadProcessId(foreground, IntPtr.Zero);
+        uint thisThread = GetCurrentThreadId();
+
+        // Attach to the foreground thread so SetForegroundWindow is allowed while
+        // a game holds focus. Detach immediately after.
+        bool attachedToFg = false;
+        bool attachedToMenu = false;
+        try
+        {
+            if (foreground != IntPtr.Zero && foregroundThread != thisThread)
+            {
+                attachedToFg = AttachThreadInput(thisThread, foregroundThread, true);
+            }
+
+            if (menuThread != thisThread && menuThread != 0)
+            {
+                attachedToMenu = AttachThreadInput(thisThread, menuThread, true);
+            }
+
+            BringWindowToTop(menuHwnd);
+            SetForegroundWindow(menuHwnd);
+        }
+        finally
+        {
+            if (attachedToMenu)
+            {
+                AttachThreadInput(thisThread, menuThread, false);
+            }
+
+            if (attachedToFg)
+            {
+                AttachThreadInput(thisThread, foregroundThread, false);
+            }
+        }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool BringWindowToTop(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr processId);
+
+    [DllImport("user32.dll")]
+    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
 
     /// <summary>
     /// The two checkable lines, kept as fields because their ticked state is
@@ -538,7 +639,9 @@ public sealed class TrayService : IDisposable
         }
 
         _disposed = true;
+        _icon.MouseUp -= OnTrayMouseUp;
         _icon.Visible = false;
         _icon.Dispose();
+        _menu.Dispose();
     }
 }

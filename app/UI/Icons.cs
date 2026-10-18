@@ -85,6 +85,14 @@ public static class Icons
         "M 7.6 5.2 H 10.4 V 18.8 H 7.6 Z M 13.6 5.2 H 16.4 V 18.8 H 13.6 Z");
 
     /// <summary>
+    /// Power symbol (IEC 60417-5009 style): vertical stroke into an open ring.
+    /// Used for the Audio-tab FxSound engine on/off control.
+    /// </summary>
+    public static Geometry Power { get; } = Freeze(
+        "M 12 3.2 V 11.2 " +
+        "M 8.2 6.4 A 6.2 6.2 0 1 0 15.8 6.4");
+
+    /// <summary>
     /// The nudge that puts each glyph's ink in the middle of its button, in the
     /// same units as the button itself, so a correction here is the same number
     /// the measurement that produced it reported.
@@ -109,6 +117,9 @@ public static class Icons
     {
         // Symmetric, and measured dead on. Nothing to correct.
         [Plus] = new Point(0.00, 0.00),
+
+        // Power mark is nearly symmetric; slight top-weight from the stem.
+        [Power] = new Point(0.00, 0.20),
 
         // The point and the ferrule sit up and left of the shaft's middle.
         [Pencil] = new Point(0.28, 0.48),

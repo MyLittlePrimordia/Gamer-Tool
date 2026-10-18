@@ -331,6 +331,7 @@ public partial class MainWindow
         _xhPresetId = preset.Id;
         RefreshCrosshairBox();
         UpdateXhControls();
+        UpdateXhStatus();
         RenderCrosshairPreview();
         PushCrosshairToOverlay();
     }
@@ -421,10 +422,25 @@ public partial class MainWindow
             // has no thickness and no turn, a ring has no gap and looks the same
             // however it is turned, and a picture has no gap either. Everything
             // else, colour, outline, glow, opacity and size, works on all of them.
+            // Disabled groups are dimmed (not only IsEnabled) so the whole row
+            // reads as inactive, not just the thumb.
             CrosshairShape kind = p.ShapeKind;
-            XhGapSlider.IsEnabled = GapShapes.Contains(kind);
-            XhThicknessSlider.IsEnabled = kind != CrosshairShape.Dot;
-            XhRotationSlider.IsEnabled = kind != CrosshairShape.Dot && kind != CrosshairShape.Circle;
+            bool gapOn = GapShapes.Contains(kind);
+            bool thicknessOn = kind != CrosshairShape.Dot;
+            bool rotationOn = kind != CrosshairShape.Dot && kind != CrosshairShape.Circle;
+
+            XhGapSlider.IsEnabled = gapOn;
+            XhGapPanel.Opacity = gapOn ? 1.0 : 0.4;
+            XhGapPanel.IsHitTestVisible = gapOn;
+
+            XhThicknessSlider.IsEnabled = thicknessOn;
+            XhThicknessPanel.Opacity = thicknessOn ? 1.0 : 0.4;
+            XhThicknessPanel.IsHitTestVisible = thicknessOn;
+
+            XhRotationSlider.IsEnabled = rotationOn;
+            XhRotationPanel.Opacity = rotationOn ? 1.0 : 0.4;
+            XhRotationPanel.IsHitTestVisible = rotationOn;
+
             XhCenterDotBox.IsEnabled = kind != CrosshairShape.Dot;
 
             RefreshCustomTile();
@@ -654,6 +670,7 @@ public partial class MainWindow
             _workCrosshair.Id = string.Empty;
             _workCrosshair.Name = "Tuned";
             RefreshCrosshairBox();
+            UpdateXhStatus();
         }
 
         RenderCrosshairPreview();
@@ -740,7 +757,11 @@ public partial class MainWindow
         catch (Exception ex)
         {
             AppLog.Error("CROSSHAIR SHOW", ex);
-            Flash("The crosshair could not be shown", true);
+            // Exclusive fullscreen games cannot be overlaid by any ordinary window;
+            // borderless / windowed works. Keep the button state truthful.
+            _xhVisible = false;
+            _xhBySlot = false;
+            Flash("Could not show crosshair — use borderless or windowed mode", true);
         }
 
         UpdateXhStatus();
@@ -843,6 +864,13 @@ public partial class MainWindow
         XhShowButton.Content = _xhVisible ? "Hide crosshair" : "Show on screen";
         XhStatusText.Text = _xhVisible ? "On screen" : "Hidden";
         XhLiveDot.Fill = (Brush)FindResource(_xhVisible ? "Green" : "TextLow");
+
+        // Built-ins that have been edited become "Tuned" (empty id). Rename and
+        // Delete only make sense for a saved custom preset.
+        bool canEditMeta = _xhPresetId.Length > 0
+            && !CrosshairPreset.BuiltIns.Any(p => string.Equals(p.Id, _xhPresetId, StringComparison.OrdinalIgnoreCase));
+        XhRenameButton.IsEnabled = canEditMeta;
+        XhDeleteButton.IsEnabled = canEditMeta;
     }
 
     /// <summary>The window is closing for good. Take the overlay with it.</summary>
@@ -1035,6 +1063,10 @@ public partial class MainWindow
         // Let go of every thumbnail. They are rebuilt from the folder next time.
         _xhPackLoad++;
         XhPackPanel.Children.Clear();
+        if (XhPackFilter is not null)
+        {
+            XhPackFilter.Text = string.Empty;
+        }
     }
 
     private void OnXhPackFolderClick(object sender, RoutedEventArgs e)
@@ -1063,14 +1095,41 @@ public partial class MainWindow
     /// Tiles go in a batch at a time at background priority, so a big folder
     /// opens at once and fills in while the window stays responsive.
     /// </summary>
+    private void OnXhPackFilterChanged(object sender, TextChangedEventArgs e)
+    {
+        if (XhPackPopup.IsOpen)
+        {
+            FillXhPack();
+        }
+    }
+
     private void FillXhPack()
     {
         int generation = ++_xhPackLoad;
         XhPackPanel.Children.Clear();
 
         List<string> files = CrosshairPack.List();
-        XhPackCount.Text = files.Count == 0 ? string.Empty : files.Count.ToString(CultureInfo.InvariantCulture) + " pictures";
+        string filter = (XhPackFilter?.Text ?? string.Empty).Trim();
+        if (filter.Length > 0)
+        {
+            files = files
+                .Where(f => Path.GetFileNameWithoutExtension(f)
+                    .Contains(filter, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        XhPackCount.Text = files.Count == 0
+            ? string.Empty
+            : files.Count.ToString(CultureInfo.InvariantCulture) + " pictures";
         XhPackEmpty.Visibility = files.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (files.Count == 0 && filter.Length > 0)
+        {
+            XhPackEmpty.Text = "No pictures match \"" + filter + "\".";
+        }
+        else if (files.Count == 0)
+        {
+            XhPackEmpty.Text = "No pictures yet. Add PNGs with Open folder, then reopen.";
+        }
 
         // Shown in the colour the crosshair is set to, so the grid previews what
         // choosing one will look like.

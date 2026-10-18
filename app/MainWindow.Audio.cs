@@ -129,10 +129,10 @@ public partial class MainWindow : Window
         // have shown whatever devices existed at that moment and could have
         // shown none at all.
         //
-        // Rebuilt only while the tab is actually showing, because rebuilding
-        // otherwise would be work nobody can see, and the tab is about to
-        // rebuild itself anyway when they switch to it.
-        if (IsVisible && WindowState != WindowState.Minimized && Pages.SelectedIndex == 2)
+        // Rebuilt only while the Hotkeys (slots) tab is actually showing, because
+        // rebuilding otherwise would be work nobody can see, and the tab is about
+        // to rebuild itself anyway when they switch to it.
+        if (IsVisible && WindowState != WindowState.Minimized && Pages.SelectedIndex == (int)PageId.Hotkeys)
         {
             BuildSlots();
         }
@@ -482,7 +482,101 @@ public partial class MainWindow : Window
             _ => "Ask winget whether a newer FxSound exists. This is the only thing in the app that uses the network.",
         };
 
+        UpdateEqPowerButton(health, missing);
         UpdatePresetChrome();
+    }
+
+    /// <summary>
+    /// Whether FxSound reports processing power on. Same signal the tray Power
+    /// lines act on — not <see cref="AudioService.IsRunning"/> (process alive).
+    /// </summary>
+    private bool ReadFxPowerOn()
+    {
+        FxSoundState? snapshot = _audio.ReadState();
+        if (snapshot is null || !snapshot.ReportsPower)
+        {
+            // No status file: last resort is process presence.
+            return _audio.IsRunning;
+        }
+
+        return snapshot.Power;
+    }
+
+    /// <summary>
+    /// Pink glow when FxSound power is on; neutral when off or missing. Matches
+    /// the tray Power on / Power off commands, not process-running.
+    /// </summary>
+    private void UpdateEqPowerButton(FxHealth health, bool missing)
+    {
+        if (EqPowerButton is null)
+        {
+            return;
+        }
+
+        EqPowerButton.IsEnabled = !missing && _audio.IsInstalled;
+        bool powerOn = !missing && ReadFxPowerOn();
+
+        if (powerOn)
+        {
+            EqPowerButton.Foreground = (Brush)FindResource("AccentAudio");
+            EqPowerButton.BorderBrush = (Brush)FindResource("AccentAudio");
+            EqPowerButton.Background = (Brush)FindResource("AccentAudioGlow");
+            EqPowerButton.ToolTip = "Power off FxSound (same as the tray)";
+        }
+        else
+        {
+            EqPowerButton.Foreground = (Brush)FindResource("TextMid");
+            EqPowerButton.BorderBrush = (Brush)FindResource("Line");
+            EqPowerButton.Background = Brushes.Transparent;
+            EqPowerButton.ToolTip = missing
+                ? "FxSound is not installed"
+                : "Power on FxSound (same as the tray)";
+        }
+    }
+
+    private void OnEqPowerClick(object sender, RoutedEventArgs e)
+    {
+        if (!_ready || !_audio.IsInstalled)
+        {
+            Flash("FxSound is not installed", true);
+            return;
+        }
+
+        // Same commands as the tray "Power on FxSound" / "Power off FxSound".
+        // IsRunning is the process, not EQ power — using it meant we only ever
+        // sent --power=0 while the process was up, even when processing was already off.
+        bool powerOn = ReadFxPowerOn();
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (powerOn)
+                {
+                    _audio.SetPowerOff();
+                }
+                else
+                {
+                    // Tray only sends --power=1. If the process is not up yet,
+                    // start it first so the power flag can take effect.
+                    if (!_audio.IsRunning)
+                    {
+                        _audio.StartEngine();
+                    }
+
+                    _audio.SetPowerOn();
+                }
+            }
+            catch (Exception ex)
+            {
+                TraceLog.Write("EQ POWER", ex);
+            }
+
+            Dispatcher.InvokeAsync(() =>
+            {
+                Flash(powerOn ? "EQ off" : "EQ on");
+                UpdateFxBanner();
+            });
+        });
     }
 
 

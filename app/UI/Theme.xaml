@@ -642,8 +642,11 @@
                             <Setter TargetName="Bg" Property="Background" Value="#14FFFFFF" />
                         </Trigger>
                         <Trigger Property="IsChecked" Value="True">
+                            <!-- Soft purple fill so the tab accent is present, but a
+                                 neutral white ring so the shape glyph (always drawn
+                                 light) does not fight a purple outline. -->
                             <Setter TargetName="Bg" Property="Background" Value="{StaticResource AccentCrosshairGlow}" />
-                            <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource AccentCrosshair}" />
+                            <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource TextHi}" />
                         </Trigger>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
                             <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource FocusRing}" />
@@ -674,6 +677,37 @@
                     <Grid Background="Transparent">
                         <Ellipse x:Name="Ring" Stroke="Transparent" StrokeThickness="2" />
                         <Ellipse Margin="5" Fill="{TemplateBinding Background}" Stroke="#33FFFFFF" StrokeThickness="1" />
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Ring" Property="Stroke" Value="#66FFFFFF" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Ring" Property="Stroke" Value="{StaticResource TextHi}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="Ring" Property="Stroke" Value="{StaticResource FocusRing}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Ring" Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Custom-colour swatch: same size as XhSwatch, but the fill disc has no
+         permanent light stroke. That ring is correct on solid colours and is the
+         thing that makes a centred + look off-centre against an always-on circle. -->
+    <Style x:Key="XhSwatchCustom" TargetType="RadioButton" BasedOn="{StaticResource XhSwatch}">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Grid Background="Transparent">
+                        <Ellipse x:Name="Ring" Stroke="Transparent" StrokeThickness="2" />
+                        <Ellipse Margin="5" Fill="{TemplateBinding Background}" />
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Grid>
                     <ControlTemplate.Triggers>
@@ -781,6 +815,13 @@
         <Setter Property="Background" Value="#1D6F68" />
         <Setter Property="Foreground" Value="#EAFBF7" />
         <Setter Property="BorderBrush" Value="#2A9D92" />
+    </Style>
+
+    <!-- Crosshair tab primary action — same shape as PrimaryButton, purple accent. -->
+    <Style x:Key="PrimaryButtonCrosshair" TargetType="Button" BasedOn="{StaticResource BaseButton}">
+        <Setter Property="Background" Value="#5B2D8A" />
+        <Setter Property="Foreground" Value="#F3E8FF" />
+        <Setter Property="BorderBrush" Value="#B678F5" />
     </Style>
 
     <Style x:Key="GhostButton" TargetType="Button" BasedOn="{StaticResource BaseButton}">
