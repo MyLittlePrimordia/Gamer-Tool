@@ -66,6 +66,13 @@ public sealed class TrayService : IDisposable
     /// </summary>
     private readonly ToolStripMenuItem _undoItem;
 
+    /// <summary>
+    /// The Crosshair line and the list behind it: show/hide, next, then the
+    /// presets. Behind an arrow for the same reason as the slots - the preset list
+    /// is user-grown, and the main menu stays a fixed length.
+    /// </summary>
+    private readonly ToolStripMenuItem _crosshairItem;
+
     private bool _disposed;
 
     public event Action? ShowRequested;
@@ -79,6 +86,15 @@ public sealed class TrayService : IDisposable
 
     /// <summary>Raised when the user picks Undo.</summary>
     public event Action? UndoRequested;
+
+    /// <summary>Raised when the user picks Show / Hide crosshair.</summary>
+    public event Action? CrosshairToggleRequested;
+
+    /// <summary>Raised when the user picks Next crosshair.</summary>
+    public event Action? CrosshairNextRequested;
+
+    /// <summary>Raised with a crosshair preset id when the user picks one from the list.</summary>
+    public event Action<string>? CrosshairPresetRequested;
 
     public event Action? QuitRequested;
 
@@ -119,13 +135,28 @@ public sealed class TrayService : IDisposable
             active: false,
             (s, e) => NightToggleRequested?.Invoke());
 
+        _crosshairItem = DarkTrayMenuRenderer.Submenu("Crosshair");
+        // Seeded so the arrow opens onto something even if the menu is read
+        // before the first state push; MenuOpening replaces it with the live list.
+        SetCrosshairs(false, Array.Empty<TraySlotEntry>());
+
         ContextMenuStrip menu = DarkTrayMenuRenderer.Menu();
         menu.Items.Add(show);
         menu.Items.Add(_slotsSeparator);
         menu.Items.Add(_slotsItem);
         menu.Items.Add(DarkTrayMenuRenderer.Separator());
+        menu.Items.Add(_crosshairItem);
         menu.Items.Add(_effectsItem);
         menu.Items.Add(_nightItem);
+        // U-003: second, clearly labelled power action beside the flatten
+        // bypass. Off the default path on purpose: power-off switches the
+        // device and games with open streams may notice.
+        menu.Items.Add(DarkTrayMenuRenderer.Item(
+            "Power off FxSound",
+            (s, e) => FxPowerOffRequested?.Invoke()));
+        menu.Items.Add(DarkTrayMenuRenderer.Item(
+            "Power on FxSound",
+            (s, e) => FxPowerOnRequested?.Invoke()));
         menu.Items.Add(DarkTrayMenuRenderer.Separator());
         menu.Items.Add(_undoItem);
         menu.Items.Add(resetScreen);
@@ -173,6 +204,12 @@ public sealed class TrayService : IDisposable
     /// <summary>Raised when the user picks the night filter line.</summary>
     public event Action? NightToggleRequested;
 
+    /// <summary>Raised when the user picks Power off FxSound (U-003 opt-in).</summary>
+    public event Action? FxPowerOffRequested;
+
+    /// <summary>Raised when the user picks Power on FxSound (U-003 opt-in).</summary>
+    public event Action? FxPowerOnRequested;
+
     /// <summary>
     /// Puts the current state into the two toggles.
     /// </summary>
@@ -195,6 +232,62 @@ public sealed class TrayService : IDisposable
             _effectsItem.Visible = effectsAvailable;
             _effectsItem.Checked = effectsOn;
             _nightItem.Checked = nightOn;
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("TRAY", ex);
+        }
+    }
+
+    /// <summary>
+    /// Rebuilds the Crosshair list: Show/Hide, Next, then one ticked line per preset.
+    /// <para>
+    /// Rebuilt as the menu opens rather than pushed on every change, for the same
+    /// reason the two toggles are: the window owns the state and the menu can only
+    /// be opened by the user, so reading it at that moment cannot drift.
+    /// </para>
+    /// </summary>
+    /// <param name="visible">Whether the crosshair is on screen, which flips the first line's wording.</param>
+    /// <param name="presets">The presets, with the loaded one marked Active.</param>
+    public void SetCrosshairs(bool visible, IReadOnlyList<TraySlotEntry> presets)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            ToolStripItemCollection target = _crosshairItem.DropDownItems;
+            for (int i = target.Count - 1; i >= 0; i--)
+            {
+                ToolStripItem? stale = target[i];
+                target.RemoveAt(i);
+                stale?.Dispose();
+            }
+
+            target.Add(DarkTrayMenuRenderer.CheckableItem(
+                visible ? "Hide crosshair" : "Show crosshair",
+                "Put the crosshair on the screen, or take it off",
+                visible,
+                (s, e) => CrosshairToggleRequested?.Invoke()));
+
+            target.Add(DarkTrayMenuRenderer.Item(
+                "Next crosshair",
+                (s, e) => CrosshairNextRequested?.Invoke()));
+
+            if (presets.Count > 0)
+            {
+                target.Add(DarkTrayMenuRenderer.Separator());
+                foreach (TraySlotEntry entry in presets)
+                {
+                    target.Add(DarkTrayMenuRenderer.CheckableItem(
+                        entry.Label,
+                        entry.Detail,
+                        entry.Active,
+                        (s, e) => CrosshairPresetRequested?.Invoke(entry.Id)));
+                }
+            }
         }
         catch (Exception ex)
         {

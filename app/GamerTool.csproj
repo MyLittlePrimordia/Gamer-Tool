@@ -109,6 +109,15 @@
     <EmbeddedResource Include="Assets\footsteps.mp3" LogicalName="GamerTool.assets.footsteps.mp3" />
     <EmbeddedResource Include="Assets\icon.png" LogicalName="GamerTool.assets.icon.png" />
     <EmbeddedResource Include="Assets\animated.gif" LogicalName="GamerTool.assets.animated.gif" />
+    <EmbeddedResource Include="Assets\crosshair day.png" LogicalName="GamerTool.assets.crosshair_day.png" />
+    <EmbeddedResource Include="Assets\crosshair night.png" LogicalName="GamerTool.assets.crosshair_night.png" />
+
+    <!-- The crosshair pack is embedded too, so the published program is one file.
+         Each picture keeps its path under Assets\crosshairs in its resource name,
+         and CrosshairPack unpacks them to %AppData%\GamerTool\crosshair-pack on
+         first use. -->
+    <None Remove="Assets\crosshairs\**" />
+    <EmbeddedResource Include="Assets\crosshairs\**\*.png" LogicalName="GamerTool.pack.%(RecursiveDir)%(Filename)%(Extension)" />
     <EmbeddedResource Include="Assets\fac-template.fac" LogicalName="GamerTool.assets.fac-template.fac" />
     <!-- Colour emoji. WPF cannot draw COLR/CPAL glyphs, so these are baked
          bitmaps rendered by the browser's own colour text stack. -->

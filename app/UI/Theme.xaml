@@ -84,6 +84,8 @@
     <SolidColorBrush x:Key="AccentHotkeysGlow" Color="#0E1730" />
     <SolidColorBrush x:Key="AccentSettings" Color="#34D399" />
     <SolidColorBrush x:Key="AccentSettingsGlow" Color="#0A1F18" />
+    <SolidColorBrush x:Key="AccentCrosshair" Color="#B678F5" />
+    <SolidColorBrush x:Key="AccentCrosshairGlow" Color="#1B1030" />
 
     <SolidColorBrush x:Key="Green" Color="#34D399" />
     <SolidColorBrush x:Key="Amber" Color="#FBBF24" />
@@ -573,6 +575,150 @@
 <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource FocusRing}" />
 <Setter TargetName="Bg" Property="BorderThickness" Value="2" />
 </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="NavCrosshair" TargetType="ui:NavPill">
+        <!-- Page index 4, not 2. The crosshair page was added last, so it sits at
+             the end of the page list while its pill is drawn between Audio and
+             Hotkeys. Every page index the rest of the window already uses keeps
+             meaning what it meant. -->
+        <Setter Property="Tag" Value="4" />
+        <Setter Property="Glyph" Value="target" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Width" Value="86" />
+        <Setter Property="Height" Value="46" />
+        <Setter Property="Margin" Value="3" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ui:NavPill">
+                    <Border x:Name="Bg" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" CornerRadius="{StaticResource RadiusControl}">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <ui:EmojiImage HorizontalAlignment="Center" Width="23" Height="23" Stretch="Uniform" Glyph="{TemplateBinding Glyph}" />
+                            <TextBlock x:Name="Label" Text="Crosshair" Margin="0,2,0,0" HorizontalAlignment="Center"
+                                       FontSize="9" FontWeight="SemiBold" Foreground="{StaticResource TextLow}" />
+                        </StackPanel>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bg" Property="Background" Value="#0DFFFFFF" />
+                            <Setter TargetName="Label" Property="Foreground" Value="{StaticResource TextMid}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Bg" Property="Background" Value="{StaticResource AccentCrosshairGlow}" />
+                            <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource AccentCrosshair}" />
+                            <Setter TargetName="Label" Property="Foreground" Value="{StaticResource AccentCrosshair}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+                            <Setter TargetName="Bg" Property="BorderThickness" Value="2" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A shape tile on the Crosshair tab: a square well holding a drawing of the
+         shape, with the crosshair accent when picked. The drawing is the real
+         crosshair element, put in as the content from code. -->
+    <Style x:Key="XhTile" TargetType="RadioButton">
+        <Setter Property="Width" Value="58" />
+        <Setter Property="Height" Value="58" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Focusable" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="Bg" Background="{StaticResource WellBg}" BorderBrush="{StaticResource Line}"
+                            BorderThickness="1" CornerRadius="{StaticResource RadiusControl}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bg" Property="Background" Value="#14FFFFFF" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Bg" Property="Background" Value="{StaticResource AccentCrosshairGlow}" />
+                            <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource AccentCrosshair}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+                            <Setter TargetName="Bg" Property="BorderThickness" Value="2" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Bg" Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A colour swatch: a filled disc whose colour is the button's Background,
+         with a ring round it when it is the one in use. The ring is plain
+         near-white, not an accent, because an accent ring would vanish against a
+         swatch of the same hue. -->
+    <Style x:Key="XhSwatch" TargetType="RadioButton">
+        <Setter Property="Width" Value="32" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Margin" Value="0,0,8,0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Focusable" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Grid Background="Transparent">
+                        <Ellipse x:Name="Ring" Stroke="Transparent" StrokeThickness="2" />
+                        <Ellipse Margin="5" Fill="{TemplateBinding Background}" Stroke="#33FFFFFF" StrokeThickness="1" />
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Ring" Property="Stroke" Value="#66FFFFFF" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Ring" Property="Stroke" Value="{StaticResource TextHi}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="Ring" Property="Stroke" Value="{StaticResource FocusRing}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Ring" Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- One picture in the crosshair pack browser. A square well that picks up the
+         crosshair accent under the mouse. -->
+    <Style x:Key="XhPackTile" TargetType="Button">
+        <Setter Property="Width" Value="64" />
+        <Setter Property="Height" Value="64" />
+        <Setter Property="Margin" Value="0,0,8,8" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Focusable" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bg" Background="{StaticResource WellBg}" BorderBrush="{StaticResource Line}"
+                            BorderThickness="1" CornerRadius="{StaticResource RadiusControl}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bg" Property="Background" Value="{StaticResource AccentCrosshairGlow}" />
+                            <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource AccentCrosshair}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource FocusRing}" />
+                            <Setter TargetName="Bg" Property="BorderThickness" Value="2" />
+                        </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>

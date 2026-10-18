@@ -17,8 +17,12 @@ Boost shadow brightness to spot enemies in dark games, switch to a warm night mo
     <td width="50%"><img src="screenshots/audio.png" alt="Audio tab"></td>
   </tr>
   <tr>
+    <td width="50%"><img src="screenshots/crosshair.png" alt="Crosshair tab"></td>
     <td width="50%"><img src="screenshots/hotkeys.png" alt="Hotkeys tab"></td>
+  </tr>
+  <tr>
     <td width="50%"><img src="screenshots/settings.png" alt="Settings tab"></td>
+    <td width="50%"></td>
   </tr>
 </table>
 
@@ -29,7 +33,19 @@ Boost shadow brightness to spot enemies in dark games, switch to a warm night mo
 - 🖥️ **Display Presets:** Instant profiles like *Competitive*, *Cinema*, *Daylight*, and *Night*, plus custom brightness, contrast, and color dials.
 - 🎧 **Audio Presets & EQ:** Sound profiles and a multi-band equalizer (via free [FxSound](https://www.fxsound.com/)) with automatic distortion protection.
 - ⌨️ **One-Key Switching:** Link a screen preset + a sound preset to a single hotkey (e.g. `Ctrl+Shift+1`) or have it turn on automatically when a game starts.
-- 🪶 **Lightweight & Clean:** No accounts, no background telemetry, no installer. Lives quietly in your system tray.
+- 🎯 **Crosshair Overlay:** Eight minimal shapes in six high-contrast colors (or any color from the built-in picker), plus a browsable pack of ready-made crosshair PNGs. Size, thickness, gap, opacity, rotation, outline, glow and an optional center dot all work on shapes *and* pictures. Pick one per slot, or toggle and cycle them with their own hotkeys.
+- 🪶 **Lightweight & Clean:** No accounts, no background telemetry, no installer. Lives quietly in your system tray, where you can toggle or switch your crosshair without opening the window.
+
+## 🎯 Crosshair notes
+
+- It is a small click-through window that only draws pixels. It never touches the game, injects anything or reads game memory, and it uses no CPU while sitting on screen.
+- It shows over **borderless** and **windowed** games. A game in true **exclusive fullscreen** hides it, so switch the game to borderless.
+- Some tournaments and leagues ban any overlay. Turn it off for those.
+- **Add your own crosshair PNGs:** click **Browse pack...** on the Crosshair tab, then **Open folder**, and drop any PNG files (any file names) into it. The folder is `%AppData%\GamerTool\crosshair-pack` (beside the program in portable mode) and is created on first launch from the pictures built into the exe. It is read each time the browser opens, so new files just appear. In the source tree the starter pictures live in `app\Assets\crosshairs` and are embedded at build time.
+- White-on-transparent pictures work best, because the color slider tints them. Thickness above 2 makes a picture's lines bolder, and outline, glow, opacity, size and rotation apply to it too.
+- **Import PNG...** is for a one-off file. Imports are PNG only, checked, shrunk to 256 px and re-saved by the app.
+- **Export PNG** saves the current crosshair as a transparent picture at its real size.
+- The crosshair appears on the monitor that holds the foreground (game) window. Screen recording will include it.
 
 ---
 

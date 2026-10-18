@@ -302,6 +302,29 @@ public sealed class AppSettings
     public List<ComboPreset> CustomCombos { get; set; } = new();
 
     /// <summary>
+    /// The crosshair loaded on the Crosshair tab: a built in id or one of
+    /// <see cref="CustomCrosshairs"/>. Remembered so the tab opens on what was
+    /// last used. Having one selected does not put anything on the screen.
+    /// </summary>
+    public string ActiveCrosshairId { get; set; } = "xh-classic";
+
+    /// <summary>
+    /// Global key that shows and hides the crosshair. Empty by default, like the
+    /// bypass key, because a key nobody chose could be one a game already uses.
+    /// </summary>
+    public string CrosshairHotkey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Global key that steps to the next crosshair in the list, so one can be
+    /// swapped for another in the middle of a game. Empty by default for the same
+    /// reason as <see cref="CrosshairHotkey"/>.
+    /// </summary>
+    public string CrosshairCycleHotkey { get; set; } = string.Empty;
+
+    /// <summary>Crosshairs the user saved. The built in ones are not stored here.</summary>
+    public List<CrosshairPreset> CustomCrosshairs { get; set; } = new();
+
+    /// <summary>
     /// Bumped whenever a change has to be pushed into settings that already exist
     /// on disk. The property initialisers above only ever apply to a brand new
     /// profile, so anything that changes a default needs a matching step here or
@@ -380,6 +403,10 @@ public sealed class AppSettings
             && CustomDisplayPresets.Count == 0
             && CustomAudioPresets.Count == 0
             && CustomCombos.Count == 0
+            && CustomCrosshairs.Count == 0
+            && ActiveCrosshairId == fresh.ActiveCrosshairId
+            && CrosshairHotkey == fresh.CrosshairHotkey
+            && CrosshairCycleHotkey == fresh.CrosshairCycleHotkey
             && AppProfiles.Count == 0
 
             // Empty rather than compared against the shipped slots, and the

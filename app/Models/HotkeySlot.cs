@@ -20,6 +20,13 @@ public sealed class HotkeySlot
 
     public string? AudioPresetId { get; set; }
 
+    /// <summary>
+    /// The crosshair this slot puts up, by id, or null for none. Part of the slot
+    /// the same way the screen and the sound are: loading the slot shows it and
+    /// standing the slot down takes it away again.
+    /// </summary>
+    public string? CrosshairPresetId { get; set; }
+
     public string Hotkey { get; set; } = string.Empty;
 
     public string? AppExePath { get; set; }
@@ -113,7 +120,9 @@ public sealed class HotkeySlot
     {
         get
         {
-            return !string.IsNullOrWhiteSpace(DisplayPresetId) || !string.IsNullOrWhiteSpace(AudioPresetId);
+            return !string.IsNullOrWhiteSpace(DisplayPresetId)
+                || !string.IsNullOrWhiteSpace(AudioPresetId)
+                || !string.IsNullOrWhiteSpace(CrosshairPresetId);
         }
     }
 
@@ -161,22 +170,33 @@ public sealed class HotkeySlot
         {
             bool hasScreen = !string.IsNullOrWhiteSpace(DisplayPresetId);
             bool hasSound = !string.IsNullOrWhiteSpace(AudioPresetId);
-            if (hasScreen && hasSound)
-            {
-                return "SCREEN + SOUND";
-            }
+            bool hasCrosshair = !string.IsNullOrWhiteSpace(CrosshairPresetId);
 
+            // One word per thing the slot does, joined. The original three
+            // phrases are unchanged when there is no crosshair, so nothing that
+            // matched on them is affected.
+            List<string> parts = new();
             if (hasScreen)
             {
-                return "SCREEN ONLY";
+                parts.Add("SCREEN");
             }
 
             if (hasSound)
             {
-                return "SOUND ONLY";
+                parts.Add("SOUND");
             }
 
-            return "NOTHING SET";
+            if (hasCrosshair)
+            {
+                parts.Add("CROSSHAIR");
+            }
+
+            if (parts.Count == 0)
+            {
+                return "NOTHING SET";
+            }
+
+            return parts.Count == 1 ? parts[0] + " ONLY" : string.Join(" + ", parts);
         }
     }
 
@@ -189,6 +209,7 @@ public sealed class HotkeySlot
             BuiltIn = BuiltIn,
             DisplayPresetId = DisplayPresetId,
             AudioPresetId = AudioPresetId,
+            CrosshairPresetId = CrosshairPresetId,
             Hotkey = Hotkey,
             AppExePath = AppExePath,
             AppName = AppName,

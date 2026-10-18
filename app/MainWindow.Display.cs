@@ -691,6 +691,18 @@ public partial class MainWindow : Window
     /// </summary>
     public void GoScreenNeutral(bool emergency = false)
     {
+        // Panic takes the crosshair away whoever put it there. A normal reset only
+        // takes one a slot put up, since a hand-made one is nothing to do with the
+        // screen being reset.
+        if (emergency)
+        {
+            HideCrosshair();
+        }
+        else
+        {
+            HideSlotCrosshair();
+        }
+
         StandDownScreen(restorePanel: true, emergency);
     }
 
@@ -715,6 +727,7 @@ public partial class MainWindow : Window
     /// </summary>
     public void GoScreenStandDown()
     {
+        HideSlotCrosshair();
         StandDownScreen(restorePanel: _presetOwnsPanel);
     }
 

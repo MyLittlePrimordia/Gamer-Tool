@@ -53,10 +53,15 @@ internal readonly record struct AdvancedColorFlags(
     /// perfectly well.
     /// </para>
     /// <para>
-    /// Working assumption, to be calibrated against a real panel in 2.3. If that
-    /// calibration shows advanced colour and HDR are indistinguishable here, this is
-    /// the line to change and the tests to change with it.
+    /// Working assumption, to be calibrated against a real panel (A-001/I-003).
+    /// Until calibrated, callers must treat this as advisory: when false the
+    /// Display tab says "Can't tell whether HDR is on; if colors don't change,
+    /// turn HDR off in Windows" rather than claiming SDR. Record captured flag
+    /// values in AdvancedColorTests when calibrating and update this rule.
     /// </para>
     /// </summary>
     public bool HdrOn => Enabled && !WideColorEnforced;
+
+    /// <summary>True only when the flags positively say SDR (advanced colour off).</summary>
+    public bool DefinitelySdr => !Enabled;
 }

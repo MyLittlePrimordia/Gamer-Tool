@@ -18,6 +18,23 @@ namespace GamerTool.Tests;
 /// </summary>
 public class AdvancedColorTests
 {
+    [Theory]
+    // A-001 calibration anchors (owner: replace with captured panel values).
+    // SDR: advanced colour off. SDR+ACM: on + wide enforced, still SDR.
+    // HDR on: on, wide not enforced. Locked off: force-disabled.
+    [InlineData(0x0u, false, true)]  // nothing on: SDR, definitely
+    [InlineData(0x1u, false, true)]  // capable, not enabled: SDR
+    [InlineData(0x6u, false, false)] // enabled + wide enforced: SDR w/ ACM
+    [InlineData(0x2u, true, false)]  // enabled only: HDR (assumption)
+    [InlineData(0x3u, true, false)]  // enabled + capable: HDR (assumption)
+    [InlineData(0x8u, false, true)] // force-disabled: advanced colour off, SDR
+    public void HdrHeuristic_Anchors(uint value, bool hdrOn, bool definitelySdr)
+    {
+        var flags = AdvancedColorFlags.Decode(value);
+        Assert.Equal(hdrOn, flags.HdrOn);
+        Assert.Equal(definitelySdr, flags.DefinitelySdr);
+    }
+
     /// <remarks>
     /// The layout Windows documents, restated here independently of the production
     /// struct. If the real one ever changes, this is the copy that should disagree

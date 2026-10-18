@@ -405,8 +405,35 @@ public partial class MainWindow : Window
             // The engine's own complaint still outranks the update note, because it
             // is the more urgent of the two, but it no longer replaces the line. It
             // is appended to it, so a version is on screen in every state.
+            // U-001: a too-old engine fails silently (ignored flags), so say so
+            // plainly with the action. Version comes from the snapshot; when
+            // absent fall back to the exe on disk.
+            string gateNote = string.Empty;
+            string gateVersion = installed;
+            if (gateVersion.Length == 0)
+            {
+                try
+                {
+                    string exe = _audio.ExePath;
+                    if (System.IO.File.Exists(exe))
+                    {
+                        var info = System.Diagnostics.FileVersionInfo.GetVersionInfo(exe);
+                        gateVersion = (info.ProductVersion ?? string.Empty).Split(' ')[0].Trim();
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            if (SetupService.IsFxSoundTooOld(gateVersion))
+            {
+                gateNote = "  ·  FxSound " + gateVersion + " is too old for EQ control (needs "
+                    + SetupService.MinFxSoundVersion + "+). Update.";
+            }
+
             FxVersionText.Text = (installed.Length > 0 ? "Installed " + installed : "Installed") + "  ·  "
-                + (health.Detail.Length > 0 ? health.Detail : update);
+                + (health.Detail.Length > 0 ? health.Detail : update) + gateNote;
 
             FxInstallButton.Visibility = Visibility.Collapsed;
 

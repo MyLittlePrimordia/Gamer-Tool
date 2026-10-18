@@ -482,7 +482,12 @@ public sealed class AppLibraryService
         foreach (Func<IReadOnlyList<AppCandidate>> source in new Func<IReadOnlyList<AppCandidate>>[]
         {
             ScanEpic,
-            ScanGog
+            ScanGog,
+            ScanBattleNet,
+            ScanEaApp,
+            ScanUbisoft,
+            ScanRiot,
+            ScanXbox,
         })
         {
             try
@@ -812,6 +817,100 @@ public sealed class AppLibraryService
             TraceLog.Write(source, ex);
             return null;
         }
+    }
+
+    /// <summary>
+    /// N-003 launcher scanners. Each follows the Epic/GOG rule: fail quietly,
+    /// return empty when the launcher is absent. Registry + known folders only;
+    /// no launcher APIs. One scanner per commit is fine — they are independent.
+    /// </summary>
+    public IReadOnlyList<AppCandidate> ScanBattleNet()
+        => ScanRegistryUninstall("BATTLENET", "Battle.net", "Battle.net");
+
+    public IReadOnlyList<AppCandidate> ScanEaApp()
+        => ScanRegistryUninstall("EA", "Electronic Arts", "EA app");
+
+    public IReadOnlyList<AppCandidate> ScanUbisoft()
+        => ScanRegistryUninstall("UBISOFT", "Ubisoft", "Ubisoft Connect");
+
+    public IReadOnlyList<AppCandidate> ScanRiot()
+        => ScanRegistryUninstall("RIOT", "Riot Games", "Riot Client");
+
+    /// <summary>
+    /// Xbox / Game Pass Store apps live under WindowsApps (no folder access).
+    /// Best-effort: read Start-menu links + registry publishers; the running
+    /// scan + manual add cover the rest. Returns empty rather than guessing.
+    /// </summary>
+    public IReadOnlyList<AppCandidate> ScanXbox()
+    {
+        try
+        {
+            return ScanRegistryUninstall("XBOX", "Microsoft Studios", "Xbox");
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("XBOX", ex);
+            return Array.Empty<AppCandidate>();
+        }
+    }
+
+    /// <summary>
+    /// Titles under a registry uninstall publisher fragment. Reads
+    /// DisplayName + InstallLocation, resolves via <see cref="LauncherEntry"/>.
+    /// </summary>
+    internal IReadOnlyList<AppCandidate> ScanRegistryUninstall(string source, string publisherFragment, string logTag)
+    {
+        List<AppCandidate> found = new();
+        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (string hive in new[]
+            {
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+            })
+            {
+                foreach (var baseKey in new[] { Registry.LocalMachine, Registry.CurrentUser })
+                {
+                    using RegistryKey? root = baseKey.OpenSubKey(hive);
+                    if (root is null)
+                    {
+                        continue;
+                    }
+
+                    foreach (string sub in root.GetSubKeyNames())
+                    {
+                        try
+                        {
+                            using RegistryKey? k = root.OpenSubKey(sub);
+                            if (k is null)
+                            {
+                                continue;
+                            }
+
+                            string publisher = (k.GetValue("Publisher") as string) ?? string.Empty;
+                            if (!publisher.Contains(publisherFragment, StringComparison.OrdinalIgnoreCase))
+                            {
+                                continue;
+                            }
+
+                            string name = (k.GetValue("DisplayName") as string) ?? string.Empty;
+                            string loc = (k.GetValue("InstallLocation") as string) ?? string.Empty;
+                            AddLauncherEntry(found, seen, loc, name, source);
+                        }
+                        catch
+                        {
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write(logTag, ex);
+        }
+
+        return found;
     }
 
     public IReadOnlyList<string> SteamRoots()

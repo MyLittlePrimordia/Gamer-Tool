@@ -136,6 +136,7 @@ new HotkeySlot
         copy.Name = string.IsNullOrWhiteSpace(source.Name) ? "SLOT" : source.Name + " copy";
         copy.DisplayPresetId = source.DisplayPresetId;
         copy.AudioPresetId = source.AudioPresetId;
+        copy.CrosshairPresetId = source.CrosshairPresetId;
         copy.MonitorDevice = source.MonitorDevice;
         copy.ApplyOnStart = source.ApplyOnStart;
         copy.Enabled = source.Enabled;
@@ -588,6 +589,16 @@ public static void ResolveAutoClaims(List<HotkeySlot> slots)
     public static bool IsLoaded(HotkeySlot slot, string activeDisplayId, string activeAudioId)
     {
         if (!slot.HasWork)
+        {
+            return false;
+        }
+
+        // A slot that only puts up a crosshair has no screen or sound to compare,
+        // and both halves below would count as matching, so it would read as
+        // loaded for ever and its key could only ever turn it off. Whether its
+        // crosshair is up is the window's to say, not something the loaded
+        // presets can answer.
+        if (string.IsNullOrWhiteSpace(slot.DisplayPresetId) && string.IsNullOrWhiteSpace(slot.AudioPresetId))
         {
             return false;
         }

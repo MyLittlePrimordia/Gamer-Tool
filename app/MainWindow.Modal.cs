@@ -673,7 +673,9 @@ public partial class MainWindow : Window
             || stage.Percent != _modalLastStage.Percent
             || stage.Indeterminate != _modalLastStage.Indeterminate)
         {
-            _modalStageSince = DateTime.Now;
+            // UtcNow: pure elapsed for a progress readout; local time going
+            // back an hour must not rewind the "Xs" counter.
+            _modalStageSince = DateTime.UtcNow;
         }
 
         _modalLastStage = stage;
@@ -715,7 +717,7 @@ public partial class MainWindow : Window
 
         if (_modalElapsed is not null && _modalStageSince != DateTime.MinValue)
         {
-            int seconds = (int)(DateTime.Now - _modalStageSince).TotalSeconds;
+            int seconds = (int)(DateTime.UtcNow - _modalStageSince).TotalSeconds;
             if (seconds >= 1)
             {
                 text = text + "   " + seconds.ToString(System.Globalization.CultureInfo.InvariantCulture) + "s";
@@ -730,7 +732,7 @@ public partial class MainWindow : Window
     {
         StopModalElapsed();
 
-        _modalStageSince = DateTime.Now;
+        _modalStageSince = DateTime.UtcNow;
         _modalElapsed = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
         _modalElapsed.Tick += OnModalElapsedTick;
         _modalElapsed.Start();

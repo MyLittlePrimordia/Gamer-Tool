@@ -127,7 +127,7 @@ public sealed class WatchedWindow
     /// remembered window outliving its usefulness is the case that matters.
     /// </summary>
     internal bool HasRecentForeign =>
-        _lastForeign is not null && DateTime.Now - _lastForeignAt < RecentForeignWindow;
+        _lastForeign is not null && DateTime.UtcNow - _lastForeignAt < RecentForeignWindow;
 
     public event Action<WatchedWindow>? ForegroundChanged;
 
@@ -307,7 +307,7 @@ public sealed class WatchedWindow
                 // game left running for longer than the window would grey out the
                 // button while they were still sitting in front of it.
                 _lastForeign = window;
-                _lastForeignAt = DateTime.Now;
+                _lastForeignAt = DateTime.UtcNow;
 
                 string key = window.ExePath + "|" + window.ProcessName;
                 if (!string.Equals(key, _lastKey, StringComparison.OrdinalIgnoreCase))

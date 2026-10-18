@@ -191,9 +191,9 @@ public partial class MainWindow : Window
     /// </summary>
     private static readonly GridLength[] SlotColumns =
     {
-        new(140), new(10), new(100), new(10), new(160), new(10),
-        new(160), new(10), new(118), new(10), new(180), new(10),
-        new(1, GridUnitType.Star), new(10), new(30)
+        new(120), new(10), new(100), new(10), new(142), new(10),
+        new(142), new(10), new(116), new(10), new(100), new(10),
+        new(130), new(10), new(1, GridUnitType.Star), new(10), new(30)
     };
 
     /// <summary>
@@ -256,8 +256,9 @@ public partial class MainWindow : Window
             (2, "HOTKEY"),
             (4, "DISPLAY"),
             (6, "SOUND"),
-            (8, "MONITOR"),
-            (10, "OUTPUT"),
+            (8, "CROSSHAIR"),
+            (10, "MONITOR"),
+            (12, "OUTPUT"),
 
             // "Autostart" rather than "Game", because that is what the column
             // decides. The dropdown is the only place auto-apply is set - picking
@@ -265,7 +266,7 @@ public partial class MainWindow : Window
             // describes what this control is for is the behaviour, not the
             // program. It is also the one that says what the column is for
             // without having to already know the app is what it is for.
-            (12, "AUTOSTART"),
+            (14, "AUTOSTART"),
         };
 
         foreach ((int column, string text) in captions)
@@ -531,11 +532,14 @@ public partial class MainWindow : Window
         ComboBox soundBox = PresetCombo("audio", slot);
         Grid.SetColumn(soundBox, 6);
 
+        ComboBox crosshairBox = CrosshairCombo(slot);
+        Grid.SetColumn(crosshairBox, 8);
+
         ComboBox monitorBox = MonitorCombo(slot);
-        Grid.SetColumn(monitorBox, 8);
+        Grid.SetColumn(monitorBox, 10);
 
         ComboBox outputBox = OutputCombo(slot);
-        Grid.SetColumn(outputBox, 10);
+        Grid.SetColumn(outputBox, 12);
 
         // The game picker is on this row, not the other one. It is what fills
         // the space the name was floating in, and it belongs beside the key it
@@ -544,7 +548,7 @@ public partial class MainWindow : Window
         // way - an installed program's name - so it is the column that most
         // needed the room.
         ComboBox appBox = AppCombo(slot);
-        Grid.SetColumn(appBox, 12);
+        Grid.SetColumn(appBox, 14);
 
         IconButton remove = new()
         {
@@ -569,12 +573,13 @@ public partial class MainWindow : Window
             RegisterHotkeys();
             ApplyWatchState();
         };
-        Grid.SetColumn(remove, 14);
+        Grid.SetColumn(remove, 16);
 
         row.Children.Add(namePlate);
         row.Children.Add(keyBox);
         row.Children.Add(displayBox);
         row.Children.Add(soundBox);
+        row.Children.Add(crosshairBox);
         row.Children.Add(monitorBox);
         row.Children.Add(outputBox);
         row.Children.Add(appBox);
@@ -766,6 +771,36 @@ public partial class MainWindow : Window
 
         slot.MonitorDevice = choice.Device;
         Commit();
+    }
+
+
+    /// <summary>
+    /// The crosshair a slot puts up. Same dropdown as the screen and sound ones,
+    /// and it lands on the same handler, which is why its tag has the same shape.
+    /// </summary>
+    private ComboBox CrosshairCombo(HotkeySlot slot)
+    {
+        List<PresetChoice> choices = new() { new PresetChoice { Kind = "crosshair", Id = string.Empty, Name = "No crosshair" } };
+        foreach (CrosshairPreset preset in AllCrosshairs())
+        {
+            choices.Add(new PresetChoice { Kind = "crosshair", Id = preset.Id, Name = preset.Name });
+        }
+
+        ComboBox box = new()
+        {
+            Style = (Style)FindResource("ModernCombo"),
+            ItemContainerStyle = (Style)FindResource("ModernComboItem"),
+            ItemsSource = choices,
+            Tag = slot.Id + "|crosshair",
+            ToolTip = "Crosshair"
+        };
+        System.Windows.Automation.AutomationProperties.SetName(box, "Crosshair for " + slot.Name);
+        MarqueeBox.SetAllowMarquee(box, true);
+
+        int index = choices.FindIndex(c => string.Equals(c.Id, slot.CrosshairPresetId, StringComparison.OrdinalIgnoreCase));
+        box.SelectedIndex = index < 0 ? 0 : index;
+        box.SelectionChanged += OnSlotPresetChanged;
+        return box;
     }
 
 
@@ -1177,6 +1212,14 @@ public partial class MainWindow : Window
     /// </summary>
     private const int BypassHotkeyId = 1001;
 
+    private const int CrosshairHotkeyId = 1002;
+
+    private const string CrosshairTargetId = "crosshair";
+
+    private const int CrosshairCycleHotkeyId = 1003;
+
+    private const string CrosshairCycleTargetId = "crosshair-cycle";
+
 
     private static bool SameTarget(HotkeySlot a, HotkeySlot b)
     {
@@ -1290,6 +1333,10 @@ public partial class MainWindow : Window
         if (parts[1] == "display")
         {
             slot.DisplayPresetId = choice.Id.Length == 0 ? null : choice.Id;
+        }
+        else if (parts[1] == "crosshair")
+        {
+            slot.CrosshairPresetId = choice.Id.Length == 0 ? null : choice.Id;
         }
         else
         {
@@ -1613,7 +1660,7 @@ public partial class MainWindow : Window
         DisplayPreset? display = FindDisplay(slot.DisplayPresetId);
         AudioPreset? audio = FindAudio(slot.AudioPresetId);
 
-        if (display is null && audio is null)
+        if (display is null && audio is null && FindCrosshair(slot.CrosshairPresetId) is null)
         {
             // There is nothing to load, so nothing is about to be loaded. Saying
             // otherwise left the status bar and the toast claiming a preset that
@@ -1651,6 +1698,10 @@ public partial class MainWindow : Window
         {
             Flash(slot.Name + " loaded");
         }
+
+        // The crosshair goes up whether or not the screen took its preset, and on a
+        // resume after an alt-tab as well, because standing the screen down hid it.
+        ApplySlotCrosshair(slot);
 
         if (audio is not null && !screenOnly)
         {
@@ -2575,6 +2626,44 @@ public partial class MainWindow : Window
             }
         }
 
+        // The crosshair key goes in after the bypass key and before the slots, the
+        // same way: a slot gives way to it, never the other way round.
+        if (!string.IsNullOrWhiteSpace(_settings.CrosshairHotkey))
+        {
+            string crosshairKey = HotkeyService.Normalise(_settings.CrosshairHotkey);
+
+            if (taken.Add(crosshairKey))
+            {
+                if (!_hotkeys.Register(CrosshairHotkeyId, CrosshairTargetId, _settings.CrosshairHotkey))
+                {
+                    taken.Remove(crosshairKey);
+                    refusedKeys.Add(_settings.CrosshairHotkey);
+                }
+            }
+            else
+            {
+                skipped.Add(new HotkeySlot { Name = "crosshair key" });
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(_settings.CrosshairCycleHotkey))
+        {
+            string cycleKey = HotkeyService.Normalise(_settings.CrosshairCycleHotkey);
+
+            if (taken.Add(cycleKey))
+            {
+                if (!_hotkeys.Register(CrosshairCycleHotkeyId, CrosshairCycleTargetId, _settings.CrosshairCycleHotkey))
+                {
+                    taken.Remove(cycleKey);
+                    refusedKeys.Add(_settings.CrosshairCycleHotkey);
+                }
+            }
+            else
+            {
+                skipped.Add(new HotkeySlot { Name = "crosshair cycle key" });
+            }
+        }
+
         foreach (HotkeySlot slot in _settings.Slots)
         {
             if (!string.IsNullOrWhiteSpace(slot.Hotkey) && slot.Enabled)
@@ -2674,6 +2763,18 @@ public partial class MainWindow : Window
                 Flash(BypassBox.IsChecked == true ? "Sound effects off" : "Sound effects on");
                 TraceLog.Write("BYPASS key pressed, effects "
                     + (BypassBox.IsChecked == true ? "off" : "on"));
+                return;
+            }
+
+            if (string.Equals(binding.TargetId, CrosshairTargetId, StringComparison.OrdinalIgnoreCase))
+            {
+                ToggleCrosshairFromKey();
+                return;
+            }
+
+            if (string.Equals(binding.TargetId, CrosshairCycleTargetId, StringComparison.OrdinalIgnoreCase))
+            {
+                CycleCrosshairFromKey();
                 return;
             }
 
@@ -2792,6 +2893,21 @@ public partial class MainWindow : Window
             return;
         }
 
+        // A slot that only puts up a crosshair has no screen or sound to compare, so
+        // whether it is "loaded" is whether its crosshair is up.
+        if (string.IsNullOrWhiteSpace(slot.DisplayPresetId) && string.IsNullOrWhiteSpace(slot.AudioPresetId))
+        {
+            if (_xhVisible && _xhBySlot)
+            {
+                HideCrosshair();
+                Flash(slot.Name + " off");
+                return;
+            }
+
+            PlaySlot(slot, true, deliberate: true);
+            return;
+        }
+
         if (SlotService.IsLoaded(slot, _activeDisplayId, _activeAudioId))
         {
             // A stand-down, not a hard reset. The user is turning a preset off, not
@@ -2854,9 +2970,13 @@ public partial class MainWindow : Window
     /// <param name="which">Which of the two this is.</param>
     private void WireKeycap(TextBox box, KeycapCapture which)
     {
-        Func<string> read = () => which == KeycapCapture.Panic
-            ? _settings.EmergencyHotkey
-            : _settings.BypassHotkey;
+        Func<string> read = () => which switch
+        {
+            KeycapCapture.Panic => _settings.EmergencyHotkey,
+            KeycapCapture.Crosshair => _settings.CrosshairHotkey,
+            KeycapCapture.CrosshairCycle => _settings.CrosshairCycleHotkey,
+            _ => _settings.BypassHotkey
+        };
 
         Describe(box, read());
 
@@ -2883,8 +3003,13 @@ public partial class MainWindow : Window
     }
 
     /// <summary>The name a keycap uses in a message.</summary>
-    private static string LabelOf(KeycapCapture which) =>
-        which == KeycapCapture.Panic ? "Panic key" : "Bypass key";
+    private static string LabelOf(KeycapCapture which) => which switch
+    {
+        KeycapCapture.Panic => "Panic key",
+        KeycapCapture.Crosshair => "Crosshair key",
+        KeycapCapture.CrosshairCycle => "Crosshair cycle key",
+        _ => "Bypass key"
+    };
 
     /// <summary>
     /// What a non-slot keycap shows when it is not listening.
@@ -2924,6 +3049,20 @@ public partial class MainWindow : Window
         {
             clash.Hotkey = string.Empty;
             Flash("Panic key took it from " + clash.Name);
+        }
+
+        if (string.Equals(HotkeyService.Normalise(_settings.CrosshairHotkey), wanted, StringComparison.Ordinal))
+        {
+            _settings.CrosshairHotkey = string.Empty;
+            ShowSlotKey(CrosshairKeyBox, string.Empty);
+            Flash("Panic key took it from the crosshair key");
+        }
+
+        if (string.Equals(HotkeyService.Normalise(_settings.CrosshairCycleHotkey), wanted, StringComparison.Ordinal))
+        {
+            _settings.CrosshairCycleHotkey = string.Empty;
+            ShowSlotKey(CrosshairCycleKeyBox, string.Empty);
+            Flash("Panic key took it from the crosshair cycle key");
         }
 
         _settings.EmergencyHotkey = text;
@@ -2969,6 +3108,20 @@ public partial class MainWindow : Window
         {
             clash.Hotkey = string.Empty;
             Flash("Bypass key took it from " + clash.Name);
+        }
+
+        if (string.Equals(HotkeyService.Normalise(_settings.CrosshairHotkey), wanted, StringComparison.Ordinal))
+        {
+            _settings.CrosshairHotkey = string.Empty;
+            ShowSlotKey(CrosshairKeyBox, string.Empty);
+            Flash("Bypass key took it from the crosshair key");
+        }
+
+        if (string.Equals(HotkeyService.Normalise(_settings.CrosshairCycleHotkey), wanted, StringComparison.Ordinal))
+        {
+            _settings.CrosshairCycleHotkey = string.Empty;
+            ShowSlotKey(CrosshairCycleKeyBox, string.Empty);
+            Flash("Bypass key took it from the crosshair cycle key");
         }
 
         _settings.BypassHotkey = text;
@@ -3019,6 +3172,126 @@ public partial class MainWindow : Window
     /// rather than rebuilt with the rest of the page, because the box is declared
     /// in the page and lives as long as the window does.
     /// </summary>
+    private void BindCrosshairHotkey(string text)
+    {
+        string wanted = HotkeyService.Normalise(text);
+
+        if (string.Equals(HotkeyService.Normalise(_settings.EmergencyHotkey), wanted, StringComparison.Ordinal))
+        {
+            EndCapture(restore: true);
+            Flash("That is the panic key already", true);
+            return;
+        }
+
+        if (string.Equals(HotkeyService.Normalise(_settings.BypassHotkey), wanted, StringComparison.Ordinal))
+        {
+            EndCapture(restore: true);
+            Flash("That is the bypass key already", true);
+            return;
+        }
+
+        HotkeySlot? clash = _settings.Slots.FirstOrDefault(s =>
+            s.Enabled
+            && string.Equals(HotkeyService.Normalise(s.Hotkey), wanted, StringComparison.Ordinal));
+
+        if (clash is not null)
+        {
+            clash.Hotkey = string.Empty;
+            Flash("Crosshair key took it from " + clash.Name);
+        }
+
+        if (string.Equals(HotkeyService.Normalise(_settings.CrosshairCycleHotkey), wanted, StringComparison.Ordinal))
+        {
+            _settings.CrosshairCycleHotkey = string.Empty;
+            ShowSlotKey(CrosshairCycleKeyBox, string.Empty);
+            Flash("Crosshair key took it from the cycle key");
+        }
+
+        _settings.CrosshairHotkey = text;
+        EndCapture(restore: false);
+        Commit();
+        ShowSlotKey(CrosshairKeyBox, text);
+        BuildSlots();
+        RegisterHotkeys();
+        Flash("Crosshair key set to " + text);
+    }
+
+
+    private void BindCrosshairCycleHotkey(string text)
+    {
+        string wanted = HotkeyService.Normalise(text);
+
+        if (string.Equals(HotkeyService.Normalise(_settings.EmergencyHotkey), wanted, StringComparison.Ordinal))
+        {
+            EndCapture(restore: true);
+            Flash("That is the panic key already", true);
+            return;
+        }
+
+        if (string.Equals(HotkeyService.Normalise(_settings.BypassHotkey), wanted, StringComparison.Ordinal))
+        {
+            EndCapture(restore: true);
+            Flash("That is the bypass key already", true);
+            return;
+        }
+
+        if (string.Equals(HotkeyService.Normalise(_settings.CrosshairHotkey), wanted, StringComparison.Ordinal))
+        {
+            EndCapture(restore: true);
+            Flash("That is the crosshair key already", true);
+            return;
+        }
+
+        HotkeySlot? clash = _settings.Slots.FirstOrDefault(s =>
+            s.Enabled
+            && string.Equals(HotkeyService.Normalise(s.Hotkey), wanted, StringComparison.Ordinal));
+
+        if (clash is not null)
+        {
+            clash.Hotkey = string.Empty;
+            Flash("Cycle key took it from " + clash.Name);
+        }
+
+        _settings.CrosshairCycleHotkey = text;
+        EndCapture(restore: false);
+        Commit();
+        ShowSlotKey(CrosshairCycleKeyBox, text);
+        BuildSlots();
+        RegisterHotkeys();
+        Flash("Crosshair cycle key set to " + text);
+    }
+
+
+    private void ClearCrosshairCycleHotkey()
+    {
+        if (!string.IsNullOrWhiteSpace(_settings.CrosshairCycleHotkey))
+        {
+            _settings.CrosshairCycleHotkey = string.Empty;
+            Flash("Crosshair cycle key cleared");
+        }
+
+        EndCapture(restore: false);
+        Commit();
+        ShowSlotKey(CrosshairCycleKeyBox, _settings.CrosshairCycleHotkey);
+        RegisterHotkeys();
+    }
+
+
+    private void ClearCrosshairHotkey()
+    {
+        if (!string.IsNullOrWhiteSpace(_settings.CrosshairHotkey))
+        {
+            _settings.CrosshairHotkey = string.Empty;
+            Flash("Crosshair key cleared");
+        }
+
+        EndCapture(restore: false);
+        Commit();
+        ShowSlotKey(CrosshairKeyBox, _settings.CrosshairHotkey);
+        RegisterHotkeys();
+    }
+
+
     private void WirePanicKeycap()
     {
         WireKeycap(PanicKeyBox, KeycapCapture.Panic);

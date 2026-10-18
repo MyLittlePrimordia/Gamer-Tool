@@ -164,6 +164,7 @@ public partial class MainWindow : Window
         _workAudio = (FindAudio(_settings.ActiveAudioPresetId) ?? AudioPreset.Flat()).Copy();
         _activeDisplayId = _workDisplay.Id;
         _activeAudioId = _workAudio.Id;
+        ReloadCrosshairFromSettings();
 
         // The picker is refilled from a worker. Enumerating the output devices
         // means asking the engine, which is the slowest thing in the app, and this
