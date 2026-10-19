@@ -205,7 +205,62 @@ public sealed class ProfileManager
             return Normalize(recovered, brandNew: false);
         }
 
+        // The one backup is the previous save, so a mistake that was saved twice has
+        // overwritten it too. The daily copies are older and survive that.
+        foreach (string day in SettingsSnapshots.Newest(SafeList(_folder, SettingsSnapshots.Pattern)))
+        {
+            if (TryRead(day, out _) is { } dayJson && TryParse(dayJson, out AppSettings fromDay))
+            {
+                AppLog.Warn("SETTINGS recovered from " + Path.GetFileName(day));
+                RecoveredFromBackup = true;
+                return Normalize(fromDay, brandNew: false);
+            }
+        }
+
         return Normalize(new AppSettings(), brandNew: true);
+    }
+
+    private static string[] SafeList(string folder, string pattern)
+    {
+        try
+        {
+            return Directory.GetFiles(folder, pattern);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
+    /// Once a day, before the first save of that day replaces the file, keep a copy
+    /// of it, and keep only the newest few. Best effort: a failed snapshot must
+    /// never stop the save it comes before.
+    /// </summary>
+    private void SnapshotDaily()
+    {
+        try
+        {
+            if (!File.Exists(SettingsPath))
+            {
+                return;
+            }
+
+            string day = Path.Combine(_folder, SettingsSnapshots.NameFor(DateTime.Now));
+            if (!File.Exists(day))
+            {
+                File.Copy(SettingsPath, day);
+            }
+
+            foreach (string old in SettingsSnapshots.Surplus(SafeList(_folder, SettingsSnapshots.Pattern)))
+            {
+                File.Delete(old);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("SETTINGS DAILY SNAPSHOT", ex);
+        }
     }
 
     /// <summary>
@@ -447,6 +502,7 @@ public sealed class ProfileManager
                 stream.Flush(flushToDisk: true);
             }
 
+            SnapshotDaily();
             AtomicSwap(temp, SettingsPath);
         }
         catch (Exception ex)
