@@ -9,11 +9,11 @@ using System.Text;
 namespace GamerTool.Services;
 
 /// <summary>
-/// The crosshair pack: a folder of PNG pictures that is read when the browser
-/// opens.
+/// The crosshair pack: a folder of pictures, PNG, GIF, JPG or BMP, that is read
+/// when the browser opens.
 /// <para>
 /// Nothing about the pictures is known to the program ahead of time. There is no
-/// list, no manifest and no naming scheme: any PNG that is in the folder, or in a
+/// list, no manifest and no naming scheme: any picture that is in the folder, or in a
 /// folder inside it, is in the pack, whatever it is called. Drop a file in and it
 /// is there the next time the browser is opened, with no change to the program.
 /// </para>
@@ -21,8 +21,9 @@ namespace GamerTool.Services;
 /// The starter pictures are embedded in the executable, so the program is a
 /// single file. They are unpacked into <c>crosshair-pack</c> inside the app data
 /// folder (<c>%AppData%\GamerTool</c>, or beside the program in portable mode) the
-/// first time they are needed, and again when a new version ships pictures the
-/// folder does not have. A picture the user deleted stays deleted until then, and
+/// first time they are needed. A later version that ships a new picture adds it,
+/// and one that ships a corrected copy of a picture replaces the old copy, but only
+/// if the user never touched it. A picture the user deleted stays deleted, and
 /// nothing the user added or changed is ever overwritten.
 /// </para>
 /// </summary>
@@ -37,7 +38,7 @@ public static class CrosshairPack
     /// <summary>Prefix of the embedded pictures. The rest of the name is the path under the pack folder.</summary>
     private const string ResourcePrefix = "GamerTool.pack.";
 
-    /// <summary>Remembers which set of embedded pictures the folder was last filled from.</summary>
+    /// <summary>Remembers, for each starter picture, a fingerprint of what was last written to the folder.</summary>
     private const string MarkerName = ".seeded";
 
     private static readonly object SeedGate = new();
@@ -66,10 +67,9 @@ public static class CrosshairPack
     }
 
     /// <summary>
-    /// Copies the embedded pictures the folder is missing. Runs once per launch,
-    /// and does nothing at all unless the embedded set changed since the folder
-    /// was last filled, so a picture the user deleted is not brought back on every
-    /// start. Existing files are never overwritten.
+    /// Brings the folder up to date with the embedded pictures. Runs once per
+    /// launch. A picture the user deleted is not brought back, and a file the user
+    /// edited is never overwritten; see <see cref="PackSeedPolicy"/> for the rules.
     /// </summary>
     internal static void SeedFromExecutable()
     {
@@ -100,16 +100,15 @@ public static class CrosshairPack
             return;
         }
 
-        string signature = Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("|", names))));
-
         string root = Path.GetFullPath(Folder);
         string marker = Path.Combine(root, MarkerName);
+        string? markerText = File.Exists(marker) ? File.ReadAllText(marker) : null;
 
-        if (File.Exists(marker) && string.Equals(File.ReadAllText(marker).Trim(), signature, StringComparison.Ordinal))
-        {
-            return;
-        }
+        // What this program wrote last time, picture by picture. See PackSeedPolicy
+        // for why: it is what lets a corrected starter picture replace an old one
+        // without ever replacing one the user changed.
+        Dictionary<string, string> previous = PackSeedPolicy.ParseMarker(markerText);
+        Dictionary<string, string> current = new(StringComparer.Ordinal);
 
         string rootWithSeparator = root.EndsWith(Path.DirectorySeparatorChar)
             ? root
@@ -125,27 +124,75 @@ public static class CrosshairPack
 
             // The names come from this assembly, but a path that climbs out of the
             // folder is never one to write to.
-            if (!target.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase) || File.Exists(target))
+            if (!target.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            using Stream? source = app.GetManifestResourceStream(name);
-            if (source is null)
-            {
-                continue;
-            }
+            // The same key whichever way the build spelled the separator.
+            string key = relative.Replace(Path.DirectorySeparatorChar, '/');
+            bool seededBefore = previous.TryGetValue(key, out string? lastWritten);
 
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            using FileStream destination = File.Create(target);
-            source.CopyTo(destination);
+            try
+            {
+                byte[]? shipped = ReadResource(app, name);
+                if (shipped is null)
+                {
+                    continue;
+                }
+
+                string shippedHash = PackSeedPolicy.Hash(shipped);
+                bool onDisk = File.Exists(target);
+
+                // The disk copy is only read when it can change the answer: a file
+                // already known to match what ships has nothing to decide.
+                string? diskHash = onDisk && (!seededBefore || !string.Equals(lastWritten, shippedHash, StringComparison.Ordinal))
+                    ? PackSeedPolicy.Hash(File.ReadAllBytes(target))
+                    : null;
+
+                SeedAction action = PackSeedPolicy.Decide(onDisk, seededBefore, lastWritten, diskHash, shippedHash);
+                if (action == SeedAction.Write)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                    File.WriteAllBytes(target, shipped);
+                }
+
+                current[key] = PackSeedPolicy.Record(action, onDisk, seededBefore, lastWritten, diskHash, shippedHash);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // One picture held open by another program must not stop the rest.
+                // Its record carries over so the next launch tries it again.
+                AppLog.Error("CROSSHAIR PACK SEED", ex);
+                if (seededBefore)
+                {
+                    current[key] = lastWritten ?? string.Empty;
+                }
+            }
         }
 
-        File.WriteAllText(marker, signature);
+        string text = PackSeedPolicy.SerializeMarker(current);
+        if (!string.Equals(markerText, text, StringComparison.Ordinal))
+        {
+            File.WriteAllText(marker, text);
+        }
+    }
+
+    private static byte[]? ReadResource(Assembly app, string name)
+    {
+        using Stream? source = app.GetManifestResourceStream(name);
+        if (source is null)
+        {
+            return null;
+        }
+
+        using var copy = new MemoryStream();
+        source.CopyTo(copy);
+        return copy.ToArray();
     }
 
     /// <summary>
-    /// Every PNG in the pack, in a natural order: crosshair-2 before crosshair-10,
+    /// Every picture in the pack (PNG, GIF, JPG or BMP), in a natural order: crosshair-2 before crosshair-10,
     /// and a folder's pictures grouped together. Empty if there is no folder.
     /// </summary>
     public static List<string> List()
@@ -161,7 +208,7 @@ public static class CrosshairPack
 
             return Directory
                 .EnumerateFiles(Folder, "*.*", SearchOption.AllDirectories)
-                .Where(path => string.Equals(Path.GetExtension(path), ".png", StringComparison.OrdinalIgnoreCase))
+                .Where(CrosshairFileKinds.IsSupported)
                 .OrderBy(path => path, NaturalOrder.Instance)
                 .Take(MaxPictures)
                 .ToList();

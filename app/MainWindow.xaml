@@ -1817,12 +1817,9 @@
                                                 <RowDefinition Height="Auto" />
                                                 <RowDefinition Height="410" />
                                             </Grid.RowDefinitions>
-                                            <!-- Same three part header as the Audio spectrum card: title
-                                                 left, a short centred note, the scene pill right. The
-                                                 note used to be a third row under the picture, which
-                                                 made this card taller than the Display and Audio ones
-                                                 and gave it a different bottom edge. The long form is
-                                                 the tooltip on the picture. -->
+                                            <!-- Same header as the Audio spectrum card: title left, the
+                                                 scene pill right. The preview is true size, so there is
+                                                 no note about magnification to carry. -->
                                             <Grid Grid.Row="0" Margin="0,0,0,10">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -1830,8 +1827,6 @@
                                                     <ColumnDefinition Width="*" />
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Grid.Column="0" Style="{StaticResource SectionHeader}" Text="PREVIEW" Margin="0" VerticalAlignment="Center" />
-                                                <TextBlock Grid.Column="1" Style="{StaticResource CardSub}" VerticalAlignment="Center"
-                                                           Text="Shown 2x larger" />
                                                 <Button x:Name="XhSceneButton" Grid.Column="2" HorizontalAlignment="Right"
                                                         Style="{StaticResource PillTab}"
                                                         AutomationProperties.Name="Change the preview scene"
@@ -1840,12 +1835,12 @@
                                                 </Button>
                                             </Grid>
                                             <Border Grid.Row="1" CornerRadius="10" Background="#020202"
-                                                    ToolTip="Shown 2x larger here. Use Show on screen for true size."
+                                                    ToolTip="True size, aimed at the upper chest"
                                                     SizeChanged="OnXhPreviewFrameSizeChanged">
                                                 <Grid x:Name="XhPreviewClip">
                                                     <Image x:Name="XhPreviewImage" Stretch="UniformToFill"
                                                            RenderOptions.BitmapScalingMode="HighQuality" />
-                                                    <ui:CrosshairView x:Name="XhPreview" Magnification="2" />
+                                                    <ui:CrosshairView x:Name="XhPreview" />
                                                 </Grid>
                                             </Border>
                                         </Grid>
@@ -1863,13 +1858,13 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Style="{StaticResource SectionHeader}" Text="SHAPE" Margin="0" VerticalAlignment="Center" />
                                         <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                            <Button x:Name="XhPackButton" Content="Browse pack..." Style="{StaticResource GhostButton}"
+                                            <Button x:Name="XhPackButton" Content="Browse" Style="{StaticResource GhostButton}"
                                                     Margin="0,0,8,0" Click="OnXhPackClick"
                                                     AutomationProperties.Name="Browse the crosshair pack" />
-                                            <Button x:Name="XhImportButton" Content="Import PNG..." Style="{StaticResource GhostButton}"
+                                            <Button x:Name="XhImportButton" Content="Import" Style="{StaticResource GhostButton}"
                                                     Margin="0,0,8,0" Click="OnXhImportClick"
-                                                    AutomationProperties.Name="Import a PNG as a crosshair" />
-                                            <Button x:Name="XhExportButton" Content="Export PNG" Style="{StaticResource GhostButton}"
+                                                    AutomationProperties.Name="Import a picture or animated GIF as a crosshair" />
+                                            <Button x:Name="XhExportButton" Content="Export" Style="{StaticResource GhostButton}"
                                                     Click="OnXhExportClick"
                                                     AutomationProperties.Name="Export the crosshair as a PNG" />
                                         </StackPanel>
@@ -1909,7 +1904,7 @@
                                                         <WrapPanel x:Name="XhPackPanel" />
                                                         <TextBlock x:Name="XhPackEmpty" Style="{StaticResource CardSub}" TextWrapping="Wrap"
                                                                    Visibility="Collapsed" Margin="4,8,4,0"
-                                                                   Text="No pictures yet. Add PNGs with Open folder, then reopen." />
+                                                                   Text="No pictures yet. Add PNG, GIF or JPG files with Open folder, then reopen." />
                                                     </Grid>
                                                 </ScrollViewer>
                                             </Grid>

@@ -97,6 +97,15 @@ public sealed class CrosshairPreset
     /// <summary>The empty space at the middle of a cross, in pixels.</summary>
     public int Gap { get; set; } = 4;
 
+    /// <summary>
+    /// The same slider for a picture: how wide a hole is cleared at its middle, in
+    /// pixels. Kept apart from <see cref="Gap"/> because every preset already has a
+    /// Gap of 4 stored whether or not it is a cross, and a picture saved before
+    /// pictures had a gap must not suddenly lose the middle of itself. Zero, the
+    /// default, leaves the picture exactly as it is.
+    /// </summary>
+    public int PictureGap { get; set; }
+
     /// <summary>Percent, so the number on screen is the number stored.</summary>
     public int Opacity { get; set; } = 100;
 
@@ -115,7 +124,9 @@ public sealed class CrosshairPreset
     public bool Outline { get; set; } = true;
 
     /// <summary>
-    /// File name, not a path, of the imported image inside the crosshair folder.
+    /// File name, not a path, of the imported picture inside the crosshair folder.
+    /// An animation is stored as a strip of frames with a small timing file beside
+    /// it, and is named by its strip like any other picture.
     /// A name rather than a path so a portable install can be moved and a
     /// restored backup cannot point the app at an arbitrary file.
     /// </summary>
@@ -141,6 +152,7 @@ public sealed class CrosshairPreset
             Size = Size,
             Thickness = Thickness,
             Gap = Gap,
+            PictureGap = PictureGap,
             Opacity = Opacity,
             Rotation = Rotation,
             CenterDot = CenterDot,
@@ -164,6 +176,7 @@ public sealed class CrosshairPreset
         Size = Math.Clamp(Size, SizeMin, SizeMax);
         Thickness = Math.Clamp(Thickness, ThicknessMin, ThicknessMax);
         Gap = Math.Clamp(Gap, GapMin, GapMax);
+        PictureGap = Math.Clamp(PictureGap, GapMin, GapMax);
         Opacity = Math.Clamp(Opacity, OpacityMin, OpacityMax);
         Rotation = ((Rotation % 360) + 360) % 360;
         CustomImage = CustomImage ?? string.Empty;
@@ -180,6 +193,7 @@ public sealed class CrosshairPreset
             && Size == other.Size
             && Thickness == other.Thickness
             && Gap == other.Gap
+            && PictureGap == other.PictureGap
             && Opacity == other.Opacity
             && Rotation == other.Rotation
             && CenterDot == other.CenterDot

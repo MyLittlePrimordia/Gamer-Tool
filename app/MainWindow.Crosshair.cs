@@ -141,20 +141,24 @@ public partial class MainWindow
     /// restored backup on another machine say, draws as a cross rather than as
     /// nothing, so the user sees something is there.
     /// </summary>
-    private static CrosshairPreset EffectiveCrosshair(CrosshairPreset preset, out BitmapSource? image)
+    private static CrosshairPreset EffectiveCrosshair(CrosshairPreset preset, out CrosshairPicture? picture)
     {
-        image = null;
+        picture = null;
         if (preset.ShapeKind != CrosshairShape.Custom)
         {
             return preset;
         }
 
-        image = CrosshairImageStore.Load(preset.CustomImage);
-        if (image is not null)
+        picture = CrosshairImageStore.LoadPicture(preset.CustomImage);
+        if (picture is not null)
         {
             return preset;
         }
 
+        // Only what is drawn falls back to a cross. The preset keeps its picture
+        // name on purpose: a restored backup whose pictures have not arrived yet, or
+        // a file on a drive that is unplugged, shows the picture again as soon as it
+        // is back, and nothing here is ever written to the settings.
         CrosshairPreset fallback = preset.Copy();
         fallback.ShapeKind = CrosshairShape.Cross;
         return fallback;
@@ -201,7 +205,7 @@ public partial class MainWindow
             (CrosshairShape.Chevrons, "Chevrons"),
             (CrosshairShape.Triangle, "Triangle"),
             (CrosshairShape.T, "T"),
-            (CrosshairShape.Custom, "Your own picture")
+            (CrosshairShape.Custom, "Your own picture or animation")
         };
 
         foreach ((CrosshairShape shape, string tip) in shapes)
@@ -229,7 +233,7 @@ public partial class MainWindow
                 _xhCustomTileView = view;
                 _xhCustomTileHint = new TextBlock
                 {
-                    Text = "PNG",
+                    Text = "PIC",
                     FontSize = 11,
                     FontWeight = FontWeights.SemiBold,
                     Foreground = (Brush)FindResource("TextMid"),
@@ -343,7 +347,8 @@ public partial class MainWindow
         CrosshairShape.Cross,
         CrosshairShape.X,
         CrosshairShape.Chevrons,
-        CrosshairShape.T
+        CrosshairShape.T,
+        CrosshairShape.Custom
     };
 
     /// <summary>
@@ -402,7 +407,7 @@ public partial class MainWindow
 
             XhSizeSlider.Value = p.Size;
             XhThicknessSlider.Value = p.Thickness;
-            XhGapSlider.Value = p.Gap;
+            XhGapSlider.Value = p.ShapeKind == CrosshairShape.Custom ? p.PictureGap : p.Gap;
             XhOpacitySlider.Value = p.Opacity;
             XhRotationSlider.Value = p.Rotation;
             UpdateXhValueLabels();
@@ -419,9 +424,10 @@ public partial class MainWindow
             UpdateXhColorUi();
 
             // Only the controls that mean something for this shape are live. A dot
-            // has no thickness and no turn, a ring has no gap and looks the same
-            // however it is turned, and a picture has no gap either. Everything
-            // else, colour, outline, glow, opacity and size, works on all of them.
+            // has no thickness and no turn, and a ring has no gap and looks the same
+            // however it is turned. A picture has all of them: its gap opens a hole
+            // at its middle, the way a drawn cross opens. Everything else, colour,
+            // outline, glow, opacity and size, works on all of them.
             // Disabled groups are dimmed (not only IsEnabled) so the whole row
             // reads as inactive, not just the thumb.
             CrosshairShape kind = p.ShapeKind;
@@ -622,7 +628,18 @@ public partial class MainWindow
 
         _workCrosshair.Size = (int)XhSizeSlider.Value;
         _workCrosshair.Thickness = (int)XhThicknessSlider.Value;
-        _workCrosshair.Gap = (int)XhGapSlider.Value;
+
+        // The one slider drives whichever gap the shape uses, and leaves the other
+        // alone so switching shape back and forth does not lose either setting.
+        if (_workCrosshair.ShapeKind == CrosshairShape.Custom)
+        {
+            _workCrosshair.PictureGap = (int)XhGapSlider.Value;
+        }
+        else
+        {
+            _workCrosshair.Gap = (int)XhGapSlider.Value;
+        }
+
         _workCrosshair.Opacity = (int)XhOpacitySlider.Value;
         _workCrosshair.Rotation = (int)XhRotationSlider.Value;
         UpdateXhValueLabels();
@@ -686,8 +703,8 @@ public partial class MainWindow
             return;
         }
 
-        CrosshairPreset effective = EffectiveCrosshair(_workCrosshair, out BitmapSource? image);
-        XhPreview.Image = image;
+        CrosshairPreset effective = EffectiveCrosshair(_workCrosshair, out CrosshairPicture? picture);
+        XhPreview.Picture = picture;
         XhPreview.Preset = effective;
         XhPreview.InvalidateVisual();
         XhPreviewImage.Source = _xhNight ? _xhNightImage : _xhDayImage;
@@ -710,6 +727,14 @@ public partial class MainWindow
 
         double radius = Math.Max(0, frame.CornerRadius.TopLeft);
         XhPreviewClip.Clip = new RectangleGeometry(new Rect(0, 0, frame.ActualWidth, frame.ActualHeight), radius, radius);
+
+        // The crosshair is drawn at the middle of its element, which on these
+        // pictures is the soldier's belt. Nobody aims there, so it is moved up to
+        // his chest, where players rest a crosshair. A render transform and not a
+        // layout one: nothing about the box changes, only where the crosshair sits
+        // in it, and the real overlay on the screen is untouched.
+        (double dx, double dy) = CrosshairScene.Offset(frame.ActualWidth, frame.ActualHeight);
+        XhPreview.RenderTransform = new TranslateTransform(dx, dy);
     }
 
     // ------------------------------------------------------- the screen part
@@ -745,11 +770,11 @@ public partial class MainWindow
     {
         try
         {
-            CrosshairPreset effective = EffectiveCrosshair(_workCrosshair, out BitmapSource? image);
+            CrosshairPreset effective = EffectiveCrosshair(_workCrosshair, out CrosshairPicture? picture);
             (_xhCentreX, _xhCentreY) = CrosshairPlacement.ForegroundMonitorCentre();
 
             _xhOverlay ??= new CrosshairOverlay();
-            _xhOverlay.ShowAt(effective, image, _xhCentreX, _xhCentreY);
+            _xhOverlay.ShowAt(effective, picture, _xhCentreX, _xhCentreY);
 
             _xhVisible = true;
             _xhBySlot = bySlot;
@@ -805,8 +830,8 @@ public partial class MainWindow
 
         try
         {
-            CrosshairPreset effective = EffectiveCrosshair(_workCrosshair, out BitmapSource? image);
-            _xhOverlay.ShowAt(effective, image, _xhCentreX, _xhCentreY);
+            CrosshairPreset effective = EffectiveCrosshair(_workCrosshair, out CrosshairPicture? picture);
+            _xhOverlay.ShowAt(effective, picture, _xhCentreX, _xhCentreY);
         }
         catch (Exception ex)
         {
@@ -996,8 +1021,8 @@ public partial class MainWindow
     {
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
-            Title = "Choose a crosshair picture",
-            Filter = "PNG picture (*.png)|*.png",
+            Title = "Choose a crosshair picture or animated GIF",
+            Filter = CrosshairFileKinds.OpenFilter,
             CheckFileExists = true,
             Multiselect = false
         };
@@ -1007,38 +1032,64 @@ public partial class MainWindow
             return;
         }
 
-        UseCrosshairPicture(dialog.FileName);
+        _ = UseCrosshairPictureAsync(dialog.FileName);
     }
 
     /// <summary>
-    /// Make a PNG file the crosshair, whether it came from the Import button or
+    /// Make a picture file the crosshair, whether it came from the Import button or
     /// from the pack. Either way it is copied into the app's own folder in a
     /// cleaned-up form first, so the preset never depends on the original staying
     /// where it was, and the picture then answers to every control on the tab.
+    /// <para>
+    /// The reading happens on a worker thread. A still is quick, but an animated GIF
+    /// is dozens of frames to decode, build and shrink, and doing that on the UI
+    /// thread would freeze the window for as long as it took.
+    /// </para>
     /// </summary>
-    private void UseCrosshairPicture(string path)
+    private Task UseCrosshairPictureAsync(string path)
     {
-        string? name = CrosshairImageStore.Import(path, out string problem);
-        if (name is null)
-        {
-            Flash(problem, true);
-            return;
-        }
+        return UiGuard.RunAsync(
+            "CROSSHAIR PICTURE",
+            async () =>
+            {
+                (string? name, string problem) = await Task.Run(() =>
+                {
+                    string? stored = CrosshairImageStore.Import(path, out string reason);
+                    return (stored, reason);
+                });
 
-        string previous = _workCrosshair.CustomImage;
-        _workCrosshair.CustomImage = name;
-        _workCrosshair.ShapeKind = CrosshairShape.Custom;
-        OnXhEdited();
-        UpdateXhControls();
+                if (name is null)
+                {
+                    Flash(problem, true);
+                    return;
+                }
 
-        // The picture it replaced is only kept while a saved crosshair uses it.
-        if (!string.IsNullOrEmpty(previous)
-            && !_settings.CustomCrosshairs.Any(p => string.Equals(p.CustomImage, previous, StringComparison.OrdinalIgnoreCase)))
-        {
-            CrosshairImageStore.Delete(previous);
-        }
+                string previous = _workCrosshair.CustomImage;
+                _workCrosshair.CustomImage = name;
+                _workCrosshair.ShapeKind = CrosshairShape.Custom;
 
-        Flash("Picture ready");
+                // A photograph or bitmap has no transparency and is no use as a
+                // white mask. Multiplied by the default red it would come out red,
+                // so it starts white, which leaves it as it came. The colour is
+                // still one click away for anyone who wants it tinted.
+                if (CrosshairFileKinds.FromPath(path) is PictureKind.Jpeg or PictureKind.Bmp)
+                {
+                    _workCrosshair.Color = CrosshairPreset.Palette[^1];
+                }
+
+                OnXhEdited();
+                UpdateXhControls();
+
+                // The picture it replaced is only kept while a saved crosshair uses it.
+                if (!string.IsNullOrEmpty(previous)
+                    && !_settings.CustomCrosshairs.Any(p => string.Equals(p.CustomImage, previous, StringComparison.OrdinalIgnoreCase)))
+                {
+                    CrosshairImageStore.Delete(previous);
+                }
+
+                Flash(CrosshairImageStore.LoadPicture(name) is { IsAnimated: true } ? "Animation ready" : "Picture ready");
+            },
+            ex => Flash("Could not use that picture", true));
     }
 
     // ------------------------------------------------------------- the pack
@@ -1156,7 +1207,7 @@ public partial class MainWindow
         }
         else if (files.Count == 0)
         {
-            XhPackEmpty.Text = "No pictures yet. Add PNGs with Open folder, then reopen.";
+            XhPackEmpty.Text = "No pictures yet. Add PNG, GIF or JPG files with Open folder, then reopen.";
         }
 
         // Shown in the colour the crosshair is set to, so the grid previews what
@@ -1210,19 +1261,30 @@ public partial class MainWindow
 
             // The picture's own shape filled with the chosen colour. That is what
             // the multiply tint does to a white picture, which is what the pack is.
-            var face = new System.Windows.Shapes.Rectangle
+            // A photograph or bitmap has no shape to fill, only a rectangle, and it
+            // is imported white, so it is shown as it is.
+            FrameworkElement face;
+            if (CrosshairFileKinds.FromPath(path) is PictureKind.Jpeg or PictureKind.Bmp)
             {
-                Width = 46,
-                Height = 46,
-                Fill = tint,
-                OpacityMask = new ImageBrush(thumb) { Stretch = Stretch.Uniform }
-            };
+                face = new System.Windows.Controls.Image { Width = 46, Height = 46, Source = thumb, Stretch = Stretch.Uniform };
+            }
+            else
+            {
+                face = new System.Windows.Shapes.Rectangle
+                {
+                    Width = 46,
+                    Height = 46,
+                    Fill = tint,
+                    OpacityMask = new ImageBrush(thumb) { Stretch = Stretch.Uniform }
+                };
+            }
 
             var tile = new Button
             {
                 Style = (Style)FindResource("XhPackTile"),
                 Content = face,
-                Tag = path
+                Tag = path,
+                ToolTip = Path.GetFileNameWithoutExtension(path) + " (" + FileSizeText(path) + ")"
             };
 
             AutomationProperties.SetName(tile, "Use crosshair " + Path.GetFileNameWithoutExtension(path));
@@ -1237,6 +1299,22 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>A file's size the way a person reads it. Blank rather than an error if it cannot be read.</summary>
+    private static string FileSizeText(string path)
+    {
+        try
+        {
+            long bytes = new FileInfo(path).Length;
+            return bytes >= 1024 * 1024
+                ? (bytes / (1024.0 * 1024.0)).ToString("0.#", CultureInfo.InvariantCulture) + " MB"
+                : Math.Max(1, bytes / 1024).ToString(CultureInfo.InvariantCulture) + " KB";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return "size unknown";
+        }
+    }
+
     private void OnXhPackTileClick(object sender, RoutedEventArgs e)
     {
         if (sender is not Button { Tag: string path })
@@ -1245,7 +1323,7 @@ public partial class MainWindow
         }
 
         XhPackPopup.IsOpen = false;
-        UseCrosshairPicture(path);
+        _ = UseCrosshairPictureAsync(path);
     }
 
     // ----------------------------------------------------------------- export
@@ -1279,15 +1357,17 @@ public partial class MainWindow
             // The same element the overlay uses, at one crosshair pixel to one
             // real pixel and assuming a 96 dpi screen, so the file is the true
             // size and identical whatever monitor it was exported from.
-            CrosshairPreset effective = EffectiveCrosshair(_workCrosshair, out BitmapSource? image);
+            CrosshairPreset effective = EffectiveCrosshair(_workCrosshair, out CrosshairPicture? picture);
             int side = CrosshairGeometry.WindowSide(effective);
 
+            // A PNG holds one picture, so an animation is exported as its first
+            // frame, which is what a view that is not on the screen draws.
             var view = new CrosshairView
             {
                 Width = side,
                 Height = side,
                 Preset = effective,
-                Image = image,
+                Picture = picture,
                 Magnification = 1.0,
                 AssumeDpi = 1.0
             };
@@ -1305,7 +1385,7 @@ public partial class MainWindow
             using FileStream output = File.Create(dialog.FileName);
             encoder.Save(output);
 
-            Flash("Crosshair exported");
+            Flash(picture is { IsAnimated: true } ? "First frame exported" : "Crosshair exported");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

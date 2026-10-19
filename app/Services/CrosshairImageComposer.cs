@@ -25,6 +25,8 @@ namespace GamerTool.Services;
 /// <item><b>Thickness</b> above 2 makes the lines of the picture bolder, by
 /// growing its shape outward. At 2 and below the picture is untouched, so a
 /// picture looks as drawn until the slider is moved.</item>
+/// <item><b>Gap</b> clears a disc at the middle of the picture, the way it opens
+/// the middle of a drawn cross.</item>
 /// <item><b>Outline</b> is a one pixel black edge round the whole shape.</item>
 /// <item><b>Glow</b> is a soft halo in the colour, made by blurring the shape.</item>
 /// </list>
@@ -64,6 +66,14 @@ public static class CrosshairImageComposer
             if (grow > 0)
             {
                 image = Grow(image, width, grow);
+            }
+
+            // After the growing, so thicker lines cannot creep back into the hole,
+            // and before the outline and glow, so both follow the edge of the hole
+            // the way they follow the end of a drawn arm.
+            if (preset.PictureGap > 0)
+            {
+                ClearMiddle(image, width, (int)Math.Round(preset.PictureGap * scale));
             }
 
             byte[] alpha = AlphaOf(image);
@@ -150,6 +160,38 @@ public static class CrosshairImageComposer
             r = 0x3C;
             g = 0xFF;
             b = 0x5A;
+        }
+    }
+
+    /// <summary>
+    /// Make a disc at the middle of the picture transparent. That is what Gap does
+    /// to a drawn cross, which starts its arms that far out from the centre, and it
+    /// does the same for a picture of one. The picture is turned afterwards, and a
+    /// disc looks the same whichever way it is turned.
+    /// </summary>
+    private static void ClearMiddle(byte[] pixels, int width, int radius)
+    {
+        if (radius <= 0)
+        {
+            return;
+        }
+
+        // The width is even, so the middle falls on the edge between two pixels and
+        // each pixel is judged by its own centre.
+        double middle = width / 2.0;
+        double limit = (double)radius * radius;
+
+        for (int y = 0; y < width; y++)
+        {
+            double dy = y + 0.5 - middle;
+            for (int x = 0; x < width; x++)
+            {
+                double dx = x + 0.5 - middle;
+                if ((dx * dx) + (dy * dy) < limit)
+                {
+                    Array.Clear(pixels, ((y * width) + x) * 4, 4);
+                }
+            }
         }
     }
 

@@ -29,7 +29,8 @@ namespace GamerTool.UI;
 /// <para>
 /// Created once and shown and hidden, never closed and rebuilt, the same as
 /// <see cref="RetroOsd"/>. While hidden it holds a window handle and nothing
-/// else.
+/// else: an animated crosshair's clock stops with the window, so an animation
+/// that is off the screen costs nothing.
 /// </para>
 /// </summary>
 public partial class CrosshairOverlay : Window
@@ -61,12 +62,12 @@ public partial class CrosshairOverlay : Window
     /// Showing a crosshair that is already up just redraws and re-places it, so a
     /// live edit on the tab is one call.
     /// </summary>
-    public void ShowAt(CrosshairPreset preset, BitmapSource? image, int centreX, int centreY)
+    public void ShowAt(CrosshairPreset preset, CrosshairPicture? picture, int centreX, int centreY)
     {
         _centreX = centreX;
         _centreY = centreY;
 
-        View.Image = image;
+        View.Picture = picture;
         View.Preset = preset;
         View.InvalidateVisual();
 

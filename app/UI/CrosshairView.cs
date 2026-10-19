@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using GamerTool.Models;
 using GamerTool.Services;
 using Brush = System.Windows.Media.Brush;
@@ -22,11 +23,18 @@ namespace GamerTool.UI;
 /// </para>
 /// <para>
 /// This is what keeps the feature light. It is a single <c>OnRender</c>: no
-/// timers, no animations, no bitmap effects, no per-frame work. WPF retains what
-/// was drawn and the element only redraws when a setting changes, so a crosshair
-/// that is sitting on the screen costs no CPU at all. The glow is a few wider
-/// translucent strokes rather than a <c>DropShadowEffect</c>, which would put a
-/// software effect pass on a window that is otherwise a handful of lines.
+/// bitmap effects and no per-frame work. WPF retains what was drawn and the
+/// element only redraws when a setting changes, so a crosshair that is sitting on
+/// the screen costs no CPU at all. The glow is a few wider translucent strokes
+/// rather than a <c>DropShadowEffect</c>, which would put a software effect pass
+/// on a window that is otherwise a handful of lines.
+/// </para>
+/// <para>
+/// The one exception is an animated picture, which needs a clock. The clock exists
+/// only while an animated picture is actually showing: it stops the moment the
+/// element is hidden, unloaded or given anything else to draw, so the overlay
+/// costs nothing while it is off the screen, and a still picture or a drawn shape
+/// never starts one.
 /// </para>
 /// </summary>
 public sealed class CrosshairView : FrameworkElement
@@ -35,13 +43,19 @@ public sealed class CrosshairView : FrameworkElement
         nameof(Preset),
         typeof(CrosshairPreset),
         typeof(CrosshairView),
-        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender, OnClockInputChanged));
 
     public static readonly DependencyProperty ImageProperty = DependencyProperty.Register(
         nameof(Image),
         typeof(ImageSource),
         typeof(CrosshairView),
         new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public static readonly DependencyProperty PictureProperty = DependencyProperty.Register(
+        nameof(Picture),
+        typeof(CrosshairPicture),
+        typeof(CrosshairView),
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender, OnPictureChanged));
 
     public static readonly DependencyProperty MagnificationProperty = DependencyProperty.Register(
         nameof(Magnification),
@@ -54,6 +68,24 @@ public sealed class CrosshairView : FrameworkElement
         IsHitTestVisible = false;
         SnapsToDevicePixels = false;
         RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.HighQuality);
+
+        // The clock follows visibility. A hidden overlay window never draws, but
+        // nothing else would stop a timer that was already ticking.
+        IsVisibleChanged += (s, e) => UpdateClock();
+        Loaded += (s, e) => UpdateClock();
+        Unloaded += (s, e) => UpdateClock();
+    }
+
+    private static void OnClockInputChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        ((CrosshairView)d).UpdateClock();
+    }
+
+    private static void OnPictureChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var view = (CrosshairView)d;
+        view._frame = 0;
+        view.UpdateClock();
     }
 
     /// <summary>What to draw. Set a new instance, or call <see cref="InvalidateVisual"/> after editing one.</summary>
@@ -63,11 +95,21 @@ public sealed class CrosshairView : FrameworkElement
         set => SetValue(PresetProperty, value);
     }
 
-    /// <summary>The picture for <see cref="CrosshairShape.Custom"/>.</summary>
+    /// <summary>A still picture for <see cref="CrosshairShape.Custom"/>. Ignored while <see cref="Picture"/> is set.</summary>
     public ImageSource? Image
     {
         get => (ImageSource?)GetValue(ImageProperty);
         set => SetValue(ImageProperty, value);
+    }
+
+    /// <summary>
+    /// The picture for <see cref="CrosshairShape.Custom"/>, still or animated. An
+    /// animated one plays for as long as this element is on the screen.
+    /// </summary>
+    public CrosshairPicture? Picture
+    {
+        get => (CrosshairPicture?)GetValue(PictureProperty);
+        set => SetValue(PictureProperty, value);
     }
 
     /// <summary>
@@ -91,6 +133,10 @@ public sealed class CrosshairView : FrameworkElement
 
     protected override void OnRender(DrawingContext dc)
     {
+        // Every redraw is a chance to notice the clock is running when it should
+        // not be, or the other way round, after a setting changed what is showing.
+        UpdateClock();
+
         CrosshairPreset? preset = Preset;
         if (preset is null || ActualWidth <= 0 || ActualHeight <= 0)
         {
@@ -144,45 +190,123 @@ public sealed class CrosshairView : FrameworkElement
         dc.Pop();
     }
 
-    private BitmapSource? _composed;
+    /// <summary>Each frame of the picture after colour, thickness, gap, outline and glow, built the first time it is shown.</summary>
+    private BitmapSource?[] _composedFrames = Array.Empty<BitmapSource?>();
 
     private double _composedSide;
 
     private string _composedKey = string.Empty;
 
+    /// <summary>Which frame of an animation is showing.</summary>
+    private int _frame;
+
+    private DispatcherTimer? _clock;
+
     private void DrawImage(DrawingContext dc, CrosshairPreset preset, double magnification)
     {
-        if (Image is not BitmapSource source)
+        CrosshairPicture? picture = Picture;
+        int frames = picture is null ? 1 : picture.Frames.Count;
+        int index = Math.Clamp(_frame, 0, frames - 1);
+
+        BitmapSource? source = picture is not null ? picture.Frames[index] : Image as BitmapSource;
+        if (source is null)
         {
             return;
         }
 
         // Rebuilt only when something that shows in it has changed. OnRender runs
-        // when a setting moves and not otherwise, so this is not a per-frame cost,
-        // and the key makes a repeated redraw of the same crosshair free as well.
+        // when a setting moves or an animation steps, so the key is what makes a
+        // repeated redraw of the same frame free. Rotation and opacity are not in
+        // it: they are applied as the picture is drawn and never change its pixels.
         string key = string.Join(
             "|",
-            RuntimeHelpers.GetHashCode(source),
+            RuntimeHelpers.GetHashCode((object?)picture ?? Image),
             preset.Color,
             preset.Size,
             preset.Thickness,
+            preset.PictureGap,
             preset.Outline,
             preset.Glow,
             magnification.ToString("0.###", CultureInfo.InvariantCulture));
 
-        if (_composed is null || !string.Equals(key, _composedKey, StringComparison.Ordinal))
+        if (_composedFrames.Length != frames || !string.Equals(key, _composedKey, StringComparison.Ordinal))
         {
-            _composed = CrosshairImageComposer.Compose(source, preset, magnification, out _composedSide);
+            _composedFrames = new BitmapSource?[frames];
             _composedKey = key;
         }
 
-        if (_composed is null)
+        // A frame is built when it first comes up, not all at once, so moving a
+        // slider on an animation costs one frame's work per step instead of sixty.
+        BitmapSource? composed = _composedFrames[index];
+        if (composed is null)
+        {
+            composed = CrosshairImageComposer.Compose(source, preset, magnification, out double side);
+            _composedFrames[index] = composed;
+            if (composed is not null)
+            {
+                _composedSide = side;
+            }
+        }
+
+        if (composed is null)
         {
             return;
         }
 
         double half = _composedSide / 2.0;
-        dc.DrawImage(_composed, new Rect(-half, -half, _composedSide, _composedSide));
+        dc.DrawImage(composed, new Rect(-half, -half, _composedSide, _composedSide));
+    }
+
+    /// <summary>
+    /// Run the frame clock when, and only when, an animated picture is showing: a
+    /// picture shape, with more than one frame, on an element that is loaded and
+    /// visible. Anything else stops it, so a hidden overlay or a still picture holds
+    /// no timer at all.
+    /// </summary>
+    private void UpdateClock()
+    {
+        bool needed = Picture is { IsAnimated: true }
+            && Preset?.ShapeKind == CrosshairShape.Custom
+            && IsLoaded
+            && IsVisible;
+
+        if (!needed)
+        {
+            _clock?.Stop();
+            return;
+        }
+
+        if (_clock is null)
+        {
+            _clock = new DispatcherTimer(DispatcherPriority.Render, Dispatcher);
+            _clock.Tick += OnClockTick;
+        }
+
+        if (!_clock.IsEnabled)
+        {
+            _clock.Interval = FrameDelay(Picture!, _frame);
+            _clock.Start();
+        }
+    }
+
+    private static TimeSpan FrameDelay(CrosshairPicture picture, int frame)
+    {
+        int at = Math.Clamp(frame, 0, picture.DelaysMs.Count - 1);
+        return TimeSpan.FromMilliseconds(Math.Max(AnimationPlan.MinDelayMs, picture.DelaysMs[at]));
+    }
+
+    private void OnClockTick(object? sender, EventArgs e)
+    {
+        CrosshairPicture? picture = Picture;
+        if (picture is null || !picture.IsAnimated || _clock is null)
+        {
+            _clock?.Stop();
+            return;
+        }
+
+        _frame = (_frame + 1) % picture.Frames.Count;
+        _clock.Interval = FrameDelay(picture, _frame);
+        InvalidateVisual();
     }
 
     private static void DrawDot(DrawingContext dc, CrosshairPreset preset, double r)
