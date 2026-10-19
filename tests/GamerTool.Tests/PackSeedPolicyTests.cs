@@ -97,7 +97,7 @@ public class PackSeedPolicyTests
     [InlineData("null")]
     public void A_marker_that_is_not_the_new_format_means_no_history(string? text)
     {
-        Assert.Equal(0, PackSeedPolicy.ParseMarker(text).Count);
+        Assert.Empty(PackSeedPolicy.ParseMarker(text));
     }
 
     [Fact]
