@@ -136,6 +136,15 @@ public sealed class AudioService
     }
 
     /// <summary>
+    /// The select-preset argument for a preset name that came from somewhere else:
+    /// FxSound's own status file, written by another program. Quoted and cleaned
+    /// the same way as --output and --save_preset, so a name with a space stays one
+    /// argument and a name ending in a backslash cannot swallow what follows it.
+    /// </summary>
+    internal static string PresetArgument(string presetName)
+        => "--preset=\"" + Clean(presetName) + "\"";
+
+    /// <summary>
     /// Whether the status file changed between two observations.
     /// Pure so the DST fall-back is testable: local timestamps go backwards
     /// for an hour when clocks go back, so callers must pass UTC values;

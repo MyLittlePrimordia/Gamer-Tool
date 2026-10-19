@@ -158,6 +158,19 @@ public sealed class SessionState
 public static class EmergencyReset
 {
     /// <summary>
+    /// The commands that hand the user's own engine state back, in order. The
+    /// preset goes first and power second, because selecting while the engine is
+    /// off does nothing. The preset name is quoted: it came from FxSound's status
+    /// file, and "Bass Boost" unquoted is two arguments, which made restoring any
+    /// preset with a space in its name silently select nothing.
+    /// </summary>
+    internal static IReadOnlyList<string> BuildRestoreCommands(FxSnapshot snapshot) => new[]
+    {
+        AudioService.PresetArgument(snapshot.Preset),
+        "--power=1",
+    };
+
+    /// <summary>
     /// Whether the engine should be handed back what the user had, rather than
     /// flattened and powered down.
     /// <para>
@@ -329,8 +342,11 @@ public static class EmergencyReset
                             // owns is deleted afterwards and the user's file is
                             // what remains selected. Power comes on second, because
                             // selecting while the engine is off does nothing.
-                            audio.Run("--preset=" + restore.Preset, ShutdownWaitMs);
-                            audio.Run("--power=1", ShutdownWaitMs);
+                            foreach (string command in BuildRestoreCommands(restore))
+                            {
+                                audio.Run(command, ShutdownWaitMs);
+                            }
+
                             TraceLog.Write("FX RESTORED " + restore.Preset);
                         }
                         else
