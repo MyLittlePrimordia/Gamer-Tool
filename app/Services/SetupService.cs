@@ -997,6 +997,41 @@ public sealed class SetupService
     public static bool IsSignedByPublisher(string path, string publisher)
         => IsSignedByPublisher(path, publisher, requireTrustedChain: true);
 
+    /// <summary>
+    /// Whether the signer Windows reports is the publisher we expect. A certificate
+    /// carries the legal name, so "FxSound, LLC" and "FxSound" are the same company
+    /// and a comparison that wants the second to equal the first refuses every
+    /// genuine installer. Case, punctuation and spacing are ignored, and so is one
+    /// trailing company suffix (LLC, Inc, Ltd, GmbH). It is still equality on what
+    /// is left and never "contains": "FxSound Impostor Ltd" and "Not FxSound, LLC"
+    /// stay refused, and the install that follows is silent.
+    /// </summary>
+    internal static bool SamePublisher(string? signerName, string expected)
+    {
+        string signer = NormalisePublisher(signerName);
+        return signer.Length > 0 && string.Equals(signer, NormalisePublisher(expected), StringComparison.Ordinal);
+    }
+
+    private static string NormalisePublisher(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return string.Empty;
+        }
+
+        // Split on anything that is not a letter or digit so the suffix is a whole
+        // word: "Acme Co" must not lose its "co" from the end of "Acmeco".
+        string[] words = new string(name.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : ' ').ToArray())
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        if (words.Length > 1 && words[^1] is "llc" or "inc" or "ltd" or "gmbh")
+        {
+            words = words[..^1];
+        }
+
+        return string.Concat(words);
+    }
+
     /// <param name="requireTrustedChain">
     /// True for anything that is going to be run. False accepts a signature that is
     /// intact but chains to a root this machine does not trust, which is what a
@@ -1028,7 +1063,7 @@ public sealed class SetupService
             // certificate, and the install that follows is silent and runs as this
             // user. The signature itself was verified above, so by this point the
             // name is a statement Windows has already vouched for.
-            if (!string.Equals(name, publisher, StringComparison.OrdinalIgnoreCase))
+            if (!SamePublisher(name, publisher))
             {
                 TraceLog.Write("INSTALLER signed by " + name + ", not " + publisher);
                 return false;
