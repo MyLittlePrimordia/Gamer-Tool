@@ -345,7 +345,7 @@ public class WildcardSlotTests
         var backups = new BackupService();
         backups.Repair(
             settings,
-            new List<string>(),
+            new List<MonitorChoice>(),
             new List<string>(),
             new List<AppCandidate>(),
             AudioService.DefaultFxSoundPath,

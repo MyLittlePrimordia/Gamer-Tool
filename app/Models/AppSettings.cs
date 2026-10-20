@@ -332,8 +332,16 @@ public sealed class AppSettings
     /// </summary>
     public int Schema { get; set; }
 
-    /// <summary>The version this build writes.</summary>
-    public const int CurrentSchema = 2;
+    /// <summary>
+    /// The version this build writes.
+    /// <para>
+    /// Three is deliberately skipped. A development build that was never released
+    /// wrote a schema-3 file, and it is still on at least one machine. Reusing the
+    /// number would make that profile look up to date and it would never receive
+    /// the step added in four.
+    /// </para>
+    /// </summary>
+    public const int CurrentSchema = 4;
 
     /// <summary>
     /// Brings settings written by an older build up to date.
@@ -419,7 +427,12 @@ public sealed class AppSettings
             && Slots.Count == 0;
     }
 
-    public void Migrate()
+    /// <param name="monitorKey">
+    /// Turns a saved display device name into the panel's stable key. Injected so
+    /// the step that reads it can be tested without a monitor attached; the app
+    /// passes the same enumeration the display service uses.
+    /// </param>
+    public void Migrate(Func<string, string>? monitorKey = null)
     {
         if (Schema >= CurrentSchema)
         {
@@ -437,7 +450,45 @@ public sealed class AppSettings
             AdoptLegacyBypass();
         }
 
+        if (Schema < 4)
+        {
+            AdoptMonitorKeys(monitorKey ?? DisplayService.MonitorKeyFor);
+        }
+
         Schema = CurrentSchema;
+    }
+
+    /// <summary>
+    /// Gives every slot that names a screen the panel key behind that name.
+    /// <para>
+    /// A profile written before keys existed only carries <c>\\.\DISPLAY2</c>, and
+    /// the whole point of the key is to stop following a slot number. Filling it
+    /// here means the next scan can resolve the screen even if Windows has
+    /// renumbered it in the meantime.
+    /// </para>
+    /// <para>
+    /// Skips a device that is not attached right now. The enumeration falls back
+    /// to the device name in that case, and storing that would be storing the very
+    /// thing the key exists to replace - so an absent screen is left keyless for a
+    /// later scan rather than given a key that means nothing.
+    /// </para>
+    /// </summary>
+    internal void AdoptMonitorKeys(Func<string, string> resolve)
+    {
+        foreach (HotkeySlot slot in Slots)
+        {
+            if (!string.IsNullOrWhiteSpace(slot.MonitorKey) || string.IsNullOrWhiteSpace(slot.MonitorDevice))
+            {
+                continue;
+            }
+
+            string key = resolve(slot.MonitorDevice);
+            if (!string.IsNullOrWhiteSpace(key)
+                && !string.Equals(key, slot.MonitorDevice, StringComparison.OrdinalIgnoreCase))
+            {
+                slot.MonitorKey = key;
+            }
+        }
     }
 
     /// <summary>

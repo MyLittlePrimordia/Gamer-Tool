@@ -739,10 +739,16 @@ public partial class MainWindow : Window
         // its widest row, so nothing is actually lost.
         MarqueeBox.SetAllowMarquee(box, true);
 
+        // Resolved through the service rather than matched here, so the row shows
+        // the same screen the slot will actually be applied to. A name that no
+        // longer belongs to the saved panel resolves to nothing and the box sits
+        // on "All screens", which is the same way a screen that has been
+        // unplugged has always been shown.
+        string resolved = _display.ResolveDevice(slot.MonitorKey, slot.MonitorDevice);
         int index = 0;
         for (int i = 0; i < choices.Count; i++)
         {
-            if (string.Equals(choices[i].Device, slot.MonitorDevice, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(choices[i].Device, resolved, StringComparison.OrdinalIgnoreCase))
             {
                 index = i;
                 break;
@@ -770,6 +776,7 @@ public partial class MainWindow : Window
         }
 
         slot.MonitorDevice = choice.Device;
+        slot.MonitorKey = choice.Key;
         Commit();
     }
 
@@ -1675,7 +1682,13 @@ public partial class MainWindow : Window
         if (display is not null)
         {
             LoadTune(display.Copy(), (audio ?? _workAudio).Copy());
-            screenTookIt = ApplyDisplay(display.Copy(), slot.MonitorDevice, false);
+            // The panel the slot is keyed to, resolved against what is attached
+            // now. Following the saved device name alone is what let a renumbered
+            // screen take a preset meant for another one.
+            screenTookIt = ApplyDisplay(
+                display.Copy(),
+                _display.ResolveDevice(slot.MonitorKey, slot.MonitorDevice),
+                false);
         }
 
         // Announced before the slow half, not after it.

@@ -11,6 +11,13 @@ public sealed class MonitorChoice
 {
     public string Device { get; set; } = string.Empty;
 
+    /// <summary>
+    /// The panel's identity, which outlives the <c>\\.\DISPLAYn</c> in
+    /// <see cref="Device"/>. Empty when the adapter reports no monitor id, in
+    /// which case the device name is all there is to go on.
+    /// </summary>
+    public string Key { get; set; } = string.Empty;
+
     public string Name { get; set; } = string.Empty;
 
     public override string ToString()
@@ -44,6 +51,14 @@ public sealed class DisplayService
     private readonly List<string> _monitors = new();
 
     private readonly List<string> _monitorNames = new();
+
+    /// <summary>
+    /// The panel identity behind each entry in <see cref="_monitors"/>, in the
+    /// same order. Scanned with the names because both come from the same
+    /// enumeration, and a key computed later could disagree with a list that has
+    /// since been rescanned.
+    /// </summary>
+    private readonly List<string> _monitorKeys = new();
 
     private readonly object _gate = new();
 
@@ -225,12 +240,17 @@ public sealed class DisplayService
     {
         get
         {
-            List<MonitorChoice> list = new() { new MonitorChoice { Device = string.Empty, Name = "All screens" } };
+            List<MonitorChoice> list = new() { new MonitorChoice { Device = string.Empty, Key = string.Empty, Name = "All screens" } };
             lock (_gate)
             {
                 for (int i = 0; i < _monitorNames.Count; i++)
                 {
-                    list.Add(new MonitorChoice { Device = _monitors[i], Name = _monitorNames[i] });
+                    list.Add(new MonitorChoice
+                    {
+                        Device = _monitors[i],
+                        Key = i < _monitorKeys.Count ? _monitorKeys[i] : string.Empty,
+                        Name = _monitorNames[i]
+                    });
                 }
             }
 
@@ -300,7 +320,9 @@ public sealed class DisplayService
     {
         List<string> found = new();
         List<string> names = new();
+        List<string> keys = new();
         Dictionary<string, int> seen = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, int> seenKeys = new(StringComparer.OrdinalIgnoreCase);
         int ordinal = 0;
 
         for (uint i = 0; i < 16; i++)
@@ -321,12 +343,14 @@ public sealed class DisplayService
 
             ordinal++;
             found.Add(adapter.DeviceName);
+            keys.Add(Key(adapter.DeviceName, seenKeys));
             names.Add(Label(adapter, ordinal, seen));
         }
 
         if (found.Count == 0)
         {
             found.Add(@"\\.\DISPLAY1");
+            keys.Add(@"\\.\DISPLAY1");
             names.Add("Screen 1");
         }
 
@@ -334,6 +358,8 @@ public sealed class DisplayService
         {
             _monitors.Clear();
             _monitors.AddRange(found);
+            _monitorKeys.Clear();
+            _monitorKeys.AddRange(keys);
             _monitorNames.Clear();
             _monitorNames.AddRange(names);
         }
@@ -463,6 +489,82 @@ public sealed class DisplayService
         return device;
     }
 
+    /// <summary>
+    /// The attached screen a saved (key, name) pair refers to, or null when this
+    /// PC has no such screen.
+    /// <para>
+    /// Key first, because it is the one that follows the hardware; the name
+    /// second, so a profile written before keys existed still resolves.
+    /// </para>
+    /// <para>
+    /// A name that matches but carries a different key is a mismatch, not a hit.
+    /// That is the case the key exists for: Windows has handed
+    /// <c>\\.\DISPLAY2</c> to a different panel since the slot was written, and
+    /// treating it as found would apply the preset to hardware the user never
+    /// pointed at. It is answered the same way as a screen that is not attached,
+    /// so the caller clears or reports it rather than using it.
+    /// </para>
+    /// </summary>
+    internal static MonitorChoice? MatchMonitor(IReadOnlyList<MonitorChoice> monitors, string? key, string? device)
+    {
+        string wantedKey = key?.Trim() ?? string.Empty;
+        string wantedName = device?.Trim() ?? string.Empty;
+
+        if (wantedKey.Length > 0)
+        {
+            foreach (MonitorChoice choice in monitors)
+            {
+                if (choice.Key.Length > 0 && string.Equals(choice.Key, wantedKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    return choice;
+                }
+            }
+        }
+
+        if (wantedName.Length == 0)
+        {
+            return null;
+        }
+
+        foreach (MonitorChoice choice in monitors)
+        {
+            if (!string.Equals(choice.Device, wantedName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            bool keyAgrees = wantedKey.Length == 0
+                || choice.Key.Length == 0
+                || string.Equals(choice.Key, wantedKey, StringComparison.OrdinalIgnoreCase);
+
+            return keyAgrees ? choice : null;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The device a saved screen should be applied to now.
+    /// <para>
+    /// Falls back to what was saved rather than to an empty string, because empty
+    /// means every screen to <see cref="Apply"/> - and widening a preset the user
+    /// scoped to one monitor across all of them is worse than reporting that the
+    /// monitor is gone. Handing back the saved key when there is one is safe for
+    /// the same reason: a key never equals a device name, so the missing-screen
+    /// path fires rather than a wrong-screen one.
+    /// </para>
+    /// </summary>
+    public string ResolveDevice(string key, string device)
+    {
+        MonitorChoice? match = MatchMonitor(MonitorChoices, key, device);
+        if (match is not null)
+        {
+            return match.Device;
+        }
+
+        return !string.IsNullOrWhiteSpace(key) ? key : device ?? string.Empty;
+    }
+
     private static string Label(DisplayDeviceInfo adapter, int ordinal, Dictionary<string, int> seen)
     {
         (string? id, string? name) = FirstMonitor(adapter.DeviceName);
@@ -477,6 +579,27 @@ public sealed class DisplayService
         count++;
         seen[label] = count;
         return label + " (" + count.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")";
+    }
+
+    /// <summary>
+    /// The panel identity for a display device, disambiguated the way the label
+    /// is. Two identical panels are the one case where a PnP id can repeat, and
+    /// without the ordinal both would answer to the same key and a slot pointed
+    /// at either would follow whichever was scanned first.
+    /// </summary>
+    private static string Key(string device, Dictionary<string, int> seen)
+    {
+        string key = MonitorKeyFor(device);
+
+        if (!seen.TryGetValue(key, out int count))
+        {
+            seen[key] = 1;
+            return key;
+        }
+
+        count++;
+        seen[key] = count;
+        return key + "#" + count.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static (string? Id, string? Name) FirstMonitor(string adapterName)

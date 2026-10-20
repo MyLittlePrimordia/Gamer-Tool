@@ -111,7 +111,7 @@ public class UntrustedProfileShapeTests
         RestoreReport report = new();
         backups.Repair(
             imported,
-            new List<string>(),
+            new List<MonitorChoice>(),
             new List<string>(),
             new List<AppCandidate>(),
             AudioService.DefaultFxSoundPath,
@@ -130,7 +130,7 @@ public class UntrustedProfileShapeTests
         // schema guard allows it and nothing here is a reason to overwrite it.
         AppSettings imported = new() { FxSoundPath = @"E:\Games\FxSound\FxSound.exe" };
         RestoreReport report = new();
-        backups.Repair(imported, new List<string>(), new List<string>(), new List<AppCandidate>(),
+        backups.Repair(imported, new List<MonitorChoice>(), new List<string>(), new List<AppCandidate>(),
             AudioService.DefaultFxSoundPath, report);
 
         Assert.Equal(@"E:\Games\FxSound\FxSound.exe", imported.FxSoundPath);
@@ -177,7 +177,7 @@ public class UntrustedProfileShapeTests
         // throwing, which it did not before.
         var backups = new BackupService();
         RestoreReport report = new();
-        backups.Repair(normalized, new List<string>(), new List<string>(), new List<AppCandidate>(),
+        backups.Repair(normalized, new List<MonitorChoice>(), new List<string>(), new List<AppCandidate>(),
             AudioService.DefaultFxSoundPath, report);
     }
 

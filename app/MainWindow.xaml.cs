@@ -2169,10 +2169,11 @@ private void HideToTray()
                 continue;
             }
 
-            string monitor = string.IsNullOrWhiteSpace(slot.MonitorDevice)
+            string resolved = _display.ResolveDevice(slot.MonitorKey, slot.MonitorDevice);
+            string monitor = resolved.Length == 0
                 ? string.Empty
                 : _display.MonitorChoices
-                    .FirstOrDefault(c => string.Equals(c.Device, slot.MonitorDevice, StringComparison.OrdinalIgnoreCase))
+                    .FirstOrDefault(c => string.Equals(c.Device, resolved, StringComparison.OrdinalIgnoreCase))
                     ?.Name ?? string.Empty;
 
             entries.Add(new TraySlotEntry

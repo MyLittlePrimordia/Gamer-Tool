@@ -322,7 +322,7 @@ public sealed class BackupService
 
     public void Repair(
         AppSettings settings,
-        IReadOnlyList<string> validMonitors,
+        IReadOnlyList<MonitorChoice> validMonitors,
         IReadOnlyList<string> validSoundDevices,
         IReadOnlyList<AppCandidate> knownApps,
         string? workingFxSoundPath,
@@ -369,7 +369,6 @@ public sealed class BackupService
             crosshairs.Add(preset.Id);
         }
 
-        HashSet<string> monitorSet = new(validMonitors, StringComparer.OrdinalIgnoreCase);
         HashSet<string> usedKeys = new(StringComparer.OrdinalIgnoreCase);
 
         foreach (HotkeySlot slot in settings.Slots)
@@ -391,10 +390,25 @@ public sealed class BackupService
                 slot.CrosshairPresetId = null;
             }
 
-            if (slot.MonitorDevice.Length > 0 && !monitorSet.Contains(slot.MonitorDevice))
+            // Resolved the same way the window resolves it: the panel key first,
+            // the device name second. A name that is attached but carries a
+            // different key is the panel Windows has since handed that number to,
+            // and is a mismatch rather than a hit - so it clears, exactly like a
+            // screen this PC does not have.
+            if (slot.MonitorDevice.Length > 0 || slot.MonitorKey.Length > 0)
             {
-                slot.MonitorDevice = string.Empty;
-                report.ScreensReset++;
+                MonitorChoice? match = DisplayService.MatchMonitor(validMonitors, slot.MonitorKey, slot.MonitorDevice);
+                if (match is null)
+                {
+                    slot.MonitorDevice = string.Empty;
+                    slot.MonitorKey = string.Empty;
+                    report.ScreensReset++;
+                }
+                else
+                {
+                    slot.MonitorDevice = match.Device;
+                    slot.MonitorKey = match.Key;
+                }
             }
 
             RepairTarget(slot, knownApps, report);

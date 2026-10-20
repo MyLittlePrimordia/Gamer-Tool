@@ -182,7 +182,10 @@ public class OsdTimingTests
         Assert.True(announce > 0, "the slot no longer announces itself");
         Assert.True(apply > 0, "the slot no longer applies its sound");
 
-        int slow = source.LastIndexOf("ApplyDisplay(display.Copy(), slot.MonitorDevice, false);", announce, StringComparison.Ordinal);
+        // The call rather than its arguments: the slot's screen is now resolved
+        // through the display service, and pinning the exact expression made the
+        // ordering this test is about fail for a rename.
+        int slow = source.LastIndexOf("ApplyDisplay(", announce, StringComparison.Ordinal);
         Assert.True(
             slow > 0 && slow < announce,
             "the toast is still announced after the slow half of the load");

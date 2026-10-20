@@ -651,6 +651,7 @@ settings.CustomDisplayPresets ??= new List<DisplayPreset>();
             slot.Name ??= string.Empty;
             slot.Hotkey ??= string.Empty;
             slot.MonitorDevice ??= string.Empty;
+            slot.MonitorKey ??= string.Empty;
         }
 
         foreach (AppProfile profile in settings.AppProfiles)
