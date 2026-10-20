@@ -562,16 +562,55 @@ public partial class MainWindow : Window
             }
         }
 
+        // The journal is written before the switch, not after it. A kill between
+        // the COM call and the write would otherwise leave the default changed
+        // with nothing on disk to put it back. The entry is optimistic - it names
+        // the value the slot asked for - and is removed below for any route the
+        // switch did not keep while the default is still the old one.
+        foreach (WindowsAudioRoute route in plan.Routes)
+        {
+            if (before.TryGetValue(route.Flow, out string? previous))
+            {
+                _restoreJournal.Record(
+                    SystemRestoreKinds.For(route.Flow),
+                    route.Flow.ToString(),
+                    previous,
+                    route.DeviceId);
+            }
+        }
+
         WindowsAudioApplyResult result = WindowsAudioRouting.Apply(plan, _devices);
 
-        foreach (WindowsAudioRoute route in result.Applied)
+        foreach (WindowsAudioRoute route in plan.Routes)
         {
-            if (!before.TryGetValue(route.Flow, out string? previous))
+            if (result.Applied.Any(applied => applied.Flow == route.Flow)
+                || !before.TryGetValue(route.Flow, out string? previous))
             {
                 continue;
             }
 
-            _windowsAudioBefore.Remember(route.Flow, previous, route.DeviceId);
+            // The switch did not keep. If the default is still the old value the
+            // entry describes a change that never happened; if it is the target
+            // the setter did move it despite reporting failure, and the entry is
+            // exactly what a crash recovery needs.
+            string current = _devices.GetDefaultDeviceId(
+                route.Flow.IsRecording(),
+                route.Flow.IsCommunications());
+
+            if (string.Equals(current, previous, StringComparison.OrdinalIgnoreCase))
+            {
+                _restoreJournal.Remove(
+                    SystemRestoreKinds.For(route.Flow),
+                    route.Flow.ToString());
+            }
+        }
+
+        foreach (WindowsAudioRoute route in result.Applied)
+        {
+            if (before.TryGetValue(route.Flow, out string? previous))
+            {
+                _windowsAudioBefore.Remember(route.Flow, previous, route.DeviceId);
+            }
         }
 
         _lastWindowsAudioWarnings = result.Warnings;
@@ -602,21 +641,162 @@ public partial class MainWindow : Window
                 flow.IsRecording(),
                 flow.IsCommunications());
 
+            string kind = SystemRestoreKinds.For(flow);
+            string target = flow.ToString();
+
             if (_windowsAudioBefore.ShouldRestore(flow, current, out string previous))
             {
                 if (WindowsAudioRouting.TrySetDefault(flow, previous, _devices, out string error))
                 {
                     TraceLog.Write("ROUTE restored " + flow);
+                    _restoreJournal.Remove(kind, target);
                 }
                 else
                 {
                     TraceLog.Write("ROUTE restore failed " + flow + " <- " + error);
+
+                    // A device that is gone is not a failure to retry forever.
+                    // The journal entry goes, because there is nothing on this PC
+                    // to put back.
+                    if (!EndpointExists(flow, previous))
+                    {
+                        _restoreJournal.Remove(kind, target);
+                    }
                 }
+            }
+            else
+            {
+                // The user changed it, or the memory entry is gone. Either way
+                // this app no longer owns the value, so the journal must not
+                // restore it on the next launch.
+                _restoreJournal.Remove(kind, target);
             }
 
             _windowsAudioBefore.Forget(flow);
         }
     }
+
+
+    /// <summary>
+    /// Finishes the changes a previous run could not put back. Called once at
+    /// startup, after the display scan and before the startup presets, so a
+    /// restored route is not immediately overwritten by the remembered preset.
+    /// <para>
+    /// Every entry is removed only when the value is verified back, or when the
+    /// user's own newer value makes the entry obsolete. An entry that cannot be
+    /// answered stays for the next launch; that is the whole point of a journal
+    /// that is not boot-gated.
+    /// </para>
+    /// </summary>
+    private void ProcessPendingSystemRestore()
+    {
+        IReadOnlyList<SystemRestoreEntry> entries = _restoreJournal.Entries;
+
+        if (entries.Count == 0)
+        {
+            return;
+        }
+
+        int restored = 0;
+
+        foreach (SystemRestoreEntry entry in entries)
+        {
+            try
+            {
+                if (string.Equals(entry.Kind, SystemRestoreKinds.Hdr, StringComparison.OrdinalIgnoreCase))
+                {
+                    // The journal target is the monitor key. Resolving it against
+                    // the fresh scan is what keeps the entry following the panel
+                    // rather than the display number it had last time.
+                    string device = _display.ResolveDevice(entry.Target, entry.Target);
+
+                    HdrJournalOutcome outcome = _hdr.RestoreJournalEntry(
+                        entry.Target,
+                        device,
+                        HdrBool(entry.Before),
+                        HdrBool(entry.After),
+                        out string hdrError);
+
+                    if (outcome == HdrJournalOutcome.Restored)
+                    {
+                        restored++;
+                    }
+                    else if (outcome is HdrJournalOutcome.AlreadyDifferent or HdrJournalOutcome.NotConnected)
+                    {
+                        _restoreJournal.Remove(entry.Kind, entry.Target);
+                    }
+                    else
+                    {
+                        TraceLog.Write("SYSTEM RESTORE " + entry.Target + " <- " + hdrError);
+                    }
+
+                    continue;
+                }
+
+                if (!SystemRestoreKinds.TryFlow(entry.Kind, out WindowsAudioFlow flow))
+                {
+                    _restoreJournal.Remove(entry.Kind, entry.Target);
+                    continue;
+                }
+
+                string current = _devices.GetDefaultDeviceId(
+                    flow.IsRecording(),
+                    flow.IsCommunications());
+
+                if (!string.Equals(current, entry.After, StringComparison.OrdinalIgnoreCase))
+                {
+                    // The user changed it, or the endpoint is gone. Nothing to
+                    // put back, and keeping the entry would retry forever.
+                    _restoreJournal.Remove(entry.Kind, entry.Target);
+                    continue;
+                }
+
+                if (WindowsAudioRouting.TrySetDefault(flow, entry.Before, _devices, out string error))
+                {
+                    restored++;
+                    _restoreJournal.Remove(entry.Kind, entry.Target);
+                    TraceLog.Write("SYSTEM RESTORE " + entry.Kind + " restored");
+                    continue;
+                }
+
+                TraceLog.Write("SYSTEM RESTORE " + entry.Kind + " <- " + error);
+
+                if (!EndpointExists(flow, entry.Before))
+                {
+                    _restoreJournal.Remove(entry.Kind, entry.Target);
+                }
+            }
+            catch (Exception ex)
+            {
+                TraceLog.Write("SYSTEM RESTORE", ex);
+            }
+        }
+
+        if (restored > 0)
+        {
+            Flash("AUDIO / HDR RESTORED AFTER UNEXPECTED CLOSE");
+            TraceLog.Write("SYSTEM RESTORE restored " + restored + " change(s)");
+        }
+    }
+
+
+    private bool EndpointExists(WindowsAudioFlow flow, string id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return false;
+        }
+
+        IReadOnlyList<AudioDeviceInfo> devices = flow.IsRecording()
+            ? _devices.GetInputDevices()
+            : _devices.GetOutputDevices();
+
+        return devices.Any(device => string.Equals(device.Id, id, StringComparison.OrdinalIgnoreCase));
+    }
+
+
+    private static bool HdrBool(string value) =>
+        string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
 
 
     private void UpdateFxBanner()

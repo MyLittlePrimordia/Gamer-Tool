@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using GamerTool.Models;
 using GamerTool.Services;
 using Xunit;
@@ -337,8 +338,250 @@ public class HdrTests
         Assert.Contains("does not report HDR", HdrNotes.Unsupported);
     }
 
+    [Fact]
+    public void AnApplyWritesAJournalEntryWithTheSameBeforeAndAfter()
+    {
+        string path = TempJournal();
+
+        try
+        {
+            FakeHdr fake = new();
+            fake.State[@"\\.\DISPLAY1"] = Hdr(active: false, supported: true);
+            SystemRestoreJournal journal = new(path);
+            HdrControl control = fake.Control(new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc), journal);
+
+            Assert.True(control.Apply(@"\\.\DISPLAY1", "panel-a", SlotHdrMode.On).Applied);
+
+            Assert.Single(journal.Entries);
+            Assert.Equal(SystemRestoreKinds.Hdr, journal.Entries[0].Kind);
+            Assert.Equal("panel-a", journal.Entries[0].Target);
+            Assert.Equal("off", journal.Entries[0].Before);
+            Assert.Equal("on", journal.Entries[0].After);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void AFailedSecondApplyRestoresTheEarlierJournalEntry()
+    {
+        string path = TempJournal();
+
+        try
+        {
+            FakeHdr fake = new();
+            fake.State[@"\\.\DISPLAY1"] = Hdr(active: false, supported: true);
+            SystemRestoreJournal journal = new(path);
+            DateTime now = new(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+            HdrControl control = new(fake.Read, fake.Set, () => now, journal);
+
+            Assert.True(control.Apply(@"\\.\DISPLAY1", "panel-a", SlotHdrMode.On).Applied);
+
+            now = now.AddSeconds(11);
+            fake.SucceedWithoutChanging = true;
+
+            HdrApplyResult second = control.Apply(@"\\.\DISPLAY1", "panel-a", SlotHdrMode.Off);
+
+            Assert.False(second.Applied);
+            Assert.True(journal.TryGet(SystemRestoreKinds.Hdr, "panel-a", out SystemRestoreEntry entry));
+            Assert.Equal("off", entry.Before);
+            Assert.Equal("on", entry.After);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void AVerifiedRestoreRemovesTheJournalEntry()
+    {
+        string path = TempJournal();
+
+        try
+        {
+            FakeHdr fake = new();
+            fake.State[@"\\.\DISPLAY1"] = Hdr(active: false, supported: true);
+            SystemRestoreJournal journal = new(path);
+            HdrControl control = fake.Control(new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc), journal);
+
+            Assert.True(control.Apply(@"\\.\DISPLAY1", "panel-a", SlotHdrMode.On).Applied);
+            control.RestoreAll((key, device) => device);
+
+            Assert.Empty(journal.Entries);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void AHandChangeDropsTheJournalEntry()
+    {
+        string path = TempJournal();
+
+        try
+        {
+            FakeHdr fake = new();
+            fake.State[@"\\.\DISPLAY1"] = Hdr(active: false, supported: true);
+            SystemRestoreJournal journal = new(path);
+            HdrControl control = fake.Control(new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc), journal);
+
+            Assert.True(control.Apply(@"\\.\DISPLAY1", "panel-a", SlotHdrMode.On).Applied);
+
+            fake.State[@"\\.\DISPLAY1"] = Hdr(active: false, supported: true);
+            control.RestoreAll((key, device) => device);
+
+            Assert.Empty(journal.Entries);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void ARestartRestoresFromTheJournalAndClearsIt()
+    {
+        string path = TempJournal();
+
+        try
+        {
+            SystemRestoreJournal journal = new(path);
+            journal.Record(SystemRestoreKinds.Hdr, "panel-a", "off", "on");
+
+            FakeHdr fake = new();
+            fake.State[@"\\.\DISPLAY1"] = Hdr(active: true, supported: true);
+            HdrControl control = fake.Control(DateTime.UtcNow, journal);
+
+            HdrJournalOutcome outcome = control.RestoreJournalEntry(
+                "panel-a",
+                @"\\.\DISPLAY1",
+                before: false,
+                after: true,
+                out string error);
+
+            Assert.Equal(HdrJournalOutcome.Restored, outcome);
+            Assert.Empty(error);
+            Assert.False(fake.State[@"\\.\DISPLAY1"].Active);
+            Assert.Empty(journal.Entries);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void AnUnansweredJournalEntryStaysForTheNextLaunch()
+    {
+        string path = TempJournal();
+
+        try
+        {
+            SystemRestoreJournal journal = new(path);
+            journal.Record(SystemRestoreKinds.Hdr, "panel-a", "off", "on");
+
+            FakeHdr fake = new(); // no state: the screen does not answer
+            HdrControl control = fake.Control(DateTime.UtcNow, journal);
+
+            HdrJournalOutcome outcome = control.RestoreJournalEntry(
+                "panel-a",
+                @"\\.\DISPLAY1",
+                before: false,
+                after: true,
+                out _);
+
+            Assert.Equal(HdrJournalOutcome.Failed, outcome);
+            Assert.Single(journal.Entries);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void AJournalEntryTheUserAlreadyChangedIsDropped()
+    {
+        string path = TempJournal();
+
+        try
+        {
+            SystemRestoreJournal journal = new(path);
+            journal.Record(SystemRestoreKinds.Hdr, "panel-a", "off", "on");
+
+            FakeHdr fake = new();
+            fake.State[@"\\.\DISPLAY1"] = Hdr(active: false, supported: true);
+            HdrControl control = fake.Control(DateTime.UtcNow, journal);
+
+            HdrJournalOutcome outcome = control.RestoreJournalEntry(
+                "panel-a",
+                @"\\.\DISPLAY1",
+                before: false,
+                after: true,
+                out _);
+
+            Assert.Equal(HdrJournalOutcome.AlreadyDifferent, outcome);
+            Assert.Empty(journal.Entries);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void AJournalEntryForADetachedScreenIsDropped()
+    {
+        string path = TempJournal();
+
+        try
+        {
+            SystemRestoreJournal journal = new(path);
+            journal.Record(SystemRestoreKinds.Hdr, "panel-a", "off", "on");
+
+            FakeHdr fake = new();
+            HdrControl control = fake.Control(DateTime.UtcNow, journal);
+
+            HdrJournalOutcome outcome = control.RestoreJournalEntry(
+                "panel-a",
+                "panel-a", // not a \\.\DISPLAYn, so it is not attached
+                before: false,
+                after: true,
+                out _);
+
+            Assert.Equal(HdrJournalOutcome.NotConnected, outcome);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
     private static HdrReading Hdr(bool active, bool supported) =>
         new(true, supported, active, active, false, HdrReadSource.Info2);
+
+    private static string TempJournal() =>
+        Path.Combine(Path.GetTempPath(), "GamerToolTests", Guid.NewGuid().ToString("N"), "pending-restore.json");
+
+    private static void Cleanup(string path)
+    {
+        try
+        {
+            string? folder = Path.GetDirectoryName(path);
+            if (folder is not null && Directory.Exists(folder))
+            {
+                Directory.Delete(folder, recursive: true);
+            }
+        }
+        catch
+        {
+        }
+    }
 
     private sealed class FakeHdr
     {
@@ -350,7 +593,8 @@ public class HdrTests
 
         public Func<string, bool, HdrSetResult>? OnSet { get; set; }
 
-        public HdrControl Control(DateTime now) => new(Read, Set, () => now);
+        public HdrControl Control(DateTime now, SystemRestoreJournal? journal = null) =>
+            new(Read, Set, () => now, journal);
 
         public HdrReading Read(string device) =>
             State.TryGetValue(device, out HdrReading reading) ? reading : HdrReading.Unknown;

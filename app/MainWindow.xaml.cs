@@ -44,6 +44,9 @@ public partial class MainWindow : Window
     private readonly HdrControl _hdr = new();
 
 
+    private readonly SystemRestoreJournal _restoreJournal = SystemRestoreJournal.Default;
+
+
     private readonly AudioService _audio = new();
 
 
@@ -471,6 +474,16 @@ public partial class MainWindow : Window
         // reads it back at startup. Worth knowing the limit, not worth pretending
         // otherwise.
         SessionState.Current.RestoreBacklight = () => Backlight.RestoreAll();
+
+        // The two persistent changes this app makes. EmergencyReset reaches this
+        // from Application.Exit and ProcessExit, which are the paths the window's
+        // own close handler cannot cover. Idempotent, because the normal exit
+        // already calls both directly.
+        SessionState.Current.RestoreSystemChanges = () =>
+        {
+            RestoreWindowsAudioRoutes();
+            RestoreHdrForExit();
+        };
 
         SyncControlsFromSettings();
 
@@ -1555,6 +1568,11 @@ private void HideToTray()
         // The warning is about the live screen, so it is refreshed after the
         // scan and before the user can open the tab.
         UpdateScreenHdrNote();
+
+        // After the display restore, because HDR entries are keyed by monitor and
+        // need the scan; before the audio startup, because a route put back here
+        // must not be overwritten by the remembered preset restore.
+        ProcessPendingSystemRestore();
 
         _display.StartLock();
         _display.SetLock(_settings.GammaLock);

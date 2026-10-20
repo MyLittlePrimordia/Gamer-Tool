@@ -107,6 +107,22 @@ public static class HdrFlipDecision
 /// <summary>One flip decision, with the reason when it was refused.</summary>
 public readonly record struct HdrFlipPlan(bool Flip, bool IsNoOp, string Reason);
 
+/// <summary>What a journal entry's restore attempt established.</summary>
+public enum HdrJournalOutcome
+{
+    /// <summary>The value was put back and verified; the entry can go.</summary>
+    Restored,
+
+    /// <summary>The user changed it themselves; their newer decision wins.</summary>
+    AlreadyDifferent,
+
+    /// <summary>The screen is not attached; there is nothing to put back.</summary>
+    NotConnected,
+
+    /// <summary>The question could not be answered, or the write was not kept. Keep the entry.</summary>
+    Failed,
+}
+
 /// <summary>
 /// The screen's HDR state before the first apply and after the last one, keyed
 /// by the panel rather than by the slot.
@@ -187,6 +203,7 @@ public sealed class HdrControl
     private readonly Func<string, HdrReading> _read;
     private readonly Func<string, bool, HdrSetResult> _set;
     private readonly Func<DateTime> _clock;
+    private readonly SystemRestoreJournal? _journal;
 
     private readonly HdrRestoreMemory _memory = new();
     private readonly Dictionary<string, DateTime> _lastFlip = new(StringComparer.OrdinalIgnoreCase);
@@ -200,7 +217,8 @@ public sealed class HdrControl
                 bool ok = HardwareBrightness.TrySetHdrState(device, enable, out string error);
                 return new HdrSetResult(ok, error);
             },
-            () => DateTime.UtcNow)
+            () => DateTime.UtcNow,
+            SystemRestoreJournal.Default)
     {
     }
 
@@ -208,10 +226,20 @@ public sealed class HdrControl
         Func<string, HdrReading> read,
         Func<string, bool, HdrSetResult> set,
         Func<DateTime> clock)
+        : this(read, set, clock, journal: null)
+    {
+    }
+
+    public HdrControl(
+        Func<string, HdrReading> read,
+        Func<string, bool, HdrSetResult> set,
+        Func<DateTime> clock,
+        SystemRestoreJournal? journal)
     {
         _read = read ?? throw new ArgumentNullException(nameof(read));
         _set = set ?? throw new ArgumentNullException(nameof(set));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        _journal = journal;
     }
 
     public HdrRestoreMemory Memory => _memory;
@@ -287,6 +315,21 @@ public sealed class HdrControl
 
         _inProgress.Add(key);
 
+        // Written before the set, so a kill between the call and the read-back
+        // still leaves a record. If the set does nothing, the entry is put back
+        // to whatever it was - see ForgetJournalIfUnchanged.
+        SystemRestoreEntry? previousJournal = null;
+        if (_journal is not null && _journal.TryGet(SystemRestoreKinds.Hdr, key, out SystemRestoreEntry existing))
+        {
+            previousJournal = existing;
+        }
+
+        _journal?.Record(
+            SystemRestoreKinds.Hdr,
+            key,
+            before.Active ? "on" : "off",
+            wanted ? "on" : "off");
+
         try
         {
             HdrSetResult result = _set(device, wanted);
@@ -303,6 +346,7 @@ public sealed class HdrControl
             if (!result.Ok)
             {
                 TraceLog.Write("HDR set failed " + device + " <- " + result.Error);
+                ForgetJournalIfUnchanged(device, key, before.Active, previousJournal);
                 return HdrApplyResult.Failed("HDR did not switch on this screen");
             }
 
@@ -317,6 +361,7 @@ public sealed class HdrControl
             if (!after.Known || after.Active != wanted)
             {
                 TraceLog.Write("HDR switch was not kept " + device);
+                ForgetJournalIfUnchanged(device, key, before.Active, previousJournal);
                 return HdrApplyResult.Failed("HDR did not switch on this screen");
             }
 
@@ -403,6 +448,7 @@ public sealed class HdrControl
                     || !device.StartsWith("\\\\.\\", StringComparison.OrdinalIgnoreCase))
                 {
                     _memory.Forget(key);
+                    _journal?.Remove(SystemRestoreKinds.Hdr, key);
                     warnings.Add("HDR was not restored: the screen is not connected");
                     continue;
                 }
@@ -424,6 +470,7 @@ public sealed class HdrControl
                 if (current.Active != entry.After)
                 {
                     _memory.Forget(key);
+                    _journal?.Remove(SystemRestoreKinds.Hdr, key);
                     warnings.Add("HDR was left alone: it was changed by hand");
                     continue;
                 }
@@ -445,6 +492,7 @@ public sealed class HdrControl
                 }
 
                 _memory.Forget(key);
+                _journal?.Remove(SystemRestoreKinds.Hdr, key);
                 _lastFlip[key] = _clock();
             }
             catch (Exception ex)
@@ -456,6 +504,117 @@ public sealed class HdrControl
 
         return warnings;
     }
+
+    /// <summary>
+    /// Restores one entry left by a previous run. The journal entry is the
+    /// authoritative before/after pair; this only decides whether it is still
+    /// this app's change to put back.
+    /// </summary>
+    public HdrJournalOutcome RestoreJournalEntry(
+        string key,
+        string device,
+        bool before,
+        bool after,
+        out string error)
+    {
+        error = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(device)
+            || !device.StartsWith("\\\\.\\", StringComparison.OrdinalIgnoreCase))
+        {
+            error = "the screen is not connected";
+            return HdrJournalOutcome.NotConnected;
+        }
+
+        try
+        {
+            HdrReading current = _read(device);
+
+            if (!current.Known)
+            {
+                error = "the screen did not report its state";
+                return HdrJournalOutcome.Failed;
+            }
+
+            if (current.Active != after)
+            {
+                _journal?.Remove(SystemRestoreKinds.Hdr, key);
+                error = "the screen was changed by hand";
+                return HdrJournalOutcome.AlreadyDifferent;
+            }
+
+            HdrSetResult result = _set(device, before);
+
+            if (!result.Ok)
+            {
+                error = result.Error;
+                return HdrJournalOutcome.Failed;
+            }
+
+            HdrReading check = _read(device);
+
+            if (!check.Known || check.Active != before)
+            {
+                error = "the switch was not kept";
+                return HdrJournalOutcome.Failed;
+            }
+
+            _journal?.Remove(SystemRestoreKinds.Hdr, key);
+            return HdrJournalOutcome.Restored;
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("HDR journal restore failed", ex);
+            error = ex.Message;
+            return HdrJournalOutcome.Failed;
+        }
+    }
+
+    /// <summary>
+    /// Takes the optimistic journal entry back when the screen did not move. If
+    /// an earlier entry existed - a first apply that did succeed - it is restored
+    /// rather than dropped, because that is still the state this app owns.
+    /// </summary>
+    private void ForgetJournalIfUnchanged(
+        string device,
+        string key,
+        bool before,
+        SystemRestoreEntry? previousJournal)
+    {
+        if (_journal is null)
+        {
+            return;
+        }
+
+        try
+        {
+            HdrReading current = _read(device);
+
+            if (!current.Known || current.Active != before)
+            {
+                // The setter may have moved it despite the failure. Keep the
+                // entry; a crash recovery needs it more than a tidy file does.
+                return;
+            }
+
+            if (previousJournal is null)
+            {
+                _journal.Remove(SystemRestoreKinds.Hdr, key);
+                return;
+            }
+
+            _journal.Record(
+                SystemRestoreKinds.Hdr,
+                key,
+                previousJournal.Before,
+                previousJournal.After);
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("HDR journal cleanup failed", ex);
+        }
+    }
+
 
     /// <summary>The key a screen is remembered under: the panel, not the number.</summary>
     public static string KeyFor(string monitorKey, string device) =>
