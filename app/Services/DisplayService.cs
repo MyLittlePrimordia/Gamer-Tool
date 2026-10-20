@@ -565,6 +565,39 @@ public sealed class DisplayService
         return !string.IsNullOrWhiteSpace(key) ? key : device ?? string.Empty;
     }
 
+
+    /// <summary>
+    /// Whether two scans describe a different set of screens, rather than the
+    /// same screens in a different order.
+    /// <para>
+    /// The display-change rescan used to rebuild every preset box and slot row on
+    /// every event. That is right when a monitor was plugged in or removed, and
+    /// wrong for every other display event: a resolution change, a refresh change
+    /// and an HDR flip all raise the same notification. Rebuilding under a user
+    /// who is editing a slot drops their focus, and rebuilding during an apply
+    /// can pull the row out from under the code that is still using it.
+    /// </para>
+    /// </summary>
+    internal static bool MonitorListChanged(IReadOnlyList<string> before, IReadOnlyList<string> after)
+    {
+        if (before.Count != after.Count)
+        {
+            return true;
+        }
+
+        HashSet<string> seen = new(before, StringComparer.OrdinalIgnoreCase);
+
+        foreach (string device in after)
+        {
+            if (!seen.Remove(device))
+            {
+                return true;
+            }
+        }
+
+        return seen.Count != 0;
+    }
+
     private static string Label(DisplayDeviceInfo adapter, int ordinal, Dictionary<string, int> seen)
     {
         (string? id, string? name) = FirstMonitor(adapter.DeviceName);

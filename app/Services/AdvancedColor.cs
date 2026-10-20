@@ -65,3 +65,58 @@ internal readonly record struct AdvancedColorFlags(
     /// <summary>True only when the flags positively say SDR (advanced colour off).</summary>
     public bool DefinitelySdr => !Enabled;
 }
+
+/// <summary>
+/// The compositor's answer from <c>GET_ADVANCED_COLOR_INFO_2</c>, which is the
+/// only answer that can tell real HDR from advanced colour on an SDR panel.
+/// <para>
+/// Deliberately a separate type with its own decoder rather than a widening of
+/// <see cref="AdvancedColorFlags"/>. The two structs use the same bit positions
+/// for different meanings: bit 2 is "wide colour enforced" in the legacy flags
+/// and reserved here, and bits 4 to 7 do not exist in the legacy answer at all.
+/// Reusing the old decoder would read reserved as wide colour and would never
+/// see HDR support or the user's HDR switch.
+/// </para>
+/// </summary>
+/// <param name="Supported">Advanced colour is supported at all.</param>
+/// <param name="Active">Advanced colour is being driven right now.</param>
+/// <param name="LimitedByPolicy">Windows policy is holding advanced colour down.</param>
+/// <param name="HdrSupported">The panel can do HDR.</param>
+/// <param name="HdrUserEnabled">The user's HDR switch is on.</param>
+/// <param name="WcgSupported">The panel can do wide colour gamut.</param>
+/// <param name="WcgUserEnabled">The user's wide colour switch is on.</param>
+/// <param name="ActiveColorMode">0 SDR, 1 WCG, 2 HDR.</param>
+internal readonly record struct AdvancedColorInfo2(
+    bool Supported,
+    bool Active,
+    bool LimitedByPolicy,
+    bool HdrSupported,
+    bool HdrUserEnabled,
+    bool WcgSupported,
+    bool WcgUserEnabled,
+    uint ActiveColorMode)
+{
+    /// <summary>
+    /// Splits the native flags word and the separate active-mode field.
+    /// <para>
+    /// Bit 2 is masked out rather than assigned. It is reserved in this struct,
+    /// and a driver is entitled to set it; treating it as the legacy
+    /// "wide colour enforced" flag would make a working HDR panel look like ACM.
+    /// </para>
+    /// </summary>
+    public static AdvancedColorInfo2 Decode(uint value, uint activeColorMode) => new(
+        Supported: (value & 0x01) != 0,
+        Active: (value & 0x02) != 0,
+        LimitedByPolicy: (value & 0x08) != 0,
+        HdrSupported: (value & 0x10) != 0,
+        HdrUserEnabled: (value & 0x20) != 0,
+        WcgSupported: (value & 0x40) != 0,
+        WcgUserEnabled: (value & 0x80) != 0,
+        ActiveColorMode: activeColorMode);
+
+    /// <summary>
+    /// HDR is being driven right now. This is the ground truth; the user-enabled
+    /// bit is the switch's position and can disagree with it when policy wins.
+    /// </summary>
+    public bool HdrActive => ActiveColorMode == 2;
+}

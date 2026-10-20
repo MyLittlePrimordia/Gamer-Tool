@@ -380,7 +380,10 @@ public partial class MainWindow : Window
             : "Press a key box, then hold Ctrl or Alt and press the combo you want.";
 
         if (count == 0)
+        {
+            UpdateScreenHdrNote();
             return;
+        }
 
         SlotList.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         SlotList.Children.Add(SlotHeaderRow());
@@ -392,6 +395,10 @@ public partial class MainWindow : Window
             Grid.SetRow(card, i + 1);
             SlotList.Children.Add(card);
         }
+
+        // The Display-tab note names a slot that asks for HDR without a screen.
+        // Rebuilding the rows is exactly when that can have changed.
+        UpdateScreenHdrNote();
     }
 
 
@@ -620,6 +627,15 @@ public partial class MainWindow : Window
         // the action itself. Both are context menu items: no width at all, and
         // nothing to line up.
         ContextMenu menu = new();
+
+        // HDR is per slot and per screen, so it belongs with the thing that owns
+        // both. The row has no room for another column, and the dialog is the
+        // same shape as the audio routing one.
+        MenuItem hdr = new() { Header = "HDR on this screen..." };
+        hdr.Click += (s, e) => ShowHdrDialog(slot);
+        menu.Items.Add(hdr);
+        menu.Items.Add(new Separator());
+
         MenuItem route = new() { Header = "Windows audio routing..." };
         route.Click += (s, e) => ShowWindowsAudioRoutingDialog(slot);
         menu.Items.Add(route);
@@ -874,13 +890,24 @@ public partial class MainWindow : Window
         // name is the only thing on the row that says which row it is.
         string name = kind == "display" ? "Screen Preset" : "Sound Preset";
 
+        // The one place the two halves of a slot disagree. Windows ignores the
+        // gamma ramp in HDR, so a screen preset beside HDR On is a preset that
+        // will not be visible on that monitor. Said on the control rather than
+        // only on the Display tab, because the slot board is where the user made
+        // the combination.
+        string hdrNote = kind == "display"
+            && slot.HdrMode == SlotHdrMode.On
+            && !string.IsNullOrWhiteSpace(slot.DisplayPresetId)
+                ? "  ·  HDR is on, so this preset's gamma won't apply"
+                : string.Empty;
+
         ComboBox box = new()
         {
             Style = (Style)FindResource("ModernCombo"),
             ItemContainerStyle = (Style)FindResource("ModernComboItem"),
             ItemsSource = choices,
             Tag = slot.Id + "|" + kind,
-            ToolTip = name
+            ToolTip = name + hdrNote
         };
         System.Windows.Automation.AutomationProperties.SetName(box, name + " for " + slot.Name);
 
@@ -1682,6 +1709,16 @@ public partial class MainWindow : Window
     private bool _playInFlight;
 
     /// <summary>
+    /// The settle wait for the HDR flip this Play started. Play awaits it before
+    /// launching, because starting a game while the display is mid-mode-switch
+    /// risks the game reading a transitional mode. Null when HDR was not moved.
+    /// </summary>
+    private Task<bool>? _lastHdrSettleTask;
+
+    /// <summary>HDR warnings for the same one OSD line as the route warnings.</summary>
+    private readonly List<string> _lastHdrWarnings = new();
+
+    /// <summary>
     /// Whether the last <see cref="PlaySlot"/> call managed to push the screen.
     /// Kept beside the call because the Play summary is written after the audio
     /// queue has drained, by which time the local in that method is gone.
@@ -1875,6 +1912,16 @@ public partial class MainWindow : Window
         // queue is still moving.
         await WaitForAudioQueueAsync();
 
+        // The game waits for the display to settle. The gamma half was pushed
+        // already and is re-pushed by the settle task if Windows discarded it.
+        if (_lastHdrSettleTask is { } hdrSettle)
+        {
+            if (!await hdrSettle)
+            {
+                _lastHdrWarnings.Add("HDR did not switch");
+            }
+        }
+
         bool launched = false;
         string failure = string.Empty;
 
@@ -1924,6 +1971,11 @@ public partial class MainWindow : Window
             parts.Add(string.Join(", ", _lastWindowsAudioWarnings));
         }
 
+        if (_lastHdrWarnings.Count > 0)
+        {
+            parts.Add(string.Join(", ", _lastHdrWarnings));
+        }
+
         if (alreadyRunning)
         {
             parts.Add("already running");
@@ -1937,6 +1989,7 @@ public partial class MainWindow : Window
         string message = string.Join(" · ", parts);
         bool warn = preflight.Warnings.Count > 0
             || _lastWindowsAudioWarnings.Count > 0
+            || _lastHdrWarnings.Count > 0
             || !_lastPlayScreenTookIt
             || (!launched && !alreadyRunning);
 
@@ -2056,6 +2109,7 @@ public partial class MainWindow : Window
         if (display is null
             && audio is null
             && FindCrosshair(slot.CrosshairPresetId) is null
+            && slot.HdrMode == SlotHdrMode.Leave
             && !slot.HasWindowsAudioRouting)
         {
             // There is nothing to load, so nothing is about to be loaded. Saying
@@ -2066,6 +2120,11 @@ public partial class MainWindow : Window
             Flash("Nothing set on " + slot.Name, true);
             return;
         }
+
+        // HDR first, because the mode change throws the gamma ramp away. A resume
+        // from a focus pause does not touch it: the alt-tab did not end the slot,
+        // and flipping HDR there would blink the panel every time.
+        ApplySlotHdr(slot, announce, screenOnly);
 
         bool screenTookIt = true;
         if (display is not null)
@@ -2148,6 +2207,104 @@ public partial class MainWindow : Window
                 Flash(slot.Name + " loaded, screen did not take it", true);
             }
         }
+    }
+
+
+    /// <summary>
+    /// Applies a slot's HDR request and starts the settle wait, if there is one.
+    /// <para>
+    /// The apply is synchronous because the mode switch has to happen before the
+    /// gamma ramp is written. The wait is not: a flip can take a few seconds on a
+    /// slow panel, and blocking the dispatcher for it would freeze the window on
+    /// the app's primary gesture. Play awaits the returned task before it starts
+    /// the game; a hotkey lets it finish in the background and re-pushes the ramp.
+    /// </para>
+    /// </summary>
+    private void ApplySlotHdr(HotkeySlot slot, bool announce, bool screenOnly)
+    {
+        _lastHdrWarnings.Clear();
+        _lastHdrSettleTask = null;
+
+        if (screenOnly || slot.HdrMode == SlotHdrMode.Leave)
+        {
+            return;
+        }
+
+        if (slot.IsAnyGameTarget)
+        {
+            // A wildcard would flip HDR for a video player or a browser game. The
+            // slot still loads everything else; this part is refused.
+            _lastHdrWarnings.Add("HDR is not applied on Any game");
+            TraceLog.Write("HDR " + slot.Name + " <- Any game");
+            return;
+        }
+
+        string device = _display.ResolveDevice(slot.MonitorKey, slot.MonitorDevice);
+
+        if (device.Length == 0)
+        {
+            _lastHdrWarnings.Add("Pick one screen for HDR");
+            TraceLog.Write("HDR " + slot.Name + " <- no screen");
+            return;
+        }
+
+        HdrApplyResult result = _hdr.Apply(device, slot.MonitorKey, slot.HdrMode);
+
+        if (result.Warning.Length > 0)
+        {
+            _lastHdrWarnings.Add(result.Warning);
+            TraceLog.Write("HDR " + slot.Name + " <- " + result.Warning);
+        }
+
+        if (!result.Applied)
+        {
+            if (announce && _lastHdrWarnings.Count > 0)
+            {
+                Flash(string.Join(", ", _lastHdrWarnings), true);
+            }
+
+            return;
+        }
+
+        bool wanted = slot.HdrMode == SlotHdrMode.On;
+        _lastHdrSettleTask = SettleHdrAndRepushAsync(device, wanted);
+
+        TraceLog.Write("HDR " + slot.Name + " -> " + (wanted ? "on" : "off")
+            + (result.LegacyPath ? " (legacy advanced colour)" : string.Empty));
+
+        if (announce && _lastHdrWarnings.Count > 0)
+        {
+            Flash(string.Join(", ", _lastHdrWarnings), true);
+        }
+    }
+
+
+    /// <summary>
+    /// Waits for the flip to land, then puts the gamma ramp back if Windows threw
+    /// it away. The re-push is the reason the apply can stay synchronous: the first
+    /// ramp write happens before the mode change has settled, and this is what
+    /// makes the picture right once it has.
+    /// </summary>
+    private async Task<bool> SettleHdrAndRepushAsync(string device, bool wanted)
+    {
+        bool settled = await _hdr.SettleAsync(device, wanted, TimeSpan.FromSeconds(4));
+
+        if (!settled)
+        {
+            TraceLog.Write("HDR did not settle " + device);
+            return false;
+        }
+
+        if (_display.ShouldDefend)
+        {
+            await Dispatcher.InvokeAsync(() =>
+            {
+                _display.Push();
+                TraceLog.Write("DISPLAY ramp re-pushed after an HDR flip");
+            });
+        }
+
+        return true;
     }
 
 
@@ -2628,7 +2785,9 @@ public partial class MainWindow : Window
         _pausedSlotId = slotId;
         _pausedProcess = process;
 
-        GoScreenStandDown();
+        // HDR deliberately stays on while the user is away. Only the gamma ramp
+        // stands down; a mode flip here would blink the screen on every alt-tab.
+        GoScreenStandDownForFocusPause();
 
         // Restored afterwards, because StandDownScreen also clears a pause that is
         // still armed - correct for every other caller, since a user taking the

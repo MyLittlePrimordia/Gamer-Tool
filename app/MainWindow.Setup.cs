@@ -883,6 +883,7 @@ public partial class MainWindow : Window
         _audioPreview.Dispose();
         _spectrum?.Release();
         RestoreWindowsAudioRoutes();
+        RestoreHdrForExit();
         EmergencyReset.Run();
 
         // Written after the restore, not before it, and the order is the whole

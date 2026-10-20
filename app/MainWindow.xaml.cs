@@ -41,6 +41,9 @@ public partial class MainWindow : Window
     private readonly DisplayService _display = new(new GammaBaselineStore());
 
 
+    private readonly HdrControl _hdr = new();
+
+
     private readonly AudioService _audio = new();
 
 
@@ -988,6 +991,7 @@ private void HideToTray()
         _audioPreview.Pause();
         StopNightScheduleTimer();
         RestoreWindowsAudioRoutes();
+        RestoreHdrForExit();
         EmergencyReset.Run();
 
         // Released here rather than waiting for the close handler, so the WASAPI
@@ -1457,11 +1461,13 @@ private void HideToTray()
             IReadOnlyList<string> after = _display.Monitors;
             bool added = after.Count > before.Count;
             bool removed = after.Count < before.Count;
+            bool listChanged = DisplayService.MonitorListChanged(before, after);
 
             TraceLog.Write("DISPLAY rescan: "
                 + before.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 + " -> " + after.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                + (added ? " (added)" : removed ? " (removed)" : string.Empty));
+                + (added ? " (added)" : removed ? " (removed)" : string.Empty)
+                + (listChanged ? string.Empty : " (same list)"));
 
             // Ownership of the panel dropped, if the panel this preset moved is not
             // in the list any more.
@@ -1498,21 +1504,27 @@ private void HideToTray()
             // something.
             Backlight.ForgetDetached(after);
 
-            // Read before the rebuild, because the rebuild is what destroys it.
-            // A docking station is plugged in by somebody who may well have been
-            // halfway through editing that exact slot row with the keyboard, and
-            // rebuilding under them drops focus to nothing.
-            string? focused = FocusedSlotTag();
+            // The rebuild is only for a changed set of screens. A resolution
+            // change, a refresh change and an HDR flip all raise the same display
+            // event, and none of them changes what the dropdowns can offer. The
+            // old code rebuilt on every one of those, which dropped keyboard focus
+            // out of a slot row mid-edit and pulled the rows out from under an
+            // apply that was still running.
+            if (listChanged)
+            {
+                // Read before the rebuild, because the rebuild is what destroys it.
+                string? focused = FocusedSlotTag();
 
-            // Both lists have to be rebuilt from the new set: a slot row's monitor
-            // dropdown is a snapshot of MonitorChoices taken when the row was built,
-            // so without this the dropdown keeps offering a screen that was just
-            // unplugged. BuildSlots is already the whole answer - it is what every
-            // other change to the slot list calls.
-            RefreshPresetBoxes();
-            BuildSlots();
-            RestoreSlotFocus(focused);
-            RefreshTraySlots();
+                // Both lists have to be rebuilt from the new set: a slot row's monitor
+                // dropdown is a snapshot of MonitorChoices taken when the row was built,
+                // so without this the dropdown keeps offering a screen that was just
+                // unplugged. BuildSlots is already the whole answer - it is what every
+                // other change to the slot list calls.
+                RefreshPresetBoxes();
+                BuildSlots();
+                RestoreSlotFocus(focused);
+                RefreshTraySlots();
+            }
 
             // And the ramp, because Windows has just thrown it away. Only when
             // there is one of ours to put back: pushing when IsEnabled is false
@@ -1539,6 +1551,10 @@ private void HideToTray()
         // that is about to be taken off. Its whole job is undoing a run that died
         // with a tint still on the screen.
         _display.RestoreAfterCrash();
+
+        // The warning is about the live screen, so it is refreshed after the
+        // scan and before the user can open the tab.
+        UpdateScreenHdrNote();
 
         _display.StartLock();
         _display.SetLock(_settings.GammaLock);

@@ -3,6 +3,27 @@ using System.Collections.Generic;
 
 namespace GamerTool.Models;
 
+/// <summary>
+/// What a slot asks the compositor to do with HDR on its screen.
+/// <para>
+/// Leave is the default and the only value an older profile can carry. It is
+/// deliberately not "Off": a slot made before HDR existed must not turn it off
+/// on the first load, and a slot with no screen must not guess which panel the
+/// user meant.
+/// </para>
+/// </summary>
+public enum SlotHdrMode
+{
+    /// <summary>Leave the screen's HDR state exactly as it is.</summary>
+    Leave,
+
+    /// <summary>Switch HDR on for this slot.</summary>
+    On,
+
+    /// <summary>Switch HDR off for this slot.</summary>
+    Off,
+}
+
 public sealed class HotkeySlot
 {
     public string Id { get; set; } = string.Empty;
@@ -132,6 +153,16 @@ public sealed class HotkeySlot
     /// </summary>
     public bool WindowsAudioBypassFxSound { get; set; }
 
+    /// <summary>
+    /// Whether this slot switches HDR on its monitor, or leaves it alone.
+    /// <para>
+    /// Applied before the gamma ramp, because Windows discards the ramp when the
+    /// display mode changes. Restored when the slot is stood down for a real
+    /// reason, never when the user only alt-tabbed away.
+    /// </para>
+    /// </summary>
+    public SlotHdrMode HdrMode { get; set; } = SlotHdrMode.Leave;
+
     public bool HasWindowsAudioRouting =>
         !string.IsNullOrWhiteSpace(WindowsPlaybackDeviceId)
         || !string.IsNullOrWhiteSpace(WindowsRecordingDeviceId);
@@ -185,6 +216,7 @@ public sealed class HotkeySlot
             return !string.IsNullOrWhiteSpace(DisplayPresetId)
                 || !string.IsNullOrWhiteSpace(AudioPresetId)
                 || !string.IsNullOrWhiteSpace(CrosshairPresetId)
+                || HdrMode != SlotHdrMode.Leave
                 || HasWindowsAudioRouting;
         }
     }
@@ -234,6 +266,7 @@ public sealed class HotkeySlot
             bool hasScreen = !string.IsNullOrWhiteSpace(DisplayPresetId);
             bool hasSound = !string.IsNullOrWhiteSpace(AudioPresetId);
             bool hasCrosshair = !string.IsNullOrWhiteSpace(CrosshairPresetId);
+            bool hasHdr = HdrMode != SlotHdrMode.Leave;
             bool hasRoute = HasWindowsAudioRouting;
 
             // One word per thing the slot does, joined. The original three
@@ -243,6 +276,11 @@ public sealed class HotkeySlot
             if (hasScreen)
             {
                 parts.Add("SCREEN");
+            }
+
+            if (hasHdr)
+            {
+                parts.Add("HDR");
             }
 
             if (hasSound)
@@ -295,6 +333,7 @@ public sealed class HotkeySlot
             WindowsPlaybackCommunications = WindowsPlaybackCommunications,
             WindowsRecordingCommunications = WindowsRecordingCommunications,
             WindowsAudioBypassFxSound = WindowsAudioBypassFxSound,
+            HdrMode = HdrMode,
             Enabled = Enabled
         };
     }

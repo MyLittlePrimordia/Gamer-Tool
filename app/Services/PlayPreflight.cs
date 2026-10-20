@@ -174,6 +174,7 @@ public sealed class PlayPreflight
             exactTarget && targetExists ? PlayCheckState.Ready : PlayCheckState.Warning));
 
         checks.Add(DisplayCheck(slot, displayExists, monitorResolved));
+        checks.Add(HdrCheck(slot));
         checks.Add(AudioCheck(slot, audioExists, audioInstalled));
         checks.Add(RouteCheck(slot));
         checks.Add(CrosshairCheck(slot, crosshairExists));
@@ -224,6 +225,46 @@ public sealed class PlayPreflight
         }
 
         return new PlayCheck("SCREEN", "ready", PlayCheckState.Ready);
+    }
+
+    /// <summary>
+    /// The HDR half of the screen, kept separate from SCREEN because the two can
+    /// disagree: a slot can load a screen preset and ask for HDR, and the preset
+    /// will be ignored on that monitor while HDR is on. The row says what will be
+    /// attempted; the Display tab explains why it may look inert.
+    /// </summary>
+    private static PlayCheck HdrCheck(HotkeySlot slot)
+    {
+        if (slot.HdrMode == SlotHdrMode.Leave)
+        {
+            return new PlayCheck("HDR", "not set", PlayCheckState.NotSet);
+        }
+
+        if (slot.IsAnyGameTarget)
+        {
+            // A wildcard would flip HDR for a video player or a browser game.
+            // The slot still loads everything else; this part is refused.
+            return new PlayCheck("HDR", "not on Any game", PlayCheckState.Warning);
+        }
+
+        if (string.IsNullOrWhiteSpace(slot.MonitorKey) && string.IsNullOrWhiteSpace(slot.MonitorDevice))
+        {
+            return new PlayCheck("HDR", "pick one screen", PlayCheckState.Warning);
+        }
+
+        // The two halves can contradict each other: Windows ignores the gamma
+        // ramp in HDR, so a slot with a screen preset and HDR On will load a
+        // preset that cannot be seen on that monitor. Still Ready - both parts
+        // are available - but the detail says why the picture will not change.
+        string detail = slot.HdrMode switch
+        {
+            SlotHdrMode.On when !string.IsNullOrWhiteSpace(slot.DisplayPresetId) =>
+                "on (screen preset won't apply)",
+            SlotHdrMode.On => "on",
+            _ => "off",
+        };
+
+        return new PlayCheck("HDR", detail, PlayCheckState.Ready);
     }
 
     private static PlayCheck AudioCheck(HotkeySlot slot, bool exists, bool installed)

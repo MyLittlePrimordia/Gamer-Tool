@@ -216,4 +216,105 @@ public class PlayPreflightTests
         Assert.Equal("screen + crosshair", check.Summary);
         Assert.DoesNotContain("SOUND", check.Summary);
     }
+
+    [Fact]
+    public void HdrOnAScreenBoundSlotIsAReadyRowAndPartOfTheSummary()
+    {
+        HotkeySlot slot = Slot();
+        slot.HdrMode = SlotHdrMode.On;
+
+        PlayPreflight check = PlayPreflight.Build(
+            slot,
+            targetExists: true,
+            displayExists: true,
+            audioExists: true,
+            crosshairExists: true,
+            audioInstalled: true,
+            monitorResolved: true);
+
+        Assert.True(check.CanLaunch);
+        Assert.Empty(check.Warnings);
+        Assert.Contains("[x] HDR", check.Tooltip);
+        Assert.Contains("screen preset won't apply", check.Tooltip);
+        Assert.Equal("screen + hdr + sound + crosshair", check.Summary);
+    }
+
+    [Fact]
+    public void HdrOnAnAnyGameSlotWarnsRatherThanFlippingThePanelForAnything()
+    {
+        HotkeySlot slot = Slot();
+        slot.IsAnyGameTarget = true;
+        slot.AppExePath = null;
+        slot.AppName = null;
+        slot.HdrMode = SlotHdrMode.On;
+
+        PlayPreflight check = PlayPreflight.Build(
+            slot,
+            targetExists: false,
+            displayExists: true,
+            audioExists: true,
+            crosshairExists: true,
+            audioInstalled: true,
+            monitorResolved: true);
+
+        Assert.Contains(check.Warnings, w => w.Label == "HDR" && w.Detail == "not on Any game");
+    }
+
+    [Fact]
+    public void HdrWithoutAScreenWarnsAndSaysWhichHalfToFix()
+    {
+        HotkeySlot slot = Slot();
+        slot.MonitorKey = string.Empty;
+        slot.MonitorDevice = string.Empty;
+        slot.HdrMode = SlotHdrMode.Off;
+
+        PlayPreflight check = PlayPreflight.Build(
+            slot,
+            targetExists: true,
+            displayExists: true,
+            audioExists: true,
+            crosshairExists: true,
+            audioInstalled: true,
+            monitorResolved: true);
+
+        Assert.Contains(check.Warnings, w => w.Label == "HDR" && w.Detail == "pick one screen");
+    }
+
+    [Fact]
+    public void HdrAloneCountsAsWorkAndCanLaunch()
+    {
+        HotkeySlot slot = Slot();
+        slot.DisplayPresetId = null;
+        slot.AudioPresetId = null;
+        slot.CrosshairPresetId = null;
+        slot.HdrMode = SlotHdrMode.On;
+
+        PlayPreflight check = PlayPreflight.Build(
+            slot,
+            targetExists: true,
+            displayExists: false,
+            audioExists: false,
+            crosshairExists: false,
+            audioInstalled: true,
+            monitorResolved: true);
+
+        Assert.True(check.CanLaunch);
+        Assert.Equal("hdr", check.Summary);
+    }
+
+    [Fact]
+    public void LeaveIsTheDefaultAndAddsNothingToTheChecklist()
+    {
+        PlayPreflight check = PlayPreflight.Build(
+            Slot(),
+            targetExists: true,
+            displayExists: true,
+            audioExists: true,
+            crosshairExists: true,
+            audioInstalled: true,
+            monitorResolved: true);
+
+        Assert.Contains("[ ] HDR", check.Tooltip);
+        Assert.DoesNotContain("hdr", check.Summary);
+    }
 }

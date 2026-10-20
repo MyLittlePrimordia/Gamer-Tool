@@ -222,4 +222,21 @@ public class DisplayRescanTests
         Assert.Equal("night", display.Working.Id);
         Assert.Equal(1.4, display.Working.Gamma, 3);
     }
+
+    /// <summary>
+    /// A display event is only a reason to rebuild the slot rows when the set of
+    /// screens changed. Resolution, refresh and HDR flips raise the same event and
+    /// change nothing the dropdowns can offer.
+    /// </summary>
+    [Theory]
+    [InlineData(new[] { @"\\.\DISPLAY1", @"\\.\DISPLAY2" }, new[] { @"\\.\DISPLAY1", @"\\.\DISPLAY2" }, false)]
+    [InlineData(new[] { @"\\.\DISPLAY1", @"\\.\DISPLAY2" }, new[] { @"\\.\DISPLAY2", @"\\.\DISPLAY1" }, false)]
+    [InlineData(new[] { @"\\.\DISPLAY1" }, new[] { @"\\.\DISPLAY1", @"\\.\DISPLAY2" }, true)]
+    [InlineData(new[] { @"\\.\DISPLAY1", @"\\.\DISPLAY2" }, new[] { @"\\.\DISPLAY1" }, true)]
+    [InlineData(new[] { @"\\.\DISPLAY1" }, new[] { @"\\.\DISPLAY2" }, true)]
+    [InlineData(new[] { @"\\.\DISPLAY1" }, new[] { @"\\.\display1" }, false)]
+    public void OnlyAChangedSetOfScreensRebuildsTheRows(string[] before, string[] after, bool changed)
+    {
+        Assert.Equal(changed, DisplayService.MonitorListChanged(before, after));
+    }
 }

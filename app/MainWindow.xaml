@@ -502,6 +502,21 @@
                                          and a rule between them divides a list that
                                          was never in two. -->
                                     <StackPanel x:Name="BacklightPanel" Grid.Row="2" Margin="0,26,0,0" />
+
+                                    <!-- The one line that explains a preset doing
+                                         nothing. Gamma ramps are undefined in HDR,
+                                         so a slot with a screen preset and HDR on
+                                         looks broken until the mode is named. It
+                                         sits in the trailing star row, below the
+                                         controls, so it only takes space when it
+                                         has something to say. -->
+                                    <TextBlock x:Name="ScreenHdrNote" Grid.Row="3"
+                                               Style="{StaticResource CardSub}"
+                                               Foreground="{StaticResource Amber}"
+                                               TextWrapping="Wrap"
+                                               VerticalAlignment="Top"
+                                               Margin="0,16,0,0"
+                                               Visibility="Collapsed" />
                                 </Grid>
                             </Grid>
 

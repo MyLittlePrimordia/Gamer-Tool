@@ -144,6 +144,7 @@ new HotkeySlot
         copy.WindowsPlaybackCommunications = source.WindowsPlaybackCommunications;
         copy.WindowsRecordingCommunications = source.WindowsRecordingCommunications;
         copy.WindowsAudioBypassFxSound = source.WindowsAudioBypassFxSound;
+        copy.HdrMode = source.HdrMode;
         copy.ApplyOnStart = source.ApplyOnStart;
         copy.Enabled = source.Enabled;
 
@@ -241,6 +242,14 @@ new HotkeySlot
             // device matcher is still a null somebody has to remember about.
             slot.WindowsPlaybackDeviceId ??= string.Empty;
             slot.WindowsRecordingDeviceId ??= string.Empty;
+
+            // An enum out of JSON is a number, and a hand-edited profile can carry
+            // one this build has never heard of. Leave is the safe reading: an
+            // unknown value must not switch HDR on or off on somebody's panel.
+            if (slot.HdrMode is not (SlotHdrMode.Leave or SlotHdrMode.On or SlotHdrMode.Off))
+            {
+                slot.HdrMode = SlotHdrMode.Leave;
+            }
 
             // The three target modes are mutually exclusive, and a file can arrive
             // carrying more than one - a hand edit, or a build where the flags were
