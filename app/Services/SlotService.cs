@@ -139,6 +139,11 @@ new HotkeySlot
         copy.CrosshairPresetId = source.CrosshairPresetId;
         copy.MonitorDevice = source.MonitorDevice;
         copy.MonitorKey = source.MonitorKey;
+        copy.WindowsPlaybackDeviceId = source.WindowsPlaybackDeviceId;
+        copy.WindowsRecordingDeviceId = source.WindowsRecordingDeviceId;
+        copy.WindowsPlaybackCommunications = source.WindowsPlaybackCommunications;
+        copy.WindowsRecordingCommunications = source.WindowsRecordingCommunications;
+        copy.WindowsAudioBypassFxSound = source.WindowsAudioBypassFxSound;
         copy.ApplyOnStart = source.ApplyOnStart;
         copy.Enabled = source.Enabled;
 
@@ -229,6 +234,13 @@ new HotkeySlot
             {
                 slot.Name = "SLOT";
             }
+
+            // A hand-edited or pre-feature profile can carry nulls where the
+            // route fields were added. They are strings that are tested with
+            // IsNullOrWhiteSpace everywhere else, but a null that reaches the
+            // device matcher is still a null somebody has to remember about.
+            slot.WindowsPlaybackDeviceId ??= string.Empty;
+            slot.WindowsRecordingDeviceId ??= string.Empty;
 
             // The three target modes are mutually exclusive, and a file can arrive
             // carrying more than one - a hand edit, or a build where the flags were

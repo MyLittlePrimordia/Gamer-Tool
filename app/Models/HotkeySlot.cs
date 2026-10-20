@@ -88,6 +88,54 @@ public sealed class HotkeySlot
     /// </summary>
     public string OutputDeviceId { get; set; } = string.Empty;
 
+    /// <summary>
+    /// The Windows playback endpoint this slot makes the default, or empty to
+    /// leave the default alone.
+    /// <para>
+    /// This is separate from <see cref="OutputDeviceId"/> on purpose. That one is
+    /// FxSound's own output, and it only matters while FxSound is in the chain.
+    /// This one is the endpoint Windows hands to every program that does not have
+    /// an output picker of its own. Conflating them would either move the Windows
+    /// default when the user only meant to move FxSound, or leave the game on the
+    /// previous speakers when they meant to move Windows.
+    /// </para>
+    /// </summary>
+    public string WindowsPlaybackDeviceId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The Windows recording endpoint this slot makes the default microphone, or
+    /// empty to leave it alone.
+    /// </summary>
+    public string WindowsRecordingDeviceId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Also make the slot's playback device the Windows communications device,
+    /// which is the endpoint voice chat picks by default.
+    /// </summary>
+    public bool WindowsPlaybackCommunications { get; set; }
+
+    /// <summary>
+    /// Also make the slot's microphone the Windows communications microphone.
+    /// </summary>
+    public bool WindowsRecordingCommunications { get; set; }
+
+    /// <summary>
+    /// True only when the user has explicitly allowed this slot to point the
+    /// Windows default playback at a physical endpoint while FxSound is running.
+    /// <para>
+    /// FxSound works by being the Windows default and forwarding the processed
+    /// sound to its own output. Switching the default to a physical headset while
+    /// FxSound is running therefore turns the equalizer off for every program that
+    /// follows the default. That is a legitimate choice for a slot, and it is a
+    /// terrible surprise when it happens without one. This flag is the choice.
+    /// </para>
+    /// </summary>
+    public bool WindowsAudioBypassFxSound { get; set; }
+
+    public bool HasWindowsAudioRouting =>
+        !string.IsNullOrWhiteSpace(WindowsPlaybackDeviceId)
+        || !string.IsNullOrWhiteSpace(WindowsRecordingDeviceId);
+
     public bool IsSelfTarget { get; set; }
 
     /// <summary>
@@ -136,7 +184,8 @@ public sealed class HotkeySlot
         {
             return !string.IsNullOrWhiteSpace(DisplayPresetId)
                 || !string.IsNullOrWhiteSpace(AudioPresetId)
-                || !string.IsNullOrWhiteSpace(CrosshairPresetId);
+                || !string.IsNullOrWhiteSpace(CrosshairPresetId)
+                || HasWindowsAudioRouting;
         }
     }
 
@@ -185,6 +234,7 @@ public sealed class HotkeySlot
             bool hasScreen = !string.IsNullOrWhiteSpace(DisplayPresetId);
             bool hasSound = !string.IsNullOrWhiteSpace(AudioPresetId);
             bool hasCrosshair = !string.IsNullOrWhiteSpace(CrosshairPresetId);
+            bool hasRoute = HasWindowsAudioRouting;
 
             // One word per thing the slot does, joined. The original three
             // phrases are unchanged when there is no crosshair, so nothing that
@@ -198,6 +248,11 @@ public sealed class HotkeySlot
             if (hasSound)
             {
                 parts.Add("SOUND");
+            }
+
+            if (hasRoute)
+            {
+                parts.Add("ROUTE");
             }
 
             if (hasCrosshair)
@@ -235,6 +290,11 @@ public sealed class HotkeySlot
             MonitorDevice = MonitorDevice,
             MonitorKey = MonitorKey,
             OutputDeviceId = OutputDeviceId,
+            WindowsPlaybackDeviceId = WindowsPlaybackDeviceId,
+            WindowsRecordingDeviceId = WindowsRecordingDeviceId,
+            WindowsPlaybackCommunications = WindowsPlaybackCommunications,
+            WindowsRecordingCommunications = WindowsRecordingCommunications,
+            WindowsAudioBypassFxSound = WindowsAudioBypassFxSound,
             Enabled = Enabled
         };
     }

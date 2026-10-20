@@ -36,6 +36,14 @@ public partial class MainWindow : Window
     private TextBlock _modalBody = null!;
 
 
+    /// <summary>
+    /// The controls for a dialog that asks for more than one value. Empty and
+    /// collapsed for every other dialog, and replaced wholesale when opened so a
+    /// second opening cannot keep the first one's state.
+    /// </summary>
+    private StackPanel _modalCustom = null!;
+
+
     private Action<string>? _modalAction;
 
 
@@ -164,6 +172,11 @@ public partial class MainWindow : Window
             TextWrapping = TextWrapping.Wrap,
             LineHeight = 19,
             Margin = new Thickness(0, 12, 0, 0),
+            Visibility = Visibility.Collapsed
+        };
+
+        _modalCustom = new StackPanel
+        {
             Visibility = Visibility.Collapsed
         };
 
@@ -347,6 +360,7 @@ public partial class MainWindow : Window
                 {
                     _modalTitle,
                     _modalBody,
+                    _modalCustom,
                     _modalInput,
                     _modalCounter,
                     _modalWarning,
@@ -391,6 +405,7 @@ public partial class MainWindow : Window
         _modalTitle.Text = title;
         _modalInput.Text = initial;
         _modalBody.Visibility = Visibility.Collapsed;
+        _modalCustom.Visibility = Visibility.Collapsed;
         _modalInput.Visibility = Visibility.Visible;
         _modalCounter.Visibility = Visibility.Visible;
         _modalWarning.Visibility = Visibility.Collapsed;
@@ -421,6 +436,56 @@ public partial class MainWindow : Window
             _modalInput.SelectAll();
         }));
     }
+
+    /// <summary>
+    /// A dialog with controls the caller built, rather than one box or one
+    /// paragraph. The audio route needs two device pickers and their role
+    /// switches; putting those in a fixed dialog would have meant a second modal
+    /// system beside this one.
+    /// </summary>
+    private void ShowCustomModal(
+        string title,
+        UIElement content,
+        string confirmText,
+        Action action,
+        UIElement? initialFocus = null)
+    {
+        StopModalElapsed();
+        _modalTitle.Text = title;
+        _modalBody.Visibility = Visibility.Collapsed;
+        _modalInput.Visibility = Visibility.Collapsed;
+        _modalCounter.Visibility = Visibility.Collapsed;
+        _modalWarning.Visibility = Visibility.Collapsed;
+        _modalStatus.Visibility = Visibility.Collapsed;
+        _modalBarHost.Visibility = Visibility.Collapsed;
+        StopModalBar();
+
+        _modalCustom.Children.Clear();
+        _modalCustom.Children.Add(content);
+        _modalCustom.Visibility = Visibility.Visible;
+
+        _modalSaveButton.Visibility = Visibility.Visible;
+        _modalSaveButton.Content = confirmText;
+        _modalSaveButton.Style = (Style)FindResource("PrimaryButton");
+        _modalSaveButton.IsEnabled = true;
+        _modalCancelButton.Visibility = Visibility.Visible;
+        _modalCancelButton.Content = "Cancel";
+        _modalCancelButton.IsEnabled = true;
+        _modalAction = null;
+        _modalConfirm = action;
+        _modalSecondary = null;
+        _modalKeepOpen = false;
+        ShowModalLayer();
+
+        if (initialFocus is not null)
+        {
+            // Queued after ShowModalLayer's own focus call, so the first field is
+            // where a keyboard user starts rather than the Save button at the
+            // bottom of a form they have not filled in.
+            Dispatcher.BeginInvoke(new Action(() => initialFocus.Focus()));
+        }
+    }
+
 
     /// <summary>
     /// Shows the scrim and moves focus into it.
@@ -519,6 +584,7 @@ public partial class MainWindow : Window
         _modalTitle.Text = title;
         _modalBody.Text = body;
         _modalBody.Visibility = Visibility.Visible;
+        _modalCustom.Visibility = Visibility.Collapsed;
         _modalInput.Visibility = Visibility.Collapsed;
         _modalCounter.Visibility = Visibility.Collapsed;
 
@@ -556,6 +622,7 @@ public partial class MainWindow : Window
         StopModalElapsed();
         _modalTitle.Text = title;
         _modalBody.Visibility = Visibility.Collapsed;
+        _modalCustom.Visibility = Visibility.Collapsed;
         _modalInput.Visibility = Visibility.Collapsed;
         _modalCounter.Visibility = Visibility.Collapsed;
         _modalWarning.Visibility = Visibility.Visible;
@@ -588,6 +655,7 @@ public partial class MainWindow : Window
     private void ShowProgressModal(string title, bool showCaution)
     {
         _modalTitle.Text = title;
+        _modalCustom.Visibility = Visibility.Collapsed;
         _modalInput.Visibility = Visibility.Collapsed;
         _modalCounter.Visibility = Visibility.Collapsed;
 
@@ -635,6 +703,7 @@ public partial class MainWindow : Window
         StopModalElapsed();
         _modalTitle.Text = title;
         _modalBody.Visibility = Visibility.Collapsed;
+        _modalCustom.Visibility = Visibility.Collapsed;
         _modalInput.Visibility = Visibility.Collapsed;
         _modalCounter.Visibility = Visibility.Collapsed;
         _modalWarning.Visibility = Visibility.Visible;

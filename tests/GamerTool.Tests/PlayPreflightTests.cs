@@ -84,6 +84,33 @@ public class PlayPreflightTests
     }
 
     [Fact]
+    public void AWindowsRouteIsPartOfTheProfileAndTheChecklist()
+    {
+        HotkeySlot slot = Slot();
+        slot.DisplayPresetId = null;
+        slot.AudioPresetId = null;
+        slot.CrosshairPresetId = null;
+        slot.WindowsPlaybackDeviceId = "render-headset";
+        slot.WindowsRecordingDeviceId = "capture-mic";
+        slot.WindowsRecordingCommunications = true;
+
+        PlayPreflight check = PlayPreflight.Build(
+            slot,
+            targetExists: true,
+            displayExists: false,
+            audioExists: false,
+            crosshairExists: false,
+            audioInstalled: true,
+            monitorResolved: true);
+
+        Assert.True(check.CanLaunch);
+        Assert.Empty(check.Warnings);
+        Assert.Equal("route", check.Summary);
+        Assert.Contains("[x] ROUTE", check.Tooltip);
+        Assert.Contains("playback + microphone + voice chat", check.Tooltip);
+    }
+
+    [Fact]
     public void AMissingGameFileBlocksTheLaunchAndNamesThePath()
     {
         PlayPreflight check = PlayPreflight.Build(

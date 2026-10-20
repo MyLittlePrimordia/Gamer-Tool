@@ -175,6 +175,7 @@ public sealed class PlayPreflight
 
         checks.Add(DisplayCheck(slot, displayExists, monitorResolved));
         checks.Add(AudioCheck(slot, audioExists, audioInstalled));
+        checks.Add(RouteCheck(slot));
         checks.Add(CrosshairCheck(slot, crosshairExists));
 
         string blocked = string.Empty;
@@ -243,6 +244,32 @@ public sealed class PlayPreflight
         }
 
         return new PlayCheck("SOUND", "ready", PlayCheckState.Ready);
+    }
+
+    private static PlayCheck RouteCheck(HotkeySlot slot)
+    {
+        if (!slot.HasWindowsAudioRouting)
+        {
+            return new PlayCheck("ROUTE", "not set", PlayCheckState.NotSet);
+        }
+
+        List<string> parts = new();
+        if (!string.IsNullOrWhiteSpace(slot.WindowsPlaybackDeviceId))
+        {
+            parts.Add("playback");
+        }
+
+        if (!string.IsNullOrWhiteSpace(slot.WindowsRecordingDeviceId))
+        {
+            parts.Add("microphone");
+        }
+
+        if (slot.WindowsPlaybackCommunications || slot.WindowsRecordingCommunications)
+        {
+            parts.Add("voice chat");
+        }
+
+        return new PlayCheck("ROUTE", string.Join(" + ", parts), PlayCheckState.Ready);
     }
 
     private static PlayCheck CrosshairCheck(HotkeySlot slot, bool exists)

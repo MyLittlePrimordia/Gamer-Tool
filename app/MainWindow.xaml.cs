@@ -987,6 +987,7 @@ private void HideToTray()
         Show();
         _audioPreview.Pause();
         StopNightScheduleTimer();
+        RestoreWindowsAudioRoutes();
         EmergencyReset.Run();
 
         // Released here rather than waiting for the close handler, so the WASAPI

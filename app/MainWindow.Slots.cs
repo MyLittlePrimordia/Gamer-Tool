@@ -620,6 +620,10 @@ public partial class MainWindow : Window
         // the action itself. Both are context menu items: no width at all, and
         // nothing to line up.
         ContextMenu menu = new();
+        MenuItem route = new() { Header = "Windows audio routing..." };
+        route.Click += (s, e) => ShowWindowsAudioRoutingDialog(slot);
+        menu.Items.Add(route);
+        menu.Items.Add(new Separator());
         MenuItem duplicate = new() { Header = "Duplicate" };
         duplicate.Click += (s, e) => DuplicateSlot(slot);
         menu.Items.Add(duplicate);
@@ -1912,6 +1916,14 @@ public partial class MainWindow : Window
                 w.Label.ToLowerInvariant() + " " + w.Detail)));
         }
 
+        // The route is applied after the checklist is built, because it depends
+        // on what is plugged in and on whether FxSound is running right now. Its
+        // outcome belongs on the same line as the rest of the play result.
+        if (_lastWindowsAudioWarnings.Count > 0)
+        {
+            parts.Add(string.Join(", ", _lastWindowsAudioWarnings));
+        }
+
         if (alreadyRunning)
         {
             parts.Add("already running");
@@ -1923,7 +1935,10 @@ public partial class MainWindow : Window
         }
 
         string message = string.Join(" · ", parts);
-        bool warn = preflight.Warnings.Count > 0 || !_lastPlayScreenTookIt || (!launched && !alreadyRunning);
+        bool warn = preflight.Warnings.Count > 0
+            || _lastWindowsAudioWarnings.Count > 0
+            || !_lastPlayScreenTookIt
+            || (!launched && !alreadyRunning);
 
         RailStatus.Text = (!launched && !alreadyRunning)
             ? "PLAY FAILED"
@@ -2038,7 +2053,10 @@ public partial class MainWindow : Window
         DisplayPreset? display = FindDisplay(slot.DisplayPresetId);
         AudioPreset? audio = FindAudio(slot.AudioPresetId);
 
-        if (display is null && audio is null && FindCrosshair(slot.CrosshairPresetId) is null)
+        if (display is null
+            && audio is null
+            && FindCrosshair(slot.CrosshairPresetId) is null
+            && !slot.HasWindowsAudioRouting)
         {
             // There is nothing to load, so nothing is about to be loaded. Saying
             // otherwise left the status bar and the toast claiming a preset that
@@ -2091,6 +2109,24 @@ public partial class MainWindow : Window
         // The crosshair goes up whether or not the screen took its preset, and on a
         // resume after an alt-tab as well, because standing the screen down hid it.
         ApplySlotCrosshair(slot);
+
+        // Windows defaults are part of what the slot asked for. They are not
+        // applied on a resume: an alt-tab did not put the game's headset back on
+        // the desk, and re-running the switch there would fight a user who had
+        // changed the default in the meantime.
+        if (!screenOnly)
+        {
+            ApplyWindowsAudioRouting(slot);
+
+            if (announce && _lastWindowsAudioWarnings.Count > 0)
+            {
+                Flash(string.Join(", ", _lastWindowsAudioWarnings), true);
+            }
+        }
+        else
+        {
+            _lastWindowsAudioWarnings = Array.Empty<string>();
+        }
 
         if (audio is not null && !screenOnly)
         {
