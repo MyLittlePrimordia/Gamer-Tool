@@ -327,6 +327,13 @@ public partial class MainWindow : Window
 
         Icon = IconFactory.LoadWindowIcon();
 
+        // The diagnostics row is where a bug report starts, and the first thing a
+        // report has to answer is which build it came from. The version cannot:
+        // it has been 1.0.0 since the first release and the release itself is a
+        // rolling "latest". The same id is in the copied text and the log header;
+        // this is the version of it the user can see without copying anything.
+        DiagRow.ToolTip = "Build " + BuildIdentity.Id + " - click to copy the log";
+
         _settings = _profiles.Load();
 
         // Said once, on the window, rather than nowhere. A profile that came back

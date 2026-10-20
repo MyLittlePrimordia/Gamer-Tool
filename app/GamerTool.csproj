@@ -36,7 +36,25 @@
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+
+    <!--
+      Which build this is, as opposed to which version. The version has been
+      1.0.0 since the first release and the release itself is a rolling
+      "latest", so the number cannot answer "which commit am I running?".
+      CI sets BuildId in the environment to the short commit and the run
+      number; a local build says dev, because a local build is not a release
+      and pretending otherwise would put a false identity in a bug report.
+    -->
+    <BuildId Condition="'$(BuildId)' == ''">dev</BuildId>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Read back by BuildIdentity, which puts it in the log header and the
+         diagnostics text. Assembly metadata rather than a generated source
+         file, because it is one string and generating code to hold it would be
+         more moving parts than the thing it carries. -->
+    <AssemblyMetadata Include="BuildId" Value="$(BuildId)" />
+  </ItemGroup>
 
   <ItemGroup>
     <Using Remove="System.Windows.Forms" />
