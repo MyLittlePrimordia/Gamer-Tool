@@ -26,9 +26,33 @@ public sealed class MonitorChoice
     }
 }
 
+/// <summary>
+/// What writing a gamma ramp and reading it back actually found.
+/// <para>
+/// <see cref="Ok"/> is "the driver answered", <see cref="Kept"/> is "the table that
+/// came back is the one that was written". They are separate because the failure
+/// this exists for - a screen in HDR mode - accepts the call and keeps its old
+/// table, which is a working driver and a gamma that does not apply.
+/// </para>
+/// </summary>
+public readonly record struct GammaProbe(bool Ok, bool Kept, string Detail);
+
 public sealed class DisplayService
 {
     private const int RampSize = 256;
+
+    /// <summary>
+    /// How far the probe darkens the table it writes. Enough that a discarded
+    /// write is visible in the read-back, far enough from black that a screen that
+    /// does keep it looks normal for the few milliseconds it is up.
+    /// </summary>
+    private const double GammaProbeScale = 0.9;
+
+    /// <summary>
+    /// How much a read-back may differ and still be the same table. The driver
+    /// rounds; a table Windows threw away differs by thousands.
+    /// </summary>
+    private const int GammaProbeTolerance = 8;
 
     private readonly Dictionary<string, Ramp> _originalRamps = new(StringComparer.OrdinalIgnoreCase);
 
@@ -949,6 +973,107 @@ public sealed class DisplayService
         {
             DeleteDC(hdc);
         }
+    }
+
+    /// <summary>
+    /// Writes a slightly darker copy of the screen's own table, reads it back, and
+    /// puts the original straight back.
+    /// <para>
+    /// The only honest way to answer "does this screen still take a gamma ramp".
+    /// The call returns success whether or not anything happened - Microsoft's own
+    /// documentation says so, and says it is undefined while HDR is on - so the
+    /// verdict has to come from reading the table after the write. The test value
+    /// is a scaled copy of what was already there rather than a preset, because a
+    /// probe must not leave a look on the screen if it fails halfway, and the
+    /// original is written back on every path including the failed ones.
+    /// </para>
+    /// <para>
+    /// Synchronous on purpose: the lock's timer runs on this same thread, so it
+    /// cannot fire between the write and the read-back and turn a good screen into
+    /// a reported failure.
+    /// </para>
+    /// </summary>
+    public GammaProbe ProbeGamma(string device)
+    {
+        if (string.IsNullOrWhiteSpace(device))
+        {
+            return new GammaProbe(false, false, "no screen to test");
+        }
+
+        IntPtr hdc = CreateDC("DISPLAY", device, null, IntPtr.Zero);
+        if (hdc == IntPtr.Zero)
+        {
+            return new GammaProbe(false, false, "that screen could not be opened");
+        }
+
+        try
+        {
+            Ramp live = NewRamp();
+            if (!GetDeviceGammaRamp(hdc, ref live))
+            {
+                return new GammaProbe(false, false, "the driver did not report a gamma table");
+            }
+
+            Ramp test = new()
+            {
+                Red = ScaleGammaChannel(live.Red, GammaProbeScale),
+                Green = ScaleGammaChannel(live.Green, GammaProbeScale),
+                Blue = ScaleGammaChannel(live.Blue, GammaProbeScale)
+            };
+
+            bool wrote = SetDeviceGammaRamp(hdc, ref test);
+
+            Ramp after = NewRamp();
+            bool read = GetDeviceGammaRamp(hdc, ref after);
+
+            bool kept = wrote && read
+                && RampsMatch(test.Red, after.Red, GammaProbeTolerance)
+                && RampsMatch(test.Green, after.Green, GammaProbeTolerance)
+                && RampsMatch(test.Blue, after.Blue, GammaProbeTolerance);
+
+            // The screen's own table goes back whether the write worked or not.
+            SetDeviceGammaRamp(hdc, ref live);
+
+            if (!wrote)
+            {
+                return new GammaProbe(false, false, "the driver refused the write");
+            }
+
+            if (!read)
+            {
+                return new GammaProbe(false, false, "the driver would not read the table back");
+            }
+
+            return kept
+                ? new GammaProbe(true, true, "the screen kept it")
+                : new GammaProbe(true, false, "the write was accepted and then discarded");
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("DISPLAY probe", ex);
+            return new GammaProbe(false, false, "the test did not finish");
+        }
+        finally
+        {
+            DeleteDC(hdc);
+        }
+    }
+
+    /// <summary>
+    /// A channel scaled toward black, clamped. Internal so the arithmetic that the
+    /// probe depends on is pinned by a test rather than trusted.
+    /// </summary>
+    internal static ushort[] ScaleGammaChannel(ushort[] source, double factor)
+    {
+        ushort[] scaled = new ushort[RampSize];
+
+        for (int i = 0; i < RampSize && i < source.Length; i++)
+        {
+            double value = Math.Round(source[i] * factor);
+            scaled[i] = value <= 0 ? (ushort)0 : value >= ushort.MaxValue ? ushort.MaxValue : (ushort)value;
+        }
+
+        return scaled;
     }
 
     public bool Reset()

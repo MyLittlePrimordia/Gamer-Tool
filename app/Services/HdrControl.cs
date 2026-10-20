@@ -74,6 +74,22 @@ public sealed record HdrApplyResult(bool Applied, bool Skipped, string Warning, 
 /// loading a profile.
 /// </para>
 /// </summary>
+/// <summary>
+/// What a one-off HDR test on one screen found.
+/// <para>
+/// Skipped is not a failure: a screen without HDR has nothing to test, and saying
+/// so is more useful than a red line about a feature the machine does not have.
+/// </para>
+/// </summary>
+public readonly record struct HdrProbeResult(bool Ok, bool Skipped, string Detail, bool LegacyPath)
+{
+    public static HdrProbeResult Passed(string detail, bool legacyPath) => new(true, false, detail, legacyPath);
+
+    public static HdrProbeResult SkippedBecause(string detail) => new(false, true, detail, false);
+
+    public static HdrProbeResult Failed(string detail) => new(false, false, detail, false);
+}
+
 public static class HdrFlipDecision
 {
     public static readonly TimeSpan MinimumInterval = TimeSpan.FromSeconds(10);
@@ -415,6 +431,134 @@ public sealed class HdrControl
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Flips one screen's HDR the other way, waits for it to take, and puts it
+    /// back where it was - the user-visible half of the setup check.
+    /// <para>
+    /// Deliberately not <see cref="Apply"/>. That one is a slot's request: it
+    /// remembers what it changed so the exit path can undo it, and it journals the
+    /// change as pending. A test restores itself before it returns, so remembering
+    /// it would leave a slot's worth of state behind for the next stand-down to
+    /// fight over. What is shared is the part that matters: the set, a settle wait,
+    /// and a read-back rather than trust in the return code.
+    /// </para>
+    /// <para>
+    /// The screen's own state is restored on every path, including the failures.
+    /// A test that leaves HDR off - or on - would be the app changing a setting it
+    /// was asked to check, which is precisely the class of bug this feature exists
+    /// to catch.
+    /// </para>
+    /// </summary>
+    public async Task<HdrProbeResult> ProbeAsync(string device, string monitorKey, TimeSpan timeout)
+    {
+        if (string.IsNullOrWhiteSpace(device))
+        {
+            return HdrProbeResult.SkippedBecause("no screen to test");
+        }
+
+        string key = KeyFor(monitorKey, device);
+
+        if (_inProgress.Contains(key))
+        {
+            return HdrProbeResult.SkippedBecause("HDR is already switching on this screen");
+        }
+
+        // The same quiet period a slot has to respect. A test is not a reason to
+        // flap a screen that changed a second ago, and the user can run it again.
+        if (LastFlip(key) is { } last && _clock() - last < HdrFlipDecision.MinimumInterval)
+        {
+            return HdrProbeResult.SkippedBecause("HDR changed on this screen a moment ago");
+        }
+
+        HdrReading before;
+        try
+        {
+            before = _read(device);
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("HDR probe read", ex);
+            return HdrProbeResult.Failed("HDR could not be read on this screen");
+        }
+
+        if (!before.Known)
+        {
+            return HdrProbeResult.SkippedBecause("this screen did not report HDR");
+        }
+
+        if (!before.Supported)
+        {
+            return HdrProbeResult.SkippedBecause("this screen does not support HDR");
+        }
+
+        bool target = !before.Active;
+        bool legacy = before.IsLegacy;
+
+        async Task<bool> PutBackAsync(bool state)
+        {
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                HdrSetResult result = _set(device, state);
+                if (result.Ok && await SettleAsync(device, state, timeout))
+                {
+                    return true;
+                }
+
+                await Task.Delay(120);
+            }
+
+            return false;
+        }
+
+        _inProgress.Add(key);
+
+        try
+        {
+            HdrSetResult set = _set(device, target);
+            if (!set.Ok)
+            {
+                await Task.Delay(120);
+                set = _set(device, target);
+            }
+
+            if (!set.Ok)
+            {
+                await PutBackAsync(before.Active);
+                TraceLog.Write("HDR probe refused " + device + " <- " + set.Error);
+                return HdrProbeResult.Failed("the switch was refused (" + set.Error + ")");
+            }
+
+            if (!await SettleAsync(device, target, timeout))
+            {
+                bool back = await PutBackAsync(before.Active);
+                TraceLog.Write("HDR probe was not kept " + device);
+                return HdrProbeResult.Failed(
+                    "HDR did not switch " + (target ? "on" : "off")
+                    + (back ? string.Empty : ", and did not go back"));
+            }
+
+            _lastFlip[key] = _clock();
+
+            if (!await PutBackAsync(before.Active))
+            {
+                TraceLog.Write("HDR probe did not restore " + device);
+                return HdrProbeResult.Failed("HDR switched, but would not go back");
+            }
+
+            return HdrProbeResult.Passed(target ? "off to on and back" : "on to off and back", legacy);
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("HDR probe", ex);
+            await PutBackAsync(before.Active);
+            return HdrProbeResult.Failed("the test did not finish");
+        }
+        finally
+        {
+            _inProgress.Remove(key);
+        }
     }
 
     /// <summary>

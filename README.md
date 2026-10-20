@@ -71,6 +71,7 @@ Boost shadow brightness to spot enemies in dark games, switch to a warm night mo
 <details>
 <summary><b>🛠️ Advanced Notes & Hardware Brightness</b></summary>
 
+- **Verify setup:** the Settings row of that name tries brightness, HDR and Windows sound routing on this PC, puts every one of them back, and lists what answered. If a feature does nothing on your machine, that list is the first thing to paste into a report.
 - **Hardware Brightness (DDC/CI):** Off by default. Some monitors support changing real backlight levels directly over the display cable. If a monitor fails to respond twice, Gamer Tool disables it safely to prevent freezing.
 - **Settings Location:** Everything is stored locally in `%APPDATA%\GamerTool`. Copy this folder if you want to move your setup to a new PC.
 - **Portable mode:** Put a `settings.json` next to `GamerTool.exe` and the whole setup moves into that folder — settings *and* the log. Handy for a USB stick. Leave the file out and nothing changes.

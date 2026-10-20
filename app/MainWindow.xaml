@@ -1688,6 +1688,48 @@
                                     </Grid>
                                 </Border>
 
+                                                <!-- Verify setup sits under Diagnostics because
+                                                     both answer "is this working on my PC".
+                                                     The row above answers it by describing the
+                                                     machine; this one answers it by trying a
+                                                     gamma write, an HDR flip and a sound
+                                                     switch, each put back before the next.
+
+                                                     Same metrics as the toggle rows beside
+                                                     it, because a list of buttons that each
+                                                     look different is a list nobody can scan. -->
+
+                                <Border x:Name="VerifyRow" Style="{StaticResource ActionRow}" Cursor="Hand"
+                                        MouseLeftButtonUp="OnVerifySetupClick"
+                                        ToolTip="Try brightness, HDR and Windows sound routing on this PC">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="10" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="12" />
+                                            <ColumnDefinition Width="34" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <ui:EmojiImage Grid.Column="0" Glyph="target" Width="19" Height="19" VerticalAlignment="Center" />
+
+                                        <TextBlock Grid.Column="2" Text="Verify setup" VerticalAlignment="Center"
+                                                   FontFamily="{StaticResource Sans}" FontSize="12"
+                                                   Foreground="{StaticResource TextHi}" TextTrimming="CharacterEllipsis" />
+
+                                        <Button x:Name="VerifySetupButton" Grid.Column="4"
+                                                Style="{StaticResource GhostButton}"
+                                                Width="34" Height="30" MinWidth="0" Padding="0"
+                                                HorizontalAlignment="Right"
+                                                HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                                Click="OnVerifySetupClick"
+                                                ToolTip="Run the checks"
+                                                AutomationProperties.Name="Verify setup">
+                                            <ui:EmojiImage Glyph="refresh" Width="19" Height="19" />
+                                        </Button>
+                                    </Grid>
+                                </Border>
+
                                 <Border Style="{StaticResource ActionRow}" ToolTip="Where sound is sent. Rescan looks for devices that were plugged in after the app started.">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
