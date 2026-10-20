@@ -163,6 +163,37 @@ public sealed class HotkeySlot
     /// </summary>
     public SlotHdrMode HdrMode { get; set; } = SlotHdrMode.Leave;
 
+    /// <summary>
+    /// True once the user has bound this slot's game on this machine, or has
+    /// looked at the full path and told Play to go ahead.
+    /// <para>
+    /// Until Play existed a slot's path was only ever matched against running
+    /// processes; nothing executed it. Play executes it, and a path can arrive
+    /// from a backup somebody else wrote - the same untrusted file the FxSound
+    /// path check exists for. This is the one question that closes that gap:
+    /// has a person on this PC seen this exact path and said yes to it.
+    /// </para>
+    /// <para>
+    /// Cleared by a backup import, because the file cannot vouch for it. Not a
+    /// warning on every Play - only the first one for a slot whose path has never
+    /// been confirmed here.
+    /// </para>
+    /// </summary>
+    public bool LaunchConfirmed { get; set; }
+
+    /// <summary>
+    /// Whether Play should show the full path and ask before starting this slot.
+    /// <para>
+    /// Only an exact executable is launched, so the two special targets and a
+    /// folder never need asking: Play refuses to start them at all.
+    /// </para>
+    /// </summary>
+    public bool NeedsLaunchConfirmation =>
+        !LaunchConfirmed
+        && !IsSelfTarget
+        && !IsAnyGameTarget
+        && !string.IsNullOrWhiteSpace(AppExePath);
+
     public bool HasWindowsAudioRouting =>
         !string.IsNullOrWhiteSpace(WindowsPlaybackDeviceId)
         || !string.IsNullOrWhiteSpace(WindowsRecordingDeviceId);
@@ -334,6 +365,7 @@ public sealed class HotkeySlot
             WindowsRecordingCommunications = WindowsRecordingCommunications,
             WindowsAudioBypassFxSound = WindowsAudioBypassFxSound,
             HdrMode = HdrMode,
+            LaunchConfirmed = LaunchConfirmed,
             Enabled = Enabled
         };
     }

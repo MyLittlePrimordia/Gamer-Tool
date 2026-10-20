@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using GamerTool.Models;
 using GamerTool.Services;
 using Xunit;
 
@@ -163,6 +165,95 @@ public class PlayLaunchTests
         Assert.Contains("UseShellExecute = true", body, StringComparison.Ordinal);
         Assert.Contains("WorkingDirectory = Path.GetDirectoryName(exePath)", body, StringComparison.Ordinal);
         Assert.DoesNotContain("Arguments", body, StringComparison.Ordinal);
+    }
+
+    // ---------- the untrusted path ----------
+
+    [Fact]
+    public void A_path_this_pc_never_chose_has_to_be_confirmed()
+    {
+        HotkeySlot slot = new() { Id = "1", Name = "Game", AppExePath = @"C:\Games\Game\game.exe" };
+
+        Assert.False(slot.LaunchConfirmed);
+        Assert.True(slot.NeedsLaunchConfirmation);
+
+        slot.LaunchConfirmed = true;
+
+        Assert.False(slot.NeedsLaunchConfirmation);
+    }
+
+    [Fact]
+    public void The_targets_play_refuses_to_start_never_ask()
+    {
+        // Play only launches an exact executable. A folder, the wildcard and the
+        // app's own window are refused before a launch is attempted, so asking
+        // about a path there would be asking about nothing.
+        Assert.False(new HotkeySlot { Id = "1", IsAnyGameTarget = true }.NeedsLaunchConfirmation);
+        Assert.False(new HotkeySlot { Id = "1", IsSelfTarget = true }.NeedsLaunchConfirmation);
+        Assert.False(new HotkeySlot { Id = "1", TargetFolder = @"C:\Games\Somewhere" }.NeedsLaunchConfirmation);
+        Assert.False(new HotkeySlot { Id = "1" }.NeedsLaunchConfirmation);
+    }
+
+    [Fact]
+    public void An_import_drops_the_confirmation_even_for_a_path_that_is_here()
+    {
+        // The path survives if it exists - it may be the same installation - but the
+        // fact that somebody on this PC approved it does not. That is the whole
+        // difference between a profile and a file somebody sent.
+        string path = Path.Combine(Path.GetTempPath(), "GamerToolTests-" + Guid.NewGuid().ToString("N")[..8] + ".exe");
+        File.WriteAllText(path, string.Empty);
+
+        try
+        {
+            AppSettings settings = new();
+            settings.Slots.Add(new HotkeySlot
+            {
+                Id = "1",
+                Name = "Game",
+                AppExePath = path,
+                AppName = "game",
+                LaunchConfirmed = true
+            });
+
+            new BackupService().Repair(
+                settings,
+                Array.Empty<MonitorChoice>(),
+                Array.Empty<string>(),
+                Array.Empty<AppCandidate>(),
+                null,
+                Array.Empty<string>(),
+                new RestoreReport());
+
+            HotkeySlot slot = Assert.Single(settings.Slots);
+            Assert.Equal(path, slot.AppExePath);
+            Assert.False(slot.LaunchConfirmed);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Play_asks_before_it_applies_anything()
+    {
+        // Asked before the apply, not after it: a slot applied for a launch the user
+        // then cancels would have to be reverted for no reason. And the answer is
+        // saved before the launch, so a launch that fails does not ask twice.
+        string slots = AppSource("MainWindow.Slots.cs");
+        string body = Body(slots, "private async Task PlaySlotByIdAsync(string slotId)");
+
+        int ask = body.IndexOf("slot.NeedsLaunchConfirmation", StringComparison.Ordinal);
+        int flight = body.IndexOf("_playInFlight = true;", StringComparison.Ordinal);
+
+        Assert.True(ask >= 0, "Play no longer asks about an unconfirmed path");
+        Assert.True(flight > ask, "the confirmation runs after the launch has already been claimed");
+
+        string confirm = Body(slots, "private void ShowLaunchConfirm(HotkeySlot slot, string exePath)");
+
+        Assert.Contains("Text = exePath", confirm, StringComparison.Ordinal);
+        Assert.Contains("slot.LaunchConfirmed = true;", confirm, StringComparison.Ordinal);
+        Assert.Contains("_ = PlaySlotByIdAsync(slot.Id);", confirm, StringComparison.Ordinal);
     }
 
     private static string AppSource(string name)

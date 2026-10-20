@@ -588,6 +588,12 @@ public sealed class BackupService
 
     private static void RepairTarget(HotkeySlot slot, IReadOnlyList<AppCandidate> knownApps, RestoreReport report)
     {
+        // The file cannot vouch for a path. A slot whose path was confirmed on this
+        // PC keeps that across a restart because it lives in the profile; a restore
+        // is exactly the moment it stops being this machine's word and becomes the
+        // file's, and Play asks once before executing an unconfirmed path.
+        slot.LaunchConfirmed = false;
+
         if (slot.IsSelfTarget)
         {
             slot.AppExePath = null;

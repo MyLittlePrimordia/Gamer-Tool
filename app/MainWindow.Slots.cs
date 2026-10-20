@@ -75,6 +75,7 @@ public partial class MainWindow : Window
         {
             existing.AppExePath = game.ExePath;
             existing.AppName = game.Name;
+            existing.LaunchConfirmed = true;
             existing.IsSelfTarget = false;
             existing.IsAnyGameTarget = false;
             existing.ApplyOnStart = false;
@@ -99,6 +100,10 @@ public partial class MainWindow : Window
         slot.Name = game.Name;
         slot.AppExePath = game.ExePath;
         slot.AppName = game.Name;
+
+        // Bound from the program running on this machine, so there is nothing to
+        // confirm later: the user is looking at it.
+        slot.LaunchConfirmed = true;
 
         // Armed, because the reason the user pressed this is that they are playing
         // it now and want it to load itself. Turning it on is the whole point of
@@ -1444,6 +1449,7 @@ public partial class MainWindow : Window
             slot.AutoActivate = false;
             slot.AppExePath = null;
             slot.AppName = null;
+            slot.LaunchConfirmed = false;
 
             // The three modes are mutually exclusive. Choosing one has to clear
             // the other two, because HasTarget, TargetText and the matching code
@@ -1466,6 +1472,7 @@ public partial class MainWindow : Window
             slot.ApplyOnStart = false;
             slot.AppExePath = null;
             slot.AppName = null;
+            slot.LaunchConfirmed = false;
 
             // Armed, because a wildcard that has to be switched on separately is
             // the same discoverability problem it is meant to solve. At most one
@@ -1502,6 +1509,7 @@ public partial class MainWindow : Window
                 string picked = ResolvePickedPath(dialog.FileName);
                 slot.AppExePath = picked;
                 slot.AppName = System.IO.Path.GetFileNameWithoutExtension(picked);
+                slot.LaunchConfirmed = true;
 
                 // A picked file is a specific target, so it clears the wildcard
                 // rather than sitting alongside it. Same reason as the two above.
@@ -1523,6 +1531,10 @@ public partial class MainWindow : Window
         slot.ApplyOnStart = false;
         slot.AppExePath = choice.ExePath.Length == 0 ? null : choice.ExePath;
         slot.AppName = choice.ExePath.Length == 0 ? null : choice.Name;
+
+        // Chosen from this PC's own scan, so the path is one this machine found.
+        // Cleared rather than left standing when the slot is pointed at no game.
+        slot.LaunchConfirmed = choice.ExePath.Length > 0;
         if (slot.AppExePath is not null)
         {
             slot.AutoActivate = true;
@@ -1865,6 +1877,15 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Before anything is applied, not after: the whole question is whether this
+        // path may be executed at all, and a slot applied for a launch the user then
+        // cancels would have to be reverted for no reason.
+        if (slot.NeedsLaunchConfirmation && PlayPreflight.TryTarget(slot, out string unconfirmedPath))
+        {
+            ShowLaunchConfirm(slot, unconfirmedPath);
+            return;
+        }
+
         _playInFlight = true;
         try
         {
@@ -1881,6 +1902,79 @@ public partial class MainWindow : Window
             _playInFlight = false;
         }
     }
+
+    /// <summary>
+    /// The one confirmation before Play runs a path this machine has never seen
+    /// anybody choose.
+    /// <para>
+    /// Until Play, a slot's path was only ever compared against process names.
+    /// Now it is executed, and it can arrive in a backup written elsewhere - the
+    /// same untrusted file that the FxSound path is checked against before it is
+    /// ever started. The modal shows the full path rather than the game's name,
+    /// because the name is the part a planted path gets right.
+    /// </para>
+    /// <para>
+    /// Deliberately not a warning on every Play. Once somebody on this PC has
+    /// looked at the path and said yes, the slot is confirmed and Play behaves
+    /// like any other.
+    /// </para>
+    /// </summary>
+    private void ShowLaunchConfirm(HotkeySlot slot, string exePath)
+    {
+        // A Play can arrive from another process while the window is hidden in
+        // the tray, and a dialog behind a hidden window is indistinguishable from
+        // nothing happening at all.
+        ShowFromSecondLaunch();
+
+        if (_modalLayer.Visibility == Visibility.Visible)
+        {
+            // Something else already owns the dialog - an install in progress, most
+            // likely. Replacing it would interrupt that; stacking is not something
+            // this modal system can do.
+            Flash("Close the open dialog first, then press Play", true);
+            return;
+        }
+
+        StackPanel content = new();
+
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = "This slot came from an imported backup, so its game path has never been checked on this PC. Play will start:",
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 19,
+            Margin = new Thickness(0, 12, 0, 0),
+        });
+
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = exePath,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)FindResource("TextMid"),
+            Margin = new Thickness(0, 8, 0, 0),
+        });
+
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = "If that is not the game you expect, cancel and set the target again.",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)FindResource("TextMid"),
+            Margin = new Thickness(0, 12, 0, 0),
+        });
+
+        ShowCustomModal("START THIS GAME?", content, "PLAY", () =>
+        {
+            // Saved before the launch rather than after it, so a launch that fails
+            // does not ask again the next time.
+            slot.LaunchConfirmed = true;
+            Commit();
+
+            _ = PlaySlotByIdAsync(slot.Id);
+        });
+    }
+
 
     /// <summary>
     /// Work out the checklist, apply the slot, wait for the audio engine, then
