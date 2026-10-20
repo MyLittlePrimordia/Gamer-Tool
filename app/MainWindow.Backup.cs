@@ -129,7 +129,12 @@ public partial class MainWindow : Window
             ? listed.Select(d => d.Id).Where(id => id.Length > 0).ToList()
             : new List<string>();
 
-        _backups.Repair(incoming, monitors, soundDevices, _appList, _audio.ExePath, report);
+        // Every endpoint this PC remembers, not just the ones plugged in now. A
+        // slot routed to a headset that is switched off is a route that works, and
+        // the repair keeps it; the active list would have cleared it.
+        List<string> knownEndpoints = _devices.GetKnownEndpointIds().ToList();
+
+        _backups.Repair(incoming, monitors, soundDevices, _appList, _audio.ExePath, knownEndpoints, report);
 
         // The app's own dialog rather than a Windows one. This is the most
         // expensive mis-click in the app, and it is also the one that has to look

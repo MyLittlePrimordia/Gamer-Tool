@@ -63,6 +63,19 @@ public sealed class RestoreReport
 
     public int SlotsLostSound { get; set; }
 
+    /// <summary>
+    /// Slots whose audio route named an endpoint this PC does not have, so the
+    /// route was cleared. Counted per slot, not per field: a slot that lost both
+    /// its playback and its microphone is still one slot the user has to look at.
+    /// </summary>
+    public int SlotsLostRoute { get; set; }
+
+    /// <summary>
+    /// Slots whose permission to switch Windows sound away from FxSound was
+    /// dropped. Not an error: the permission is not transferable (see Repair).
+    /// </summary>
+    public int FxSoundConsentReset { get; set; }
+
     public int ScreensReset { get; set; }
 
     public int KeysCleared { get; set; }
@@ -85,6 +98,8 @@ public sealed class RestoreReport
                 || SlotsRepointed > 0
                 || SlotsLostScreen > 0
                 || SlotsLostSound > 0
+                || SlotsLostRoute > 0
+                || FxSoundConsentReset > 0
                 || ScreensReset > 0
                 || KeysCleared > 0
                 || SoundDeviceReset
@@ -111,6 +126,8 @@ public sealed class RestoreReport
             Add(parts, SlotsCleared, "GAME MISSING, TARGET CLEARED");
             Add(parts, KeysCleared, "DUPLICATE KEYS CLEARED");
             Add(parts, SlotsLostScreen + SlotsLostSound, "MISSING PRESET CLEARED");
+            Add(parts, SlotsLostRoute, "AUDIO ROUTE CLEARED");
+            Add(parts, FxSoundConsentReset, "FXSOUND PERMISSION RESET");
             Add(parts, ScreensReset, "SCREEN RESET");
             if (SoundDeviceReset)
             {
@@ -320,12 +337,25 @@ public sealed class BackupService
         }
     }
 
+    /// <summary>
+    /// Makes an imported configuration mean something on this PC.
+    /// <para>
+    /// <paramref name="knownEndpoints"/> is every audio endpoint Windows still
+    /// remembers on this machine, in any state, not just the ones that are
+    /// plugged in right now. That distinction is the whole reason it is a
+    /// separate list from <paramref name="validSoundDevices"/>: a route to a
+    /// headset that is merely switched off at import time is still this PC's
+    /// route and must survive, while a route to another PC's headset is a value
+    /// that can never work here.
+    /// </para>
+    /// </summary>
     public void Repair(
         AppSettings settings,
         IReadOnlyList<MonitorChoice> validMonitors,
         IReadOnlyList<string> validSoundDevices,
         IReadOnlyList<AppCandidate> knownApps,
         string? workingFxSoundPath,
+        IReadOnlyList<string> knownEndpoints,
         RestoreReport report)
     {
         report.SlotCount = settings.Slots.Count;
@@ -395,7 +425,7 @@ public sealed class BackupService
             // different key is the panel Windows has since handed that number to,
             // and is a mismatch rather than a hit - so it clears, exactly like a
             // screen this PC does not have.
-            if (slot.MonitorDevice.Length > 0 || slot.MonitorKey.Length > 0)
+            if (!string.IsNullOrWhiteSpace(slot.MonitorDevice) || !string.IsNullOrWhiteSpace(slot.MonitorKey))
             {
                 MonitorChoice? match = DisplayService.MatchMonitor(validMonitors, slot.MonitorKey, slot.MonitorDevice);
                 if (match is null)
@@ -411,6 +441,17 @@ public sealed class BackupService
                 }
             }
 
+            // HDR needs a screen to name, and the slot no longer has one either
+            // because the backup named a panel this PC does not have or because
+            // it never named one. Leaving the mode set would keep a request that
+            // every apply path refuses, and the slot would look configured while
+            // doing nothing.
+            if (string.IsNullOrWhiteSpace(slot.MonitorDevice) && string.IsNullOrWhiteSpace(slot.MonitorKey))
+            {
+                slot.HdrMode = SlotHdrMode.Leave;
+            }
+
+            RepairRoutes(slot, knownEndpoints, validSoundDevices, report);
             RepairTarget(slot, knownApps, report);
 
             if (slot.Hotkey.Length > 0 && !usedKeys.Add(slot.Hotkey))
@@ -467,6 +508,81 @@ public sealed class BackupService
         if (report.AnythingToReport)
         {
             BuildNotes(report);
+        }
+    }
+
+    /// <summary>
+    /// Drops the slot's Windows audio routes that name an endpoint this PC does
+    /// not have, and the permission that cannot travel with them.
+    /// <para>
+    /// An endpoint id is a machine-local string. Restored on another PC it points
+    /// at nothing at best, and at whatever unrelated device Windows happened to
+    /// give that id at worst. The route then fails its own verification at apply
+    /// time and is reported, so the failure is not silent - but it is still a
+    /// value that cannot work, and the honest thing to restore is "no route".
+    /// </para>
+    /// <para>
+    /// The check is against every endpoint Windows remembers here, not only the
+    /// ones plugged in at the moment: a route to a headset that is switched off
+    /// is this PC's route, and clearing it on import would quietly delete a
+    /// working configuration every time somebody restored their own backup with
+    /// the headset unplugged.
+    /// </para>
+    /// <para>
+    /// The FxSound bypass permission is reset even when the route survives. It
+    /// is consent to switch Windows sound away from FxSound on a physical
+    /// endpoint, and consent given on another PC, or before a restore, is not
+    /// consent the user gave on this one. The slot still works; it just asks
+    /// again by being off, which is the state that changes nothing.
+    /// </para>
+    /// </summary>
+    private static void RepairRoutes(
+        HotkeySlot slot,
+        IReadOnlyList<string> knownEndpoints,
+        IReadOnlyList<string> validSoundDevices,
+        RestoreReport report)
+    {
+        // Null-tolerant on purpose. ProfileManager.Normalize already fills these
+        // in, and Repair is also called directly with settings that took another
+        // route in - an empty string is the only shape the rest of the app reads.
+        slot.OutputDeviceId ??= string.Empty;
+        slot.WindowsPlaybackDeviceId ??= string.Empty;
+        slot.WindowsRecordingDeviceId ??= string.Empty;
+
+        bool lost = false;
+
+        if (slot.WindowsPlaybackDeviceId.Length > 0
+            && !knownEndpoints.Contains(slot.WindowsPlaybackDeviceId, StringComparer.OrdinalIgnoreCase))
+        {
+            slot.WindowsPlaybackDeviceId = string.Empty;
+            slot.WindowsPlaybackCommunications = false;
+            lost = true;
+        }
+
+        if (slot.WindowsRecordingDeviceId.Length > 0
+            && !knownEndpoints.Contains(slot.WindowsRecordingDeviceId, StringComparer.OrdinalIgnoreCase))
+        {
+            slot.WindowsRecordingDeviceId = string.Empty;
+            slot.WindowsRecordingCommunications = false;
+            lost = true;
+        }
+
+        if (slot.OutputDeviceId.Length > 0
+            && !validSoundDevices.Contains(slot.OutputDeviceId, StringComparer.OrdinalIgnoreCase))
+        {
+            slot.OutputDeviceId = string.Empty;
+            lost = true;
+        }
+
+        if (lost)
+        {
+            report.SlotsLostRoute++;
+        }
+
+        if (slot.WindowsAudioBypassFxSound)
+        {
+            slot.WindowsAudioBypassFxSound = false;
+            report.FxSoundConsentReset++;
         }
     }
 
@@ -579,6 +695,16 @@ public sealed class BackupService
         if (report.SoundDeviceReset)
         {
             report.Notes.Add("The saved sound output is not on this PC, so it is back to system default.");
+        }
+
+        if (report.SlotsLostRoute > 0)
+        {
+            report.Notes.Add("A slot routed to a sound device this PC does not have, so that route is cleared.");
+        }
+
+        if (report.FxSoundConsentReset > 0)
+        {
+            report.Notes.Add("A slot's permission to switch sound away from FxSound was not restored. Turn it back on in the slot's audio routing if you want it.");
         }
 
         if (report.FxSoundPathReset)

@@ -180,7 +180,7 @@ public class BackupAndNormalizeTests
         });
 
         RestoreReport report = new();
-        new BackupService().Repair(settings, Array.Empty<MonitorChoice>(), Array.Empty<string>(), Array.Empty<AppCandidate>(), null, report);
+        new BackupService().Repair(settings, Array.Empty<MonitorChoice>(), Array.Empty<string>(), Array.Empty<AppCandidate>(), null, Array.Empty<string>(), report);
 
         HotkeySlot slot = Assert.Single(settings.Slots);
         Assert.Null(slot.DisplayPresetId);
@@ -202,6 +202,7 @@ public class BackupAndNormalizeTests
             Array.Empty<string>(),
             Array.Empty<AppCandidate>(),
             null,
+            Array.Empty<string>(),
             report);
 
         Assert.Equal(string.Empty, Assert.Single(settings.Slots).MonitorDevice);
@@ -216,10 +217,234 @@ public class BackupAndNormalizeTests
         settings.Slots.Add(new HotkeySlot { Id = "b", Name = "B", AudioPresetId = "royale", Hotkey = "ctrl+1" });
 
         RestoreReport report = new();
-        new BackupService().Repair(settings, Array.Empty<MonitorChoice>(), Array.Empty<string>(), Array.Empty<AppCandidate>(), null, report);
+        new BackupService().Repair(settings, Array.Empty<MonitorChoice>(), Array.Empty<string>(), Array.Empty<AppCandidate>(), null, Array.Empty<string>(), report);
 
         Assert.Equal(1, report.KeysCleared);
         Assert.Single(settings.Slots, s => !string.IsNullOrWhiteSpace(s.Hotkey));
+    }
+
+    // ---------- the routes and the HDR mode a backup brought with it ----------
+
+    // Every test below passes the endpoints this PC knows as a list rather than
+    // touching real audio hardware. The empty list is the honest "this machine
+    // knows no endpoints" answer, which is what a test host is.
+
+    private static void RepairRoutes(
+        AppSettings settings,
+        RestoreReport report,
+        IReadOnlyList<string> endpoints,
+        IReadOnlyList<string>? soundDevices = null)
+    {
+        new BackupService().Repair(
+            settings,
+            Array.Empty<MonitorChoice>(),
+            soundDevices ?? Array.Empty<string>(),
+            Array.Empty<AppCandidate>(),
+            null,
+            endpoints,
+            report);
+    }
+
+    [Fact]
+    public void Repair_clears_a_route_to_an_endpoint_this_pc_does_not_have()
+    {
+        // An endpoint id is a machine-local string: on another PC it either
+        // points at nothing or at whatever device Windows gave that id. The
+        // microphone half is kept, because that id is here.
+        AppSettings settings = new();
+        settings.Slots.Add(new HotkeySlot
+        {
+            Id = "s1",
+            Name = "One",
+            AudioPresetId = "footstep",
+            WindowsPlaybackDeviceId = "headset-from-other-pc",
+            WindowsRecordingDeviceId = "mic-here",
+            WindowsPlaybackCommunications = true,
+            WindowsRecordingCommunications = true
+        });
+
+        RestoreReport report = new();
+        RepairRoutes(settings, report, new[] { "mic-here" });
+
+        HotkeySlot slot = Assert.Single(settings.Slots);
+        Assert.Equal(string.Empty, slot.WindowsPlaybackDeviceId);
+        Assert.False(slot.WindowsPlaybackCommunications);
+        Assert.Equal("mic-here", slot.WindowsRecordingDeviceId);
+        Assert.True(slot.WindowsRecordingCommunications);
+        Assert.Equal(1, report.SlotsLostRoute);
+        Assert.Contains("AUDIO ROUTE CLEARED", report.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Repair_keeps_a_route_to_an_endpoint_that_is_only_unplugged()
+    {
+        // The list is every endpoint Windows still remembers, in any state. A
+        // headset that is switched off at import time is still this PC's route,
+        // and clearing it would delete a working configuration.
+        AppSettings settings = new();
+        settings.Slots.Add(new HotkeySlot
+        {
+            Id = "s1",
+            Name = "One",
+            WindowsPlaybackDeviceId = "headset-switched-off"
+        });
+
+        RestoreReport report = new();
+        RepairRoutes(settings, report, new[] { "headset-switched-off" });
+
+        Assert.Equal("headset-switched-off", Assert.Single(settings.Slots).WindowsPlaybackDeviceId);
+        Assert.Equal(0, report.SlotsLostRoute);
+    }
+
+    [Fact]
+    public void Repair_does_not_carry_an_fxsound_bypass_permission_across_machines()
+    {
+        // The route can be this PC's and still not carry the permission. It was
+        // given on another machine, or before a restore, and it is the one flag
+        // that turns the equaliser off for every program following the default.
+        AppSettings settings = new();
+        settings.Slots.Add(new HotkeySlot
+        {
+            Id = "s1",
+            Name = "One",
+            WindowsPlaybackDeviceId = "speakers-here",
+            WindowsAudioBypassFxSound = true
+        });
+
+        RestoreReport report = new();
+        RepairRoutes(settings, report, new[] { "speakers-here" });
+
+        HotkeySlot slot = Assert.Single(settings.Slots);
+        Assert.Equal("speakers-here", slot.WindowsPlaybackDeviceId);
+        Assert.False(slot.WindowsAudioBypassFxSound);
+        Assert.Equal(1, report.FxSoundConsentReset);
+        Assert.Contains(report.Notes, note => note.Contains("FxSound", StringComparison.Ordinal));
+
+        // Not counted as a lost route: the route survived. The two facts are
+        // separate because one is a value that cannot work and the other is a
+        // permission that has to be asked for again.
+        Assert.Equal(0, report.SlotsLostRoute);
+    }
+
+    [Fact]
+    public void Repair_clears_hdr_when_the_screen_it_named_is_not_here()
+    {
+        // A cleared screen has to clear the mode with it. Otherwise the slot
+        // keeps a request that every apply path refuses, and it looks configured
+        // while doing nothing.
+        AppSettings settings = new();
+        settings.Slots.Add(new HotkeySlot
+        {
+            Id = "s1",
+            Name = "One",
+            MonitorDevice = @"\\.\DISPLAY7",
+            HdrMode = SlotHdrMode.On
+        });
+
+        RestoreReport report = new();
+        new BackupService().Repair(
+            settings,
+            new[] { new MonitorChoice { Device = @"\\.\DISPLAY1", Key = "panel-a" } },
+            Array.Empty<string>(),
+            Array.Empty<AppCandidate>(),
+            null,
+            Array.Empty<string>(),
+            report);
+
+        HotkeySlot slot = Assert.Single(settings.Slots);
+        Assert.Equal(SlotHdrMode.Leave, slot.HdrMode);
+        Assert.Equal(1, report.ScreensReset);
+    }
+
+    [Fact]
+    public void Repair_keeps_hdr_on_a_screen_that_is_here()
+    {
+        AppSettings settings = new();
+        settings.Slots.Add(new HotkeySlot
+        {
+            Id = "s1",
+            Name = "One",
+            MonitorDevice = @"\\.\DISPLAY1",
+            MonitorKey = "panel-a",
+            HdrMode = SlotHdrMode.Off
+        });
+
+        RestoreReport report = new();
+        new BackupService().Repair(
+            settings,
+            new[] { new MonitorChoice { Device = @"\\.\DISPLAY1", Key = "panel-a" } },
+            Array.Empty<string>(),
+            Array.Empty<AppCandidate>(),
+            null,
+            Array.Empty<string>(),
+            report);
+
+        Assert.Equal(SlotHdrMode.Off, Assert.Single(settings.Slots).HdrMode);
+        Assert.Equal(0, report.ScreensReset);
+    }
+
+    [Fact]
+    public void Repair_clears_hdr_on_a_slot_with_no_screen()
+    {
+        // Not reachable from the UI - the HDR dialog says to pick a screen first -
+        // but reachable from a hand-edited or older file, and inert either way.
+        AppSettings settings = new();
+        settings.Slots.Add(new HotkeySlot { Id = "s1", Name = "One", HdrMode = SlotHdrMode.On });
+
+        RestoreReport report = new();
+        RepairRoutes(settings, report, Array.Empty<string>());
+
+        Assert.Equal(SlotHdrMode.Leave, Assert.Single(settings.Slots).HdrMode);
+        Assert.Equal(0, report.ScreensReset);
+    }
+
+    [Fact]
+    public void Repair_clears_a_slot_output_that_is_not_a_sound_device_here()
+    {
+        // The per-slot FxSound output is the same kind of machine-local value as
+        // a Windows endpoint, and it was the one import left alone.
+        AppSettings settings = new();
+        settings.Slots.Add(new HotkeySlot
+        {
+            Id = "s1",
+            Name = "One",
+            AudioPresetId = "footstep",
+            OutputDeviceId = "gone",
+            WindowsPlaybackDeviceId = "speakers-here"
+        });
+
+        RestoreReport report = new();
+        RepairRoutes(settings, report, new[] { "speakers-here" }, new[] { "here" });
+
+        HotkeySlot slot = Assert.Single(settings.Slots);
+        Assert.Equal(string.Empty, slot.OutputDeviceId);
+        Assert.Equal("speakers-here", slot.WindowsPlaybackDeviceId);
+        Assert.Equal(1, report.SlotsLostRoute);
+    }
+
+    [Fact]
+    public void Repair_fills_null_routes_with_empty_strings()
+    {
+        // ProfileManager.Normalize already does this, and Repair is the last
+        // thing between a file and the live profile. A null that gets past both
+        // is an exception on the next Length read, on the audio path.
+        AppSettings settings = new();
+        settings.Slots.Add(new HotkeySlot
+        {
+            Id = "s1",
+            Name = "One",
+            WindowsPlaybackDeviceId = null!,
+            WindowsRecordingDeviceId = null!,
+            OutputDeviceId = null!
+        });
+
+        RestoreReport report = new();
+        RepairRoutes(settings, report, Array.Empty<string>());
+
+        HotkeySlot slot = Assert.Single(settings.Slots);
+        Assert.Equal(string.Empty, slot.WindowsPlaybackDeviceId);
+        Assert.Equal(string.Empty, slot.WindowsRecordingDeviceId);
+        Assert.Equal(string.Empty, slot.OutputDeviceId);
     }
 
     // ---------- the schema guard ----------

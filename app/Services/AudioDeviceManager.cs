@@ -84,13 +84,52 @@ public sealed class AudioDeviceManager
     public IReadOnlyList<AudioDeviceInfo> GetInputDevices() =>
         GetDevices(DataFlow.Capture, "INPUT", reportStatus: false);
 
-    private IReadOnlyList<AudioDeviceInfo> GetDevices(DataFlow flow, string label, bool reportStatus)
+    /// <summary>
+    /// Every endpoint Windows still remembers for this PC, plugged in or not.
+    /// <para>
+    /// This exists for one question the active list cannot answer: whether an
+    /// endpoint id that arrived in an imported backup belongs to this machine.
+    /// An id for a headset that is merely switched off at import time is still
+    /// this PC's endpoint - it is sitting in the registry as unplugged - and
+    /// clearing it would delete a route that works the moment the headset comes
+    /// back. An id from somebody else's PC is in no state at all here, which is
+    /// the distinction being drawn.
+    /// </para>
+    /// <para>
+    /// Same enumerator, same per-device disposal and the same per-device failure
+    /// log as the lists above, because this is the same walk with a wider mask
+    /// rather than a second copy of it. It reports no status: a machine with a
+    /// disabled endpoint is not a machine with no sound.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> GetKnownEndpointIds()
+    {
+        List<string> ids = new();
+
+        foreach (AudioDeviceInfo device in GetDevices(DataFlow.Render, "OUTPUT", reportStatus: false, DeviceState.All))
+        {
+            ids.Add(device.Id);
+        }
+
+        foreach (AudioDeviceInfo device in GetDevices(DataFlow.Capture, "INPUT", reportStatus: false, DeviceState.All))
+        {
+            ids.Add(device.Id);
+        }
+
+        return ids;
+    }
+
+    private IReadOnlyList<AudioDeviceInfo> GetDevices(
+        DataFlow flow,
+        string label,
+        bool reportStatus,
+        DeviceState state = DeviceState.Active)
     {
         List<AudioDeviceInfo> devices = new();
         try
         {
             using MMDeviceEnumerator enumerator = new();
-            foreach (MMDevice device in enumerator.EnumerateAudioEndPoints(flow, DeviceState.Active))
+            foreach (MMDevice device in enumerator.EnumerateAudioEndPoints(flow, state))
             {
                 // Disposed per iteration. An MMDevice holds a COM reference to the
                 // endpoint, and this is called on every startup, every rescan and

@@ -349,6 +349,7 @@ public class WildcardSlotTests
             new List<string>(),
             new List<AppCandidate>(),
             AudioService.DefaultFxSoundPath,
+            new List<string>(),
             new RestoreReport());
 
         Assert.True(Assert.Single(settings.Slots).IsAnyGameTarget);
