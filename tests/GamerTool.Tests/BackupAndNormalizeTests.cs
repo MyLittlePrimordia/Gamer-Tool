@@ -180,7 +180,7 @@ public class BackupAndNormalizeTests
         });
 
         RestoreReport report = new();
-        new BackupService().Repair(settings, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<AppCandidate>(), null, report);
+        new BackupService().Repair(settings, Array.Empty<MonitorChoice>(), Array.Empty<string>(), Array.Empty<AppCandidate>(), null, report);
 
         HotkeySlot slot = Assert.Single(settings.Slots);
         Assert.Null(slot.DisplayPresetId);
@@ -196,7 +196,13 @@ public class BackupAndNormalizeTests
         settings.Slots.Add(new HotkeySlot { Id = "s1", Name = "One", AudioPresetId = "footstep", MonitorDevice = @"\\.\DISPLAY7" });
 
         RestoreReport report = new();
-        new BackupService().Repair(settings, new[] { @"\\.\DISPLAY1" }, Array.Empty<string>(), Array.Empty<AppCandidate>(), null, report);
+        new BackupService().Repair(
+            settings,
+            new[] { new MonitorChoice { Device = @"\\.\DISPLAY1", Key = "panel-a" } },
+            Array.Empty<string>(),
+            Array.Empty<AppCandidate>(),
+            null,
+            report);
 
         Assert.Equal(string.Empty, Assert.Single(settings.Slots).MonitorDevice);
         Assert.Equal(1, report.ScreensReset);
@@ -210,7 +216,7 @@ public class BackupAndNormalizeTests
         settings.Slots.Add(new HotkeySlot { Id = "b", Name = "B", AudioPresetId = "royale", Hotkey = "ctrl+1" });
 
         RestoreReport report = new();
-        new BackupService().Repair(settings, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<AppCandidate>(), null, report);
+        new BackupService().Repair(settings, Array.Empty<MonitorChoice>(), Array.Empty<string>(), Array.Empty<AppCandidate>(), null, report);
 
         Assert.Equal(1, report.KeysCleared);
         Assert.Single(settings.Slots, s => !string.IsNullOrWhiteSpace(s.Hotkey));

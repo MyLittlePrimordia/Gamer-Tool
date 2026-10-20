@@ -173,9 +173,26 @@ public class LiveEqTests
         string exe = @"C:\Program Files\FxSound LLC\FxSound\FxSound.exe";
         Skip.If(!File.Exists(exe), "FxSound is not at the path the cost was measured against");
 
+        // One discarded write first, and it is the difference between this test
+        // measuring the engine and measuring a cold start. With the engine not
+        // already running - the normal state on a machine that has just booted,
+        // and the state CI starts in - the first call pays for starting it, which
+        // on this machine is several seconds. Averaged in with the twelve writes
+        // being measured, an 80 ms write read as 740 ms and the test failed on a
+        // healthy engine. The claim is about the sustained cost of a write, so the
+        // start is paid outside the stopwatch.
+        Write(0);
+
         var stopwatch = Stopwatch.StartNew();
 
-        for (int i = 0; i < 12; i++)
+        for (int i = 1; i <= 12; i++)
+        {
+            Write(i);
+        }
+
+        stopwatch.Stop();
+
+        void Write(int i)
         {
             using var child = Process.Start(new ProcessStartInfo(exe)
             {
@@ -186,8 +203,6 @@ public class LiveEqTests
 
             child?.WaitForExit(15000);
         }
-
-        stopwatch.Stop();
         double each = stopwatch.Elapsed.TotalMilliseconds / 12.0;
 
         Assert.True(

@@ -124,7 +124,7 @@ public partial class MainWindow : Window
 
         await EnsureAppList();
 
-        List<string> monitors = _display.MonitorChoices.Where(c => c.Device.Length > 0).Select(c => c.Device).ToList();
+        List<MonitorChoice> monitors = _display.MonitorChoices.Where(c => c.Device.Length > 0).ToList();
         List<string> soundDevices = DeviceBox.ItemsSource is IEnumerable<DeviceChoice> listed
             ? listed.Select(d => d.Id).Where(id => id.Length > 0).ToList()
             : new List<string>();

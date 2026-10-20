@@ -105,6 +105,7 @@ public partial class App : Application
         // single-instance claim above can block or throw, and that comment
         // that comment claimed a guarantee the code did not keep.
         AppLog.Info("start " + (typeof(App).Assembly.GetName().Version?.ToString() ?? "?")
+            + " build " + BuildIdentity.Id
             + " on " + Environment.OSVersion.VersionString
             + " " + (Environment.Is64BitProcess ? "x64" : "x86")
             + " args=" + SanitiseArgs(string.Join(' ', e.Args)));

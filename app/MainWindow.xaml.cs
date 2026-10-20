@@ -38,7 +38,7 @@ public partial class MainWindow : Window
     private readonly AudioPreviewPlayer _audioPreview = new();
 
 
-    private readonly DisplayService _display = new();
+    private readonly DisplayService _display = new(new GammaBaselineStore());
 
 
     private readonly AudioService _audio = new();
@@ -326,6 +326,13 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         Icon = IconFactory.LoadWindowIcon();
+
+        // The diagnostics row is where a bug report starts, and the first thing a
+        // report has to answer is which build it came from. The version cannot:
+        // it has been 1.0.0 since the first release and the release itself is a
+        // rolling "latest". The same id is in the copied text and the log header;
+        // this is the version of it the user can see without copying anything.
+        DiagRow.ToolTip = "Build " + BuildIdentity.Id + " - click to copy the log";
 
         _settings = _profiles.Load();
 
@@ -1497,6 +1504,13 @@ private void HideToTray()
     private void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
         _display.Rescan();
+
+        // After the scan, because the restore has to know which screens are here
+        // now, and before the lock, so the lock does not start defending a ramp
+        // that is about to be taken off. Its whole job is undoing a run that died
+        // with a tint still on the screen.
+        _display.RestoreAfterCrash();
+
         _display.StartLock();
         _display.SetLock(_settings.GammaLock);
 
@@ -1508,6 +1522,12 @@ private void HideToTray()
         // window is up is the thing that made the window take seconds to
         // appear.
         StartNightScheduleTimer();
+
+        // The exit path puts the ramp back, so the remembered preset is an
+        // intention for this session rather than a description of the screen.
+        // After the schedule's first evaluation, so a running night filter is
+        // folded in rather than replaced.
+        RestoreStartupDisplay();
 
         UpdateFxBanner();
         _ = FinishStartupAsync();
@@ -1557,6 +1577,15 @@ private void HideToTray()
         if (_settings.ShowOsd)
         {
             Flash("Ready, hit a slot key to load");
+        }
+
+        // Said after the ready line rather than instead of it, for the same reason
+        // as the settings rescue below: the screen changing on its own as the app
+        // opens needs an explanation, or it reads as the app applying a preset
+        // nobody asked for.
+        if (_display.RestoredAfterCrash)
+        {
+            Flash("SCREEN RESTORED AFTER UNEXPECTED CLOSE");
         }
 
         // Said after the ready line rather than instead of it, because it explains
@@ -1747,9 +1776,25 @@ private void HideToTray()
     {
         try
         {
+            // The id this launch is trying to restore, read before the slow work
+            // starts. A preset chosen while that work runs has already been
+            // applied, and the restore stands down for it.
+            string startupAudioId = _workAudio.Id;
+            bool restoreAudio = ShouldRestoreStartupAudio(startupAudioId);
+
             // The blocking read, on a worker.
             List<DeviceChoice> choices = await Task.Run(BuildDeviceChoices);
             OutputRepair repair = await Task.Run(DetectOutputRepair);
+
+            if (restoreAudio)
+            {
+                // The first apply of the session records the engine before this
+                // app touches it, and the exit path uses that to hand the user's
+                // own preset back. That read is slow, so it is taken here on the
+                // worker rather than inside ApplyAudio on the dispatcher. The
+                // later capture is then a no-op.
+                await Task.Run(() => SessionState.Current.CaptureFxBefore(_audio));
+            }
 
             await Dispatcher.InvokeAsync(() =>
             {
@@ -1759,6 +1804,15 @@ private void HideToTray()
                 // enumerate the output devices again on the dispatcher. It used to,
                 // twice, which put the freeze back after the window had appeared.
                 EnsureUsableAudioOutput(repair, choices);
+
+                // After the repair, so the restore lands on the output the app has
+                // just decided is usable rather than the one that went away. The
+                // push is queued, so this returns before the engine has answered.
+                if (restoreAudio)
+                {
+                    _ = RestoreStartupAudioAsync(startupAudioId);
+                }
+
                 _ = RefreshFxStateAsync(true);
                 UpdatePreviewPlayback();
             });
@@ -2153,10 +2207,11 @@ private void HideToTray()
                 continue;
             }
 
-            string monitor = string.IsNullOrWhiteSpace(slot.MonitorDevice)
+            string resolved = _display.ResolveDevice(slot.MonitorKey, slot.MonitorDevice);
+            string monitor = resolved.Length == 0
                 ? string.Empty
                 : _display.MonitorChoices
-                    .FirstOrDefault(c => string.Equals(c.Device, slot.MonitorDevice, StringComparison.OrdinalIgnoreCase))
+                    .FirstOrDefault(c => string.Equals(c.Device, resolved, StringComparison.OrdinalIgnoreCase))
                     ?.Name ?? string.Empty;
 
             entries.Add(new TraySlotEntry

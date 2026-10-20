@@ -1236,6 +1236,18 @@ public sealed class AudioService
             return false;
         }
 
+        // The one gate in front of every launch. Both Process.Start below and the
+        // quiet CreateProcess in QuietLaunch are reached from here and nowhere
+        // else, so a path that fails this is never started at all. The check is
+        // cheap in the normal case (Program Files is trusted by location) and
+        // cached after the first probe otherwise.
+        if (!FxSoundTrust.IsTrusted(_exePath))
+        {
+            TraceLog.Write("FX refused to start an engine path this app does not trust: " + _exePath);
+            StatusChanged?.Invoke("FXSOUND BLOCKED");
+            return false;
+        }
+
         try
         {
             // The status read is the one command started without the busy cursor.

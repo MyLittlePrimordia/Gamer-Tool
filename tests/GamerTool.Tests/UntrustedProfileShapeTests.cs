@@ -5,6 +5,7 @@ using System.Text.Json;
 using GamerTool.Models;
 using GamerTool.Services;
 using Xunit;
+using Skip = Xunit.Skip;
 
 namespace GamerTool.Tests;
 
@@ -32,12 +33,93 @@ public class UntrustedProfileShapeTests
     [InlineData(@"C:\Program Files\FxSound LLC\FxSound\FxSound.exe")]
     [InlineData(@"D:\Apps\FxSound\FxSound.exe")]
     [InlineData(@"C:\Program Files (x86)\FxSound LLC\FxSound\FxSound.exe")]
-    [InlineData(@"\\server\share\FxSound.exe")]
-    public void A_real_install_folder_is_left_alone(string path)
+    public void A_path_that_names_the_engine_is_plausible(string path)
     {
-        // FxSound installs anywhere. Pinning the folder would break every custom
-        // install to close a hole that checking the file name already closes.
+        // This is the cheap half of the decision: is the file called FxSound.exe.
+        // It is deliberately not the whole decision any more - see the trust
+        // tests below - but a custom install still has to get past this.
         Assert.True(AudioService.IsPlausibleFxSoundPath(path));
+    }
+
+    [Fact]
+    public void A_unc_path_is_refused_before_any_normalisation()
+    {
+        // A share another machine controls names a file this PC does not govern,
+        // and probing a signature over SMB is not something to do on a timer.
+        Assert.False(FxSoundTrust.IsTrustedLocation(@"\\server\share\FxSound.exe"));
+        Assert.False(FxSoundTrust.IsTrusted(@"\\server\share\FxSound.exe"));
+    }
+
+    [Fact]
+    public void An_extended_length_path_cannot_wrap_itself_into_program_files()
+    {
+        string wrapped = @"\\?\" + Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            @"FxSound LLC\FxSound\FxSound.exe");
+
+        // The extended form is how a path hands Windows something its own
+        // normalisation never sees, so it is refused by shape rather than by
+        // where it claims to point.
+        Assert.False(FxSoundTrust.IsTrustedLocation(wrapped));
+    }
+
+    [Fact]
+    public void Program_files_is_trusted_by_location_alone()
+    {
+        // Writing there needs an administrator, so a non-elevated program cannot
+        // plant a file there. This is the default install and costs no probe.
+        string path = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            @"FxSound LLC\FxSound\FxSound.exe");
+
+        Assert.True(FxSoundTrust.IsTrustedLocation(path));
+    }
+
+    [Fact]
+    public void A_folder_that_merely_starts_with_the_program_files_name_is_not_inside_it()
+    {
+        string path = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles).TrimEnd('\\')
+            + @" Eviltools\FxSound.exe";
+
+        // "C:\Program Files Eviltools" starts with "C:\Program Files" and is not
+        // under it. A prefix test alone would trust a folder any user can write.
+        Assert.False(FxSoundTrust.IsTrustedLocation(path));
+    }
+
+    [Fact]
+    public void A_system_binary_renamed_to_the_engine_is_refused()
+    {
+        string notepad = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "notepad.exe");
+
+        Skip.If(!File.Exists(notepad), "notepad.exe is not where this test copies it from");
+
+        string folder = Path.Combine(
+            Path.GetTempPath(),
+            "GamerToolTests-" + Guid.NewGuid().ToString("N"));
+
+        Directory.CreateDirectory(folder);
+        string planted = Path.Combine(folder, "FxSound.exe");
+
+        try
+        {
+            File.Copy(notepad, planted);
+
+            // The name is right and the file is even signed, by Microsoft. The
+            // publisher is what decides, and it is the same check a genuine
+            // custom install already has to pass.
+            Assert.False(FxSoundTrust.IsTrusted(planted));
+
+            AudioService audio = new() { ExePath = planted };
+
+            // And the gate is on the launch itself, not only on the query.
+            Assert.False(audio.Run("--status", 100));
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
     }
 
     [Theory]
@@ -67,13 +149,17 @@ public class UntrustedProfileShapeTests
     }
 
     [Fact]
-    public void The_service_accepts_a_custom_install_folder()
+    public void The_service_keeps_a_custom_install_folder_for_the_trust_check_to_judge()
     {
         AudioService audio = new();
 
         audio.ExePath = @"D:\Apps\FxSound\FxSound.exe";
 
+        // Kept rather than rewritten: a genuine custom install signed by FxSound
+        // has to work, and the setter cannot tell it from a planted copy without
+        // paying for a signature probe. Run is what refuses an untrusted one.
         Assert.Equal(@"D:\Apps\FxSound\FxSound.exe", audio.ExePath);
+        Assert.False(FxSoundTrust.IsTrustedLocation(audio.ExePath));
     }
 
     [Fact]
@@ -99,6 +185,9 @@ public class UntrustedProfileShapeTests
     {
         AppSettings settings = new() { FxSoundPath = @"D:\Apps\FxSound\FxSound.exe" };
 
+        // The name is plausible, so loading keeps it. Whether it may be started
+        // is decided at Run, where a genuine signature is enough and a copy of
+        // something else is not.
         Assert.Equal(@"D:\Apps\FxSound\FxSound.exe", ProfileManager.Normalize(settings).FxSoundPath);
     }
 
@@ -111,7 +200,7 @@ public class UntrustedProfileShapeTests
         RestoreReport report = new();
         backups.Repair(
             imported,
-            new List<string>(),
+            new List<MonitorChoice>(),
             new List<string>(),
             new List<AppCandidate>(),
             AudioService.DefaultFxSoundPath,
@@ -122,19 +211,22 @@ public class UntrustedProfileShapeTests
     }
 
     [Fact]
-    public void A_backup_carrying_a_real_path_from_elsewhere_is_left_to_the_schema_guard()
+    public void A_backup_carrying_a_path_this_pc_cannot_start_is_replaced()
     {
         var backups = new BackupService();
 
-        // Another machine, custom install, and genuinely the engine. Kept: the
-        // schema guard allows it and nothing here is a reason to overwrite it.
+        // Another machine's custom install. The name is right, which is all the
+        // old rule checked, but the file is not here - so it is not something
+        // this PC can start, and keeping it would leave every engine call
+        // failing. A path that is here but unsigned is replaced for the same
+        // reason, one step later.
         AppSettings imported = new() { FxSoundPath = @"E:\Games\FxSound\FxSound.exe" };
         RestoreReport report = new();
-        backups.Repair(imported, new List<string>(), new List<string>(), new List<AppCandidate>(),
+        backups.Repair(imported, new List<MonitorChoice>(), new List<string>(), new List<AppCandidate>(),
             AudioService.DefaultFxSoundPath, report);
 
-        Assert.Equal(@"E:\Games\FxSound\FxSound.exe", imported.FxSoundPath);
-        Assert.False(report.FxSoundPathReset);
+        Assert.Equal(AudioService.DefaultFxSoundPath, imported.FxSoundPath);
+        Assert.True(report.FxSoundPathReset);
     }
 
     // ---------------- null elements and null strings ----------------
@@ -177,7 +269,7 @@ public class UntrustedProfileShapeTests
         // throwing, which it did not before.
         var backups = new BackupService();
         RestoreReport report = new();
-        backups.Repair(normalized, new List<string>(), new List<string>(), new List<AppCandidate>(),
+        backups.Repair(normalized, new List<MonitorChoice>(), new List<string>(), new List<AppCandidate>(),
             AudioService.DefaultFxSoundPath, report);
     }
 

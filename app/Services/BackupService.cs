@@ -322,7 +322,7 @@ public sealed class BackupService
 
     public void Repair(
         AppSettings settings,
-        IReadOnlyList<string> validMonitors,
+        IReadOnlyList<MonitorChoice> validMonitors,
         IReadOnlyList<string> validSoundDevices,
         IReadOnlyList<AppCandidate> knownApps,
         string? workingFxSoundPath,
@@ -369,7 +369,6 @@ public sealed class BackupService
             crosshairs.Add(preset.Id);
         }
 
-        HashSet<string> monitorSet = new(validMonitors, StringComparer.OrdinalIgnoreCase);
         HashSet<string> usedKeys = new(StringComparer.OrdinalIgnoreCase);
 
         foreach (HotkeySlot slot in settings.Slots)
@@ -391,10 +390,25 @@ public sealed class BackupService
                 slot.CrosshairPresetId = null;
             }
 
-            if (slot.MonitorDevice.Length > 0 && !monitorSet.Contains(slot.MonitorDevice))
+            // Resolved the same way the window resolves it: the panel key first,
+            // the device name second. A name that is attached but carries a
+            // different key is the panel Windows has since handed that number to,
+            // and is a mismatch rather than a hit - so it clears, exactly like a
+            // screen this PC does not have.
+            if (slot.MonitorDevice.Length > 0 || slot.MonitorKey.Length > 0)
             {
-                slot.MonitorDevice = string.Empty;
-                report.ScreensReset++;
+                MonitorChoice? match = DisplayService.MatchMonitor(validMonitors, slot.MonitorKey, slot.MonitorDevice);
+                if (match is null)
+                {
+                    slot.MonitorDevice = string.Empty;
+                    slot.MonitorKey = string.Empty;
+                    report.ScreensReset++;
+                }
+                else
+                {
+                    slot.MonitorDevice = match.Device;
+                    slot.MonitorKey = match.Key;
+                }
             }
 
             RepairTarget(slot, knownApps, report);
@@ -428,21 +442,26 @@ public sealed class BackupService
         // A saved engine path belongs to the machine that wrote it. Restoring a profile
         // is the main way a path arrives from somewhere else, and it is not
         // automatically wrong: FxSound installed in a custom folder is still the
-        // engine, and the app already looks in four places for it. So the working
-        // path is preferred and the imported one is only kept when it points at
-        // something that is actually called FxSound.exe.
+        // engine. So the working path is preferred and the imported one is kept
+        // only when this PC has it and this PC would start it.
         //
-        // The old rule replaced the path only when the imported one did not exist,
-        // which left a path from another machine in place whenever it did. That is
-        // the shape of a problem rather than a nuisance: the path is the FileName
-        // of a process the app launches, and a profile is the sort of thing people
-        // swap, so a backup carrying someone else's path would have run whatever
-        // it named, as this user, on every engine call.
-        if (!string.IsNullOrWhiteSpace(workingFxSoundPath)
-            && !AudioService.IsPlausibleFxSoundPath(settings.FxSoundPath))
+        // The check is the same one Run applies - name, then location or signer -
+        // rather than the name alone. Keeping a path because it ends in
+        // FxSound.exe is what let an imported profile name a planted copy, and the
+        // path is the FileName of a process the app launches as this user several
+        // times a second. An imported path that does not exist here fails the same
+        // check, which is also the right answer: it cannot be started anyway.
+        if (!string.IsNullOrWhiteSpace(workingFxSoundPath))
         {
-            settings.FxSoundPath = workingFxSoundPath;
-            report.FxSoundPathReset = true;
+            bool keep = string.Equals(settings.FxSoundPath, workingFxSoundPath, StringComparison.OrdinalIgnoreCase)
+                || (AudioService.IsPlausibleFxSoundPath(settings.FxSoundPath)
+                    && FxSoundTrust.IsTrusted(settings.FxSoundPath));
+
+            if (!keep)
+            {
+                settings.FxSoundPath = workingFxSoundPath;
+                report.FxSoundPathReset = true;
+            }
         }
 
         if (report.AnythingToReport)
@@ -564,7 +583,7 @@ public sealed class BackupService
 
         if (report.FxSoundPathReset)
         {
-            report.Notes.Add("The saved FxSound folder was not one this app would use, so the one found on this PC is used instead.");
+            report.Notes.Add("The saved FxSound path was not one this PC would start, so the one found here is used instead.");
         }
     }
 }

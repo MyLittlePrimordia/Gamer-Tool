@@ -30,6 +30,19 @@ jobs:
           # it stopped being patched, and nothing in a green build says that.
           dotnet-version: '10.0.x'
 
+      # The first question of any bug report is which build produced it, and the
+      # version number cannot answer it: it has been 1.0.0 since the first release
+      # and the release itself is a rolling "latest". The short commit and the run
+      # number identify the exact push. Written to GITHUB_ENV rather than repeated
+      # on every command line because MSBuild imports environment variables as
+      # properties, so the app, the tests and the publish all see the same value.
+      - name: Build identity
+        shell: pwsh
+        run: |
+          $short = $env:GITHUB_SHA.Substring(0, 7)
+          "BuildId=$short.$env:GITHUB_RUN_NUMBER" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "BuildId=$short.$env:GITHUB_RUN_NUMBER"
+
       - name: Restore
         run: dotnet restore app/GamerTool.csproj
 

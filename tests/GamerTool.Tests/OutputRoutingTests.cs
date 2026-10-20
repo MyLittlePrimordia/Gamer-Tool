@@ -352,6 +352,111 @@ public class OutputRoutingTests
     }
 
     [Fact]
+    public void ASavedDeviceThatIsStillAttachedIsLeftAloneByIdToo()
+    {
+        // With the engine absent the setting holds an endpoint id rather than a
+        // name, and the "is it still there" test has to check both or it would
+        // report every saved device as gone on that half of the app.
+        OutputRouting.Decision decision = OutputRouting.Decide(
+            savedOutputDeviceId: "spk-1",
+            selectedOutput: Monitor.Name,
+            defaultOutput: Monitor.Name,
+            endpoints: new[] { Monitor, Speakers },
+            engineKnownNames: new[] { Speakers.Name },
+            engineInstalled: false);
+
+        Assert.Equal(OutputRouting.Action.None, decision.Action);
+    }
+
+    [Fact]
+    public void AMissingSavedDeviceFallsBackToTheWindowsDefault()
+    {
+        // The USB headset was unplugged. Windows has already moved the default to
+        // the speakers, so that is the one choice here that is not a guess.
+        OutputRouting.Decision decision = OutputRouting.Decide(
+            savedOutputDeviceId: "USB Headset",
+            selectedOutput: "USB Headset",
+            defaultOutput: Speakers.Name,
+            endpoints: new[] { Monitor, Speakers },
+            engineKnownNames: new[] { Speakers.Name },
+            engineInstalled: true);
+
+        Assert.Equal(OutputRouting.Action.Switch, decision.Action);
+        Assert.Equal(Speakers.Name, decision.TargetId);
+        Assert.Equal(Speakers.Name, decision.TargetName);
+        Assert.Contains("gone", decision.Message!);
+    }
+
+    [Fact]
+    public void AMissingSavedDeviceFallsBackToTheOnlyRemainingSpeaker()
+    {
+        // The Windows default is the monitor's silent HDMI output, so following it
+        // would trade a dead headset for a dead monitor. One real speaker is
+        // unambiguous and is used instead.
+        OutputRouting.Decision decision = OutputRouting.Decide(
+            savedOutputDeviceId: "USB Headset",
+            selectedOutput: "USB Headset",
+            defaultOutput: Monitor.Name,
+            endpoints: new[] { Monitor, Speakers },
+            engineKnownNames: new[] { Speakers.Name },
+            engineInstalled: true);
+
+        Assert.Equal(OutputRouting.Action.Switch, decision.Action);
+        Assert.Equal(Speakers.Name, decision.TargetName);
+    }
+
+    [Fact]
+    public void AMissingSavedDeviceDoesNotGuessBetweenTwoSpeakers()
+    {
+        // Falling back is not licence to pick at random: two real outputs and no
+        // default is the same ambiguity that warns in the ordinary path.
+        OutputRouting.Decision decision = OutputRouting.Decide(
+            savedOutputDeviceId: "Bluetooth Earbuds",
+            selectedOutput: "Bluetooth Earbuds",
+            defaultOutput: Monitor.Name,
+            endpoints: new[] { Monitor, Speakers, Headphones },
+            engineKnownNames: new[] { Speakers.Name, Headphones.Name },
+            engineInstalled: true);
+
+        Assert.Equal(OutputRouting.Action.Warn, decision.Action);
+        Assert.Equal("Saved output is gone, pick an output", decision.Message);
+        Assert.Null(decision.TargetId);
+    }
+
+    [Fact]
+    public void AMissingSavedDeviceWithNothingToPlayThroughSaysSo()
+    {
+        OutputRouting.Decision decision = OutputRouting.Decide(
+            savedOutputDeviceId: "USB Headset",
+            selectedOutput: "USB Headset",
+            defaultOutput: Monitor.Name,
+            endpoints: new[] { Monitor },
+            engineKnownNames: new[] { Monitor.Name },
+            engineInstalled: true);
+
+        Assert.Equal(OutputRouting.Action.Warn, decision.Action);
+        Assert.Equal("Saved output is gone, plug in speakers", decision.Message);
+    }
+
+    [Fact]
+    public void TheFallbackIsKeyedTheSameWayAsAnOrdinarySwitch()
+    {
+        // Name when the engine is installed, id when it is not. Writing the wrong
+        // one stores a setting the picker can never match.
+        OutputRouting.Decision decision = OutputRouting.Decide(
+            savedOutputDeviceId: "USB Headset",
+            selectedOutput: "USB Headset",
+            defaultOutput: Speakers.Name,
+            endpoints: new[] { Monitor, Speakers },
+            engineKnownNames: new[] { Speakers.Name },
+            engineInstalled: false);
+
+        Assert.Equal(OutputRouting.Action.Switch, decision.Action);
+        Assert.Equal("spk-1", decision.TargetId);
+        Assert.Equal(Speakers.Name, decision.TargetName);
+    }
+
+    [Fact]
     public void ASwitchAlwaysCarriesAKeyThatMatchesAKnownName()
     {
         // The stored key has to be one the engine recognises, otherwise the

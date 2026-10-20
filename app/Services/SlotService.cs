@@ -138,6 +138,7 @@ new HotkeySlot
         copy.AudioPresetId = source.AudioPresetId;
         copy.CrosshairPresetId = source.CrosshairPresetId;
         copy.MonitorDevice = source.MonitorDevice;
+        copy.MonitorKey = source.MonitorKey;
         copy.ApplyOnStart = source.ApplyOnStart;
         copy.Enabled = source.Enabled;
 

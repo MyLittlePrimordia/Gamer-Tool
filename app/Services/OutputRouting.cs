@@ -194,7 +194,9 @@ public static class OutputRouting
 
     /// <param name="savedOutputDeviceId">
     /// What the user has already chosen in settings. Anything non-empty means
-    /// they have an opinion and it is not ours to override.
+    /// they have an opinion and it is not ours to override - while the endpoint
+    /// is still attached. A saved endpoint that has gone is the one case where
+    /// the opinion cannot be honoured, and the fallback below applies instead.
     /// </param>
     /// <param name="selectedOutput">The engine's current output.</param>
     /// <param name="defaultOutput">The Windows default playback endpoint.</param>
@@ -217,11 +219,31 @@ public static class OutputRouting
         IReadOnlyList<string> engineKnownNames,
         bool engineInstalled)
     {
-        // The user picked an output. Leave it be, even if it looks wrong: they may
-        // have picked it on purpose, for a capture device or a second setup.
+        // The user picked an output. Leave it be while it is still there, even if
+        // it looks wrong: they may have picked it on purpose, for a capture
+        // device or a second setup.
+        //
+        // "Still there" is matched against both the id and the name, because the
+        // value is a name when the engine is installed and an id when it is not
+        // (see the key chosen below). Only one of the two can match, and matching
+        // the wrong one would make every saved device look absent.
         if (!string.IsNullOrEmpty(savedOutputDeviceId))
         {
-            return Decision.Leave;
+            bool savedPresent = endpoints.Any(device =>
+                string.Equals(device.Id, savedOutputDeviceId, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(device.Name, savedOutputDeviceId, StringComparison.OrdinalIgnoreCase));
+
+            if (savedPresent)
+            {
+                return Decision.Leave;
+            }
+
+            // The saved endpoint has gone - a USB headset unplugged, a dock left
+            // behind. Leaving it alone is not neutrality: the engine stays pointed
+            // at an endpoint that no longer exists, so every preset is silent with
+            // no message. Fall back to something this machine can actually play
+            // through.
+            return FallBack(endpoints, engineKnownNames, engineInstalled, defaultOutput);
         }
 
         // Nothing is pointing at a monitor, so there is nothing to fix.
@@ -237,12 +259,7 @@ public static class OutputRouting
             return Decision.Leave;
         }
 
-        List<AudioDeviceInfo> real = endpoints
-            .Where(device => !IsDisplayAudio(device))
-            .Where(device => engineKnownNames.Any(k => k.Contains(device.Name, StringComparison.OrdinalIgnoreCase)))
-            .GroupBy(device => device.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First())
-            .ToList();
+        List<AudioDeviceInfo> real = RealOutputs(endpoints, engineKnownNames);
 
         if (real.Count == 0)
         {
@@ -256,9 +273,78 @@ public static class OutputRouting
             return new Decision(Action.Warn, null, null, "Pick your speakers in Settings");
         }
 
-        AudioDeviceInfo target = real[0];
+        return SwitchTo(real[0], engineInstalled);
+    }
+
+    /// <summary>
+    /// What to do when the saved endpoint is not attached any more.
+    /// <para>
+    /// The Windows default first, because that is where the machine has already
+    /// moved the audio and it is the only choice here that is not a guess. If the
+    /// default is not a usable speaker - it is a monitor's silent HDMI output, or
+    /// the read failed - a single remaining real output is used.
+    /// </para>
+    /// <para>
+    /// More than one candidate and no default still warns rather than choosing:
+    /// picking the wrong one sends game audio to another room, which is the
+    /// failure this whole class exists to avoid. The message names the cause,
+    /// because "pick your speakers" without "the saved one is gone" leaves the
+    /// user wondering why they are being asked again.
+    /// </para>
+    /// </summary>
+    private static Decision FallBack(
+        IReadOnlyList<AudioDeviceInfo> endpoints,
+        IReadOnlyList<string> engineKnownNames,
+        bool engineInstalled,
+        string? defaultOutput)
+    {
+        List<AudioDeviceInfo> real = RealOutputs(endpoints, engineKnownNames);
+
+        if (real.Count == 0)
+        {
+            return new Decision(Action.Warn, null, null, "Saved output is gone, plug in speakers");
+        }
+
+        AudioDeviceInfo? systemDefault = real.FirstOrDefault(device =>
+            string.Equals(device.Name, defaultOutput, StringComparison.OrdinalIgnoreCase));
+
+        if (systemDefault is not null)
+        {
+            return SwitchTo(systemDefault, engineInstalled, "Saved output is gone, now on " + systemDefault.Name);
+        }
+
+        if (real.Count == 1)
+        {
+            return SwitchTo(real[0], engineInstalled, "Saved output is gone, now on " + real[0].Name);
+        }
+
+        return new Decision(Action.Warn, null, null, "Saved output is gone, pick an output");
+    }
+
+    /// <summary>
+    /// Endpoints this machine can actually play through: not a monitor, and named
+    /// by the engine, with duplicates collapsed by name.
+    /// </summary>
+    private static List<AudioDeviceInfo> RealOutputs(
+        IReadOnlyList<AudioDeviceInfo> endpoints,
+        IReadOnlyList<string> engineKnownNames)
+    {
+        return endpoints
+            .Where(device => !IsDisplayAudio(device))
+            .Where(device => engineKnownNames.Any(k => k.Contains(device.Name, StringComparison.OrdinalIgnoreCase)))
+            .GroupBy(device => device.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+    }
+
+    /// <summary>
+    /// A switch, keyed the way the settings box stores it: by name when the engine
+    /// is installed, by endpoint id when it is not.
+    /// </summary>
+    private static Decision SwitchTo(AudioDeviceInfo target, bool engineInstalled, string? note = null)
+    {
         string key = engineInstalled ? target.Name : target.Id;
-        return new Decision(Action.Switch, key, target.Name, null);
+        return new Decision(Action.Switch, key, target.Name, note);
     }
 
     /// <summary>

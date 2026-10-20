@@ -285,7 +285,7 @@ public static class AppLog
         text.AppendLine();
 
         Assembly self = typeof(AppLog).Assembly;
-        text.AppendLine("app       : " + self.GetName().Version);
+        text.AppendLine("app       : " + self.GetName().Version + " (" + BuildIdentity.Id + ")");
         text.AppendLine("runtime   : " + Environment.Version);
         text.AppendLine("os        : " + Environment.OSVersion.VersionString + " (" + Environment.OSVersion.Platform + ")");
         text.AppendLine("64-bit    : " + Environment.Is64BitProcess);

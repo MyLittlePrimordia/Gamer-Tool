@@ -58,6 +58,20 @@ public sealed class HotkeySlot
     public string MonitorDevice { get; set; } = string.Empty;
 
     /// <summary>
+    /// The panel this slot is bound to, by PnP id, or empty.
+    /// <para>
+    /// <see cref="MonitorDevice"/> is <c>\\.\DISPLAYn</c>, which Windows
+    /// renumbers when a cable moves or a laptop is undocked. A slot keyed on that
+    /// alone follows the slot number rather than the monitor: the same key can
+    /// load a preset onto a different screen, and the screen the user chose goes
+    /// back to whatever Windows put there. The key is what identifies the panel;
+    /// the device name is kept as the fallback for a profile written before keys
+    /// existed and for an adapter that reports no monitor id.
+    /// </para>
+    /// </summary>
+    public string MonitorKey { get; set; } = string.Empty;
+
+    /// <summary>
     /// The output device this slot plays through, or empty for whatever the app
     /// is set to.
     /// <para>
@@ -219,6 +233,7 @@ public sealed class HotkeySlot
             IsSelfTarget = IsSelfTarget,
             IsAnyGameTarget = IsAnyGameTarget,
             MonitorDevice = MonitorDevice,
+            MonitorKey = MonitorKey,
             OutputDeviceId = OutputDeviceId,
             Enabled = Enabled
         };

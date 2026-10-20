@@ -85,9 +85,6 @@ public sealed class SetupService
     /// <summary>FxSound GitHub releases API for the lightweight version check (U-002).</summary>
     public const string FxSoundReleasesApi = "https://api.github.com/repos/fxsound2/fxsound-app/releases/latest";
 
-    /// <summary>Gamer Tool's own releases API for the self-update check (U-002).</summary>
-    public const string SelfReleasesApi = "https://api.github.com/repos/MyLittlePrimordia/Gamer-Tool/releases/latest";
-
     /// <summary>
     /// Oldest FxSound with the CLI this app needs (U-001).
     /// --status + --set_* arrived in 1.2.11; running-instance commands in
