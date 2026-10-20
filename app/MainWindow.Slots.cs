@@ -1709,6 +1709,25 @@ public partial class MainWindow : Window
     private bool _playInFlight;
 
     /// <summary>
+    /// Watches a launch that has not produced a process yet, so a slot applied
+    /// for a game that never starts can still be undone. Null when nothing is
+    /// being watched.
+    /// </summary>
+    private DispatcherTimer? _playWatch;
+
+    /// <summary>When the launch being watched was started.</summary>
+    private DateTime _playWatchStarted;
+
+    /// <summary>The slot the watched launch is for.</summary>
+    private string _playWatchSlotId = string.Empty;
+
+    /// <summary>The process the watched launch should produce.</summary>
+    private string _playWatchProcess = string.Empty;
+
+    /// <summary>Direct or through a launcher, which is what sets the timeout.</summary>
+    private PlayLaunchKind _playWatchKind;
+
+    /// <summary>
     /// The settle wait for the HDR flip this Play started. Play awaits it before
     /// launching, because starting a game while the display is mid-mode-switch
     /// risks the game reading a transitional mode. Null when HDR was not moved.
@@ -1922,32 +1941,33 @@ public partial class MainWindow : Window
             }
         }
 
-        bool launched = false;
-        string failure = string.Empty;
-
         if (!alreadyRunning)
         {
-            launched = TryStartGame(exePath, out failure);
-        }
+            if (!TryStartGame(exePath, out string failure))
+            {
+                // Undone here rather than by the exit path, because there is no
+                // process to exit. This was the case that left a slot's screen,
+                // routes and HDR applied for the rest of the session: a cancelled
+                // UAC prompt, a deleted exe, or a launcher that refused to run. The
+                // reason travels with the line, because "did not start" on its own
+                // sends the user looking for the wrong thing.
+                RevertFailedPlay(slot, "start failed", failure);
+                return;
+            }
 
-        if (!launched && !alreadyRunning)
-        {
-            // Nothing is running to hand the profile back from on exit. Leaving
-            // the guard set would make a later focus change behave as if a game
-            // had started.
-            _autoSlotId = string.Empty;
-            _autoProcess = string.Empty;
-            _autoWildcardProcess = string.Empty;
+            // The game may take a while to appear - and through a launcher, much
+            // longer than that. Until it does, nothing else would ever put this
+            // slot back if it never appears, so the watchdog owns that window and
+            // cancels itself the moment the process exists.
+            ArmPlayWatchdog(slot, processName, PlayLaunchKind.Direct);
         }
 
         List<string> parts = new()
         {
-            alreadyRunning
-                ? slot.Name + " profile loaded"
-                : launched ? "Playing " + slot.Name : "Profile loaded, game did not start",
+            alreadyRunning ? slot.Name + " profile loaded" : "Playing " + slot.Name,
         };
 
-        if (!alreadyRunning && launched && preflight.Summary != "no profile changes")
+        if (!alreadyRunning && preflight.Summary != "no profile changes")
         {
             parts.Add(preflight.Summary);
         }
@@ -1981,26 +2001,18 @@ public partial class MainWindow : Window
             parts.Add("already running");
         }
 
-        if (!launched && !alreadyRunning)
-        {
-            parts.Add(failure.Length > 0 ? failure : "start failed");
-        }
-
         string message = string.Join(" · ", parts);
         bool warn = preflight.Warnings.Count > 0
             || _lastWindowsAudioWarnings.Count > 0
             || _lastHdrWarnings.Count > 0
-            || !_lastPlayScreenTookIt
-            || (!launched && !alreadyRunning);
+            || !_lastPlayScreenTookIt;
 
-        RailStatus.Text = (!launched && !alreadyRunning)
-            ? "PLAY FAILED"
-            : "PLAYING " + slot.Name.ToUpperInvariant();
+        RailStatus.Text = "PLAYING " + slot.Name.ToUpperInvariant();
 
         Flash(message, warn);
 
         TraceLog.Write("PLAY " + slot.Name + " <- " + exePath
-            + (alreadyRunning ? " (already running)" : launched ? " (started)" : " (start failed)"));
+            + (alreadyRunning ? " (already running)" : " (started)"));
     }
 
     private static bool IsProcessRunning(string processName)
@@ -2042,6 +2054,153 @@ public partial class MainWindow : Window
             TraceLog.Write("PLAY START", ex);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Puts everything a Play applied back, because the game never started.
+    /// <para>
+    /// The exit path's three steps in the same order - the screen stands down and
+    /// releases the auto claim, the user's own preset goes back on, then the sound
+    /// falls through to neutral with the Windows routes restored - because from the
+    /// user's side this is the same event. A launch that failed and left the screen
+    /// dimmed and the headset as the default microphone would be the app changing
+    /// things and then having no way to change them back.
+    /// </para>
+    /// <para>
+    /// Guarded on the claim, the way every other revert is: if the slot has already
+    /// been stood down or replaced, or the app is quitting, there is nothing here
+    /// that is still ours to undo.
+    /// </para>
+    /// </summary>
+    private void RevertFailedPlay(HotkeySlot slot, string reason, string detail)
+    {
+        CancelPlayWatch();
+
+        bool ours = !_quitting
+            && string.Equals(_autoSlotId, slot.Id, StringComparison.OrdinalIgnoreCase);
+
+        if (ours)
+        {
+            GoScreenStandDown();
+            RevertToPreGame(slot);
+            _ = GoSoundNeutralAsync();
+        }
+
+        RailStatus.Text = "PLAY FAILED";
+
+        string message = PlayLaunchWatch.GiveUpMessage(slot.Name);
+
+        if (!string.IsNullOrWhiteSpace(detail))
+        {
+            message += " · " + detail;
+        }
+
+        Flash(message, true);
+
+        TraceLog.Write("PLAY " + slot.Name + " <- " + reason
+            + (ours ? " (settings put back)" : " (nothing to put back)"));
+    }
+
+
+    /// <summary>
+    /// Starts watching a launch that has not produced its process yet.
+    /// <para>
+    /// Armed only after a successful <c>Process.Start</c>. A game that is already
+    /// running needs none of this: the slot was loaded for something that is up,
+    /// and its exit is already watched.
+    /// </para>
+    /// </summary>
+    private void ArmPlayWatchdog(HotkeySlot slot, string processName, PlayLaunchKind kind)
+    {
+        CancelPlayWatch();
+
+        if (string.IsNullOrWhiteSpace(processName))
+        {
+            // Nothing to look for, so there is no question this can answer. The
+            // pre-flight already refuses a slot with no exact target.
+            return;
+        }
+
+        _playWatchSlotId = slot.Id;
+        _playWatchProcess = processName;
+        _playWatchKind = kind;
+        _playWatchStarted = DateTime.UtcNow;
+
+        // One tick a second, on the dispatcher. The work is a process list and two
+        // string comparisons, and doing it here means the revert it may trigger
+        // runs on the thread that owns the window without a second hop.
+        _playWatch = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _playWatch.Tick += OnPlayWatchTick;
+        _playWatch.Start();
+
+        TraceLog.Write("PLAY WATCH " + slot.Name + " <- " + processName
+            + " for " + (int)PlayLaunchWatch.TimeoutFor(kind).TotalSeconds + "s");
+    }
+
+    private void CancelPlayWatch()
+    {
+        if (_playWatch is null)
+        {
+            return;
+        }
+
+        _playWatch.Stop();
+        _playWatch.Tick -= OnPlayWatchTick;
+        _playWatch = null;
+        _playWatchSlotId = string.Empty;
+        _playWatchProcess = string.Empty;
+    }
+
+    /// <summary>
+    /// One poll of the launch watchdog.
+    /// <para>
+    /// The claim is the authority rather than the fields this timer was armed
+    /// with: a stand-down, the slot's own key, the panic key, quitting or another
+    /// Play all change it, and none of them want this watchdog finishing its job
+    /// afterwards. That check is also what stops a second Play from inheriting the
+    /// first one's countdown.
+    /// </para>
+    /// </summary>
+    private void OnPlayWatchTick(object? sender, EventArgs e)
+    {
+        if (_quitting)
+        {
+            CancelPlayWatch();
+            return;
+        }
+
+        HotkeySlot? slot = _settings.Slots.FirstOrDefault(s =>
+            string.Equals(s.Id, _playWatchSlotId, StringComparison.OrdinalIgnoreCase));
+
+        if (slot is null
+            || !string.Equals(_autoSlotId, _playWatchSlotId, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(_autoProcess, _playWatchProcess, StringComparison.OrdinalIgnoreCase))
+        {
+            CancelPlayWatch();
+            return;
+        }
+
+        PlayLaunchWatchAction action = PlayLaunchWatch.Decide(
+            DateTime.UtcNow - _playWatchStarted,
+            IsProcessRunning(_playWatchProcess),
+            _playWatchKind);
+
+        if (action == PlayLaunchWatchAction.Wait)
+        {
+            return;
+        }
+
+        if (action == PlayLaunchWatchAction.Started)
+        {
+            TraceLog.Write("PLAY WATCH " + slot.Name + " <- started");
+            CancelPlayWatch();
+            return;
+        }
+
+        TraceLog.Write("PLAY WATCH " + slot.Name + " <- gave up after "
+            + (int)(DateTime.UtcNow - _playWatchStarted).TotalSeconds + "s");
+
+        RevertFailedPlay(slot, "did not start", string.Empty);
     }
 
     private void CreatePlayShortcut(HotkeySlot slot)
