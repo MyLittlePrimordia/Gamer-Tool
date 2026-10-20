@@ -241,7 +241,11 @@ public partial class MainWindow : Window
 
             LoadDevicesFrom(known);
 
-            Flash("Output set to " + choice.Name);
+            // A plain repair says which output was chosen; the fallback from a
+            // missing saved device carries its own line, because the fact that the
+            // headset is gone is the part the user needs and would otherwise have
+            // to infer from the output changing on its own.
+            Flash(repair.Message ?? "Output set to " + choice.Name);
             return;
         }
 
@@ -285,7 +289,7 @@ public partial class MainWindow : Window
         {
             OutputRouting.Action.Switch => new OutputRepair(
                 new DeviceChoice { Id = decision.TargetId!, Name = decision.TargetName! },
-                null,
+                decision.Message,
                 false),
             OutputRouting.Action.Warn => new OutputRepair(null, decision.Message, true),
             _ => new OutputRepair(null, null, false),
