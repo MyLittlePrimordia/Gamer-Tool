@@ -707,10 +707,15 @@ public sealed class AppLibraryService
             using JsonDocument document = JsonDocument.Parse(BoundedRead.AllText(manifest));
             JsonElement root = document.RootElement;
 
+            // AppName is Epic's own identifier for the title and what its launcher
+            // URI takes. Only used when the policy accepts it, so a manifest with
+            // anything odd in that field simply gets no URI and falls back to the
+            // executable.
             return LauncherEntry(
                 JsonString(root, "DisplayName"),
                 JsonString(root, "InstallLocation"),
-                "EPIC");
+                "EPIC",
+                LaunchUriPolicy.EpicUri(JsonString(root, "AppName")));
         }
         catch (Exception ex)
         {
@@ -765,7 +770,7 @@ public sealed class AppLibraryService
         string? name,
         string source)
     {
-        AppCandidate? candidate = LauncherEntry(name, installLocation, source);
+        AppCandidate? candidate = LauncherEntry(name, installLocation, source, string.Empty);
         if (candidate is not null && seen.Add(candidate.ExePath))
         {
             found.Add(candidate);
@@ -782,7 +787,11 @@ public sealed class AppLibraryService
     /// than no entry: it would bind a slot to a program that cannot be launched.
     /// </para>
     /// </summary>
-    private static AppCandidate? LauncherEntry(string? name, string? installLocation, string source)
+    private static AppCandidate? LauncherEntry(
+        string? name,
+        string? installLocation,
+        string source,
+        string launchUri)
     {
         try
         {
@@ -809,6 +818,7 @@ public sealed class AppLibraryService
                 Name = string.IsNullOrWhiteSpace(name) ? leaf : name,
                 ExePath = exe,
                 ProcessName = AppProfileTools.ProcessNameOf(exe),
+                LaunchUri = launchUri,
                 Source = source
             };
         }
@@ -1024,6 +1034,7 @@ public sealed class AppLibraryService
 
                 state.TryGetValue("name", out string? name);
                 state.TryGetValue("installdir", out string? installDir);
+                state.TryGetValue("appid", out string? appId);
                 if (string.IsNullOrWhiteSpace(installDir))
                 {
                     continue;
@@ -1052,11 +1063,17 @@ public sealed class AppLibraryService
                     continue;
                 }
 
+                // The app id is the one thing in the manifest that names the game
+                // rather than its folder, and it is the only way to ask Steam to
+                // start it. The exe above is a guess at the same game; this is the
+                // answer. Empty when the manifest does not carry an id, which is
+                // also the answer for a file somebody edited by hand.
                 found.Add(new AppCandidate
                 {
                     Name = string.IsNullOrWhiteSpace(name) ? installDir : name,
                     ExePath = exe,
                     ProcessName = AppProfileTools.ProcessNameOf(exe),
+                    LaunchUri = LaunchUriPolicy.SteamUri(appId),
                     Source = "STEAM"
                 });
             }

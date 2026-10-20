@@ -72,6 +72,23 @@ public sealed class HotkeySlot
 
     public string? AppName { get; set; }
 
+    /// <summary>
+    /// The launcher URI Play hands to the shell for this game, or empty.
+    /// <para>
+    /// Copied from the candidate the user picked, and only for a game that came
+    /// out of Steam or Epic. It exists because the exe underneath a launcher is a
+    /// guess: Steam games relaunch themselves through Steam, and an Epic game
+    /// usually refuses to start except through its launcher. The watcher is
+    /// unaffected - it still matches the process the exe names - so this changes
+    /// how a game is started and nothing about how it is recognised.
+    /// </para>
+    /// <para>
+    /// Never trusted: checked against <c>LaunchUriPolicy</c> at launch time and
+    /// again on import, because a profile is a file somebody else can write.
+    /// </para>
+    /// </summary>
+    public string? LaunchUri { get; set; }
+
     public bool AutoActivate { get; set; }
 
     public bool ApplyOnStart { get; set; }
@@ -182,17 +199,20 @@ public sealed class HotkeySlot
     public bool LaunchConfirmed { get; set; }
 
     /// <summary>
-    /// Whether Play should show the full path and ask before starting this slot.
+    /// Whether Play should show the exact target and ask before starting this
+    /// slot.
     /// <para>
-    /// Only an exact executable is launched, so the two special targets and a
-    /// folder never need asking: Play refuses to start them at all.
+    /// Only an exact executable or one of the two allowed launcher URIs is ever
+    /// started, so the two special targets and a folder never need asking: Play
+    /// refuses to start them at all. A URI counts because it is imported content
+    /// too - the case this covers is a backup whose target is a protocol call.
     /// </para>
     /// </summary>
     public bool NeedsLaunchConfirmation =>
         !LaunchConfirmed
         && !IsSelfTarget
         && !IsAnyGameTarget
-        && !string.IsNullOrWhiteSpace(AppExePath);
+        && (!string.IsNullOrWhiteSpace(AppExePath) || !string.IsNullOrWhiteSpace(LaunchUri));
 
     public bool HasWindowsAudioRouting =>
         !string.IsNullOrWhiteSpace(WindowsPlaybackDeviceId)
@@ -351,6 +371,7 @@ public sealed class HotkeySlot
             Hotkey = Hotkey,
             AppExePath = AppExePath,
             AppName = AppName,
+            LaunchUri = LaunchUri,
             TargetFolder = TargetFolder,
             AutoActivate = AutoActivate,
             ApplyOnStart = ApplyOnStart,

@@ -148,6 +148,13 @@ new HotkeySlot
         copy.ApplyOnStart = source.ApplyOnStart;
         copy.Enabled = source.Enabled;
 
+        // The launcher URI travels with the target it belongs to, and the target
+        // itself does not, so this comes over only as far as it can still be
+        // true. A copy is untargeted: it names no game until the user picks one,
+        // and a URI left behind would be a Play that starts the slot it was
+        // copied from.
+        copy.LaunchUri = string.Empty;
+
         // The wildcard is not carried over. A duplicate exists to give a second
         // key to the same look, and a copy of the one wildcard would mean two slots
         // claiming every unbound game - which ResolveAutoClaims then has to stand
@@ -242,6 +249,11 @@ new HotkeySlot
             // device matcher is still a null somebody has to remember about.
             slot.WindowsPlaybackDeviceId ??= string.Empty;
             slot.WindowsRecordingDeviceId ??= string.Empty;
+
+            // Same reason, for the launcher URI added after them. Empty means
+            // "start the executable", which is the behaviour every profile
+            // written before this field expects.
+            slot.LaunchUri ??= string.Empty;
 
             // An enum out of JSON is a number, and a hand-edited profile can carry
             // one this build has never heard of. Leave is the safe reading: an

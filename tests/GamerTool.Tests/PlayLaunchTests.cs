@@ -108,7 +108,10 @@ public class PlayLaunchTests
         string body = Body(slots, "private async Task PlaySlotWithLaunchAsync(HotkeySlot slot)");
 
         Assert.Contains("RevertFailedPlay(slot, \"start failed\", failure)", body, StringComparison.Ordinal);
-        Assert.Contains("ArmPlayWatchdog(slot, processName, PlayLaunchKind.Direct)", body, StringComparison.Ordinal);
+
+        // A direct start gets the direct timeout and a launcher gets the long one,
+        // so which one was used has to reach the watchdog rather than be assumed.
+        Assert.Contains("via == LaunchVia.None ? PlayLaunchKind.Direct : PlayLaunchKind.Launcher", body, StringComparison.Ordinal);
 
         // The old behaviour, named so it cannot come back.
         Assert.DoesNotContain("Profile loaded, game did not start", body, StringComparison.Ordinal);
@@ -249,9 +252,9 @@ public class PlayLaunchTests
         Assert.True(ask >= 0, "Play no longer asks about an unconfirmed path");
         Assert.True(flight > ask, "the confirmation runs after the launch has already been claimed");
 
-        string confirm = Body(slots, "private void ShowLaunchConfirm(HotkeySlot slot, string exePath)");
+        string confirm = Body(slots, "private void ShowLaunchConfirm(HotkeySlot slot, string target)");
 
-        Assert.Contains("Text = exePath", confirm, StringComparison.Ordinal);
+        Assert.Contains("Text = target", confirm, StringComparison.Ordinal);
         Assert.Contains("slot.LaunchConfirmed = true;", confirm, StringComparison.Ordinal);
         Assert.Contains("_ = PlaySlotByIdAsync(slot.Id);", confirm, StringComparison.Ordinal);
     }

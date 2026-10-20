@@ -146,6 +146,69 @@ public sealed class PlayPreflight
     public static bool TargetExists(HotkeySlot? slot) =>
         TryTarget(slot, out string path) && File.Exists(path);
 
+    /// <summary>
+    /// How Play would start this slot, and the URI to use when that is a
+    /// launcher.
+    /// <para>
+    /// Read from the slot every time rather than remembered from when the target
+    /// was picked. The field is persisted and can arrive from a backup, so the
+    /// only safe moment to decide whether it may be handed to the shell is the
+    /// moment before it is.
+    /// </para>
+    /// </summary>
+    public static LaunchVia ViaFor(HotkeySlot? slot, out string launchUri)
+    {
+        launchUri = string.Empty;
+
+        if (slot is null)
+        {
+            return LaunchVia.None;
+        }
+
+        LaunchVia via = LaunchUriPolicy.ViaOf(slot.LaunchUri);
+
+        // A link is only usable when there is still a path beside it. The path is
+        // what the watcher matches and what the launch watchdog waits for, so a
+        // slot that could start a game it can never recognise would apply its
+        // profile and have nothing to put it back with. The link is not lost -
+        // it stays in the slot - but Play treats the slot as having no target.
+        if (via != LaunchVia.None && TryTarget(slot, out _))
+        {
+            launchUri = slot.LaunchUri!;
+            return via;
+        }
+
+        return LaunchVia.None;
+    }
+
+    /// <summary>
+    /// Whether Play has anything safe to start: an allowed launcher URI, or one
+    /// exact executable.
+    /// </summary>
+    public static bool TryLaunchTarget(HotkeySlot? slot, out string launchUri, out string exePath, out LaunchVia via)
+    {
+        launchUri = string.Empty;
+        exePath = string.Empty;
+
+        via = ViaFor(slot, out launchUri);
+        if (via != LaunchVia.None)
+        {
+            TryTarget(slot, out exePath);
+            return true;
+        }
+
+        return TryTarget(slot, out exePath);
+    }
+
+    /// <summary>
+    /// The string the one-time confirmation shows: exactly what Play is about to
+    /// hand to the system, never a guess at it.
+    /// </summary>
+    public static string ConfirmationTarget(HotkeySlot slot, string launchUri)
+    {
+        return launchUri.Length > 0 ? launchUri : (TryTarget(slot, out string exePath) ? exePath : string.Empty);
+    }
+
     public static PlayPreflight Build(
         HotkeySlot slot,
         bool targetExists,
@@ -161,18 +224,29 @@ public sealed class PlayPreflight
             ? new PlayCheck("PROFILE", slot.WorkText, PlayCheckState.Ready)
             : new PlayCheck("PROFILE", "nothing set", PlayCheckState.Warning));
 
+        LaunchVia via = ViaFor(slot, out string launchUri);
         TryTarget(slot, out string exePath);
         bool exactTarget = exePath.Length > 0;
 
-        string gameDetail = exactTarget
-            ? (targetExists ? slot.TargetText : "file not found")
-            : TargetProblem(slot);
+        // A launcher URI is the better target when there is one: the exe under a
+        // Steam or Epic install is a guess at the same game, and a wrong guess is
+        // a launch of the wrong program. So the file check does not apply to it -
+        // the launcher is the authority, and it can start a game whose guessed exe
+        // this scan got wrong.
+        bool launches = via != LaunchVia.None || (exactTarget && targetExists);
+
+        string gameDetail = via != LaunchVia.None
+            ? slot.TargetText + " (" + LaunchUriPolicy.Describe(via) + ")"
+            : exactTarget
+                ? (targetExists ? slot.TargetText : "file not found")
+                : TargetProblem(slot);
 
         checks.Add(new PlayCheck(
             "GAME",
             gameDetail,
-            exactTarget && targetExists ? PlayCheckState.Ready : PlayCheckState.Warning));
+            launches ? PlayCheckState.Ready : PlayCheckState.Warning));
 
+        checks.Add(LaunchCheck(slot, via, exactTarget));
         checks.Add(DisplayCheck(slot, displayExists, monitorResolved));
         checks.Add(HdrCheck(slot));
         checks.Add(AudioCheck(slot, audioExists, audioInstalled));
@@ -184,19 +258,21 @@ public sealed class PlayPreflight
         {
             blocked = "Nothing set on " + DisplayName(slot);
         }
-        else if (!exactTarget)
+        else if (via == LaunchVia.None && !exactTarget)
         {
             blocked = TargetProblem(slot);
         }
-        else if (!targetExists)
+        else if (via == LaunchVia.None && !targetExists)
         {
             blocked = "The game file is not at " + exePath;
         }
 
         bool canLaunch = blocked.Length == 0;
 
+        // Not part of the profile summary: how Play starts the game is not one of
+        // the things the slot changes about the machine.
         List<string> ready = checks
-            .Where(c => c.Label is not ("PROFILE" or "GAME") && c.State == PlayCheckState.Ready)
+            .Where(c => c.Label is not ("PROFILE" or "GAME" or "LAUNCH") && c.State == PlayCheckState.Ready)
             .Select(c => c.Label.ToLowerInvariant())
             .ToList();
 
@@ -205,6 +281,33 @@ public sealed class PlayPreflight
             canLaunch,
             blocked,
             ready.Count == 0 ? "no profile changes" : string.Join(" + ", ready));
+    }
+
+    /// <summary>
+    /// How the game will be started, as its own row.
+    /// <para>
+    /// Separate from GAME because the two answer different questions and can
+    /// disagree: GAME says which title it is, LAUNCH says whether Play runs an
+    /// executable or asks a store to start it. A refused URI is a warning here
+    /// rather than a blocker, because the executable underneath it is still a
+    /// perfectly good answer.
+    /// </para>
+    /// </summary>
+    private static PlayCheck LaunchCheck(HotkeySlot slot, LaunchVia via, bool exactTarget)
+    {
+        if (via != LaunchVia.None)
+        {
+            return new PlayCheck("LAUNCH", LaunchUriPolicy.Describe(via), PlayCheckState.Ready);
+        }
+
+        if (!string.IsNullOrWhiteSpace(slot.LaunchUri))
+        {
+            return new PlayCheck("LAUNCH", "launcher refused", PlayCheckState.Warning);
+        }
+
+        return exactTarget
+            ? new PlayCheck("LAUNCH", LaunchUriPolicy.Describe(LaunchVia.None), PlayCheckState.Ready)
+            : new PlayCheck("LAUNCH", "no target", PlayCheckState.Warning);
     }
 
     private static PlayCheck DisplayCheck(HotkeySlot slot, bool exists, bool monitorResolved)

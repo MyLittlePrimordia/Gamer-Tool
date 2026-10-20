@@ -76,6 +76,14 @@ public sealed class RestoreReport
     /// </summary>
     public int FxSoundConsentReset { get; set; }
 
+    /// <summary>
+    /// Slots whose launcher link was dropped. The link is only kept when this PC
+    /// has the same launcher manifest and the link is one the app will start, so
+    /// a dropped one means the game is not installed here in a way Play could
+    /// start - the slot keeps its executable and falls back to it.
+    /// </summary>
+    public int SlotsLostLaunch { get; set; }
+
     public int ScreensReset { get; set; }
 
     public int KeysCleared { get; set; }
@@ -99,6 +107,7 @@ public sealed class RestoreReport
                 || SlotsLostScreen > 0
                 || SlotsLostSound > 0
                 || SlotsLostRoute > 0
+                || SlotsLostLaunch > 0
                 || FxSoundConsentReset > 0
                 || ScreensReset > 0
                 || KeysCleared > 0
@@ -127,6 +136,7 @@ public sealed class RestoreReport
             Add(parts, KeysCleared, "DUPLICATE KEYS CLEARED");
             Add(parts, SlotsLostScreen + SlotsLostSound, "MISSING PRESET CLEARED");
             Add(parts, SlotsLostRoute, "AUDIO ROUTE CLEARED");
+            Add(parts, SlotsLostLaunch, "LAUNCHER LINK CLEARED");
             Add(parts, FxSoundConsentReset, "FXSOUND PERMISSION RESET");
             Add(parts, ScreensReset, "SCREEN RESET");
             if (SoundDeviceReset)
@@ -453,6 +463,7 @@ public sealed class BackupService
 
             RepairRoutes(slot, knownEndpoints, validSoundDevices, report);
             RepairTarget(slot, knownApps, report);
+            RepairLaunchUri(slot, knownApps, report);
 
             if (slot.Hotkey.Length > 0 && !usedKeys.Add(slot.Hotkey))
             {
@@ -644,6 +655,43 @@ public sealed class BackupService
         report.SlotsCleared++;
     }
 
+    /// <summary>
+    /// Keeps a slot's launcher link only when this PC can justify it.
+    /// <para>
+    /// Two questions, both answered by this machine rather than by the file. The
+    /// first is whether the app would ever hand this string to the shell, which is
+    /// <see cref="LaunchUriPolicy"/>. The second is whether the launcher this link
+    /// describes has the game installed here - a link to a Steam app this PC does
+    /// not own is a Play button that opens a store page or does nothing, which is
+    /// worse than the executable fallback. The matching candidate comes from this
+    /// PC's own scan, so its presence is the manifest check.
+    /// </para>
+    /// <para>
+    /// Also requires a path, because a link with no executable has nothing for the
+    /// watcher to recognise: auto-apply would never fire and Play's watchdog would
+    /// have no process to wait for.
+    /// </para>
+    /// </summary>
+    private static void RepairLaunchUri(HotkeySlot slot, IReadOnlyList<AppCandidate> knownApps, RestoreReport report)
+    {
+        slot.LaunchUri ??= string.Empty;
+
+        if (slot.LaunchUri.Length == 0)
+        {
+            return;
+        }
+
+        bool keep = !string.IsNullOrWhiteSpace(slot.AppExePath)
+            && LaunchUriPolicy.IsAllowed(slot.LaunchUri)
+            && knownApps.Any(c => string.Equals(c.LaunchUri, slot.LaunchUri, StringComparison.OrdinalIgnoreCase));
+
+        if (!keep)
+        {
+            slot.LaunchUri = string.Empty;
+            report.SlotsLostLaunch++;
+        }
+    }
+
     private static string? FindByName(IReadOnlyList<AppCandidate> knownApps, string processName)
     {
         if (processName.Length == 0)
@@ -706,6 +754,11 @@ public sealed class BackupService
         if (report.SlotsLostRoute > 0)
         {
             report.Notes.Add("A slot routed to a sound device this PC does not have, so that route is cleared.");
+        }
+
+        if (report.SlotsLostLaunch > 0)
+        {
+            report.Notes.Add("A slot's launcher link was not one this PC can use, so Play starts that game's file directly.");
         }
 
         if (report.FxSoundConsentReset > 0)

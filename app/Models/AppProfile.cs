@@ -48,6 +48,24 @@ public sealed class AppCandidate : System.ComponentModel.INotifyPropertyChanged
     public string ProcessName { get; set; } = string.Empty;
 
     /// <summary>
+    /// How the launcher that owns this game starts it, when that is known, or
+    /// empty.
+    /// <para>
+    /// The exe path is a guess for anything that came out of Steam or Epic: the
+    /// install folder is searched for the largest executable, because that is all
+    /// a manifest says. Steam games relaunch through Steam and Epic games often
+    /// refuse to start any other way, so for Play the launcher's own URI is the
+    /// real answer and the path is the fallback. Empty for every other source -
+    /// a live scan, a browse, GOG - where the executable is the only way.
+    /// </para>
+    /// <para>
+    /// Never executed without passing <c>LaunchUriPolicy</c> first, here and again
+    /// at launch time, because the value is persisted and can arrive from a backup.
+    /// </para>
+    /// </summary>
+    public string LaunchUri { get; set; } = string.Empty;
+
+    /// <summary>
     /// Which process this candidate was, for a live scan. Zero for anything that
     /// did not come from a running process - a saved profile, for instance - because
     /// there is no process behind those at all.

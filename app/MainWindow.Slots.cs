@@ -75,6 +75,11 @@ public partial class MainWindow : Window
         {
             existing.AppExePath = game.ExePath;
             existing.AppName = game.Name;
+
+            // Bound to the program that is running, so the executable is the
+            // target. Any launcher link the slot used to carry belongs to the game
+            // it used to name.
+            existing.LaunchUri = string.Empty;
             existing.LaunchConfirmed = true;
             existing.IsSelfTarget = false;
             existing.IsAnyGameTarget = false;
@@ -1449,6 +1454,7 @@ public partial class MainWindow : Window
             slot.AutoActivate = false;
             slot.AppExePath = null;
             slot.AppName = null;
+            slot.LaunchUri = string.Empty;
             slot.LaunchConfirmed = false;
 
             // The three modes are mutually exclusive. Choosing one has to clear
@@ -1472,6 +1478,7 @@ public partial class MainWindow : Window
             slot.ApplyOnStart = false;
             slot.AppExePath = null;
             slot.AppName = null;
+            slot.LaunchUri = string.Empty;
             slot.LaunchConfirmed = false;
 
             // Armed, because a wildcard that has to be switched on separately is
@@ -1509,6 +1516,10 @@ public partial class MainWindow : Window
                 string picked = ResolvePickedPath(dialog.FileName);
                 slot.AppExePath = picked;
                 slot.AppName = System.IO.Path.GetFileNameWithoutExtension(picked);
+
+                // A file the user picked is started directly. Any launcher link
+                // the slot carried pointed at whatever it used to name.
+                slot.LaunchUri = string.Empty;
                 slot.LaunchConfirmed = true;
 
                 // A picked file is a specific target, so it clears the wildcard
@@ -1531,6 +1542,14 @@ public partial class MainWindow : Window
         slot.ApplyOnStart = false;
         slot.AppExePath = choice.ExePath.Length == 0 ? null : choice.ExePath;
         slot.AppName = choice.ExePath.Length == 0 ? null : choice.Name;
+
+        // Only what the policy accepts, and only for the game that was just
+        // chosen. A candidate from Steam or Epic carries the launcher's own way of
+        // starting it; every other candidate carries nothing and the executable is
+        // the target.
+        slot.LaunchUri = choice.ExePath.Length > 0 && LaunchUriPolicy.IsAllowed(choice.LaunchUri)
+            ? choice.LaunchUri
+            : string.Empty;
 
         // Chosen from this PC's own scan, so the path is one this machine found.
         // Cleared rather than left standing when the slot is pointed at no game.
@@ -1880,9 +1899,10 @@ public partial class MainWindow : Window
         // Before anything is applied, not after: the whole question is whether this
         // path may be executed at all, and a slot applied for a launch the user then
         // cancels would have to be reverted for no reason.
-        if (slot.NeedsLaunchConfirmation && PlayPreflight.TryTarget(slot, out string unconfirmedPath))
+        if (slot.NeedsLaunchConfirmation
+            && PlayPreflight.TryLaunchTarget(slot, out string unconfirmedUri, out _, out _))
         {
-            ShowLaunchConfirm(slot, unconfirmedPath);
+            ShowLaunchConfirm(slot, PlayPreflight.ConfirmationTarget(slot, unconfirmedUri));
             return;
         }
 
@@ -1910,8 +1930,11 @@ public partial class MainWindow : Window
     /// Until Play, a slot's path was only ever compared against process names.
     /// Now it is executed, and it can arrive in a backup written elsewhere - the
     /// same untrusted file that the FxSound path is checked against before it is
-    /// ever started. The modal shows the full path rather than the game's name,
-    /// because the name is the part a planted path gets right.
+    /// ever started. The modal shows the exact target rather than the game's name,
+    /// because the name is the part a planted path gets right. For a launcher slot
+    /// that target is the URI handed to Steam or Epic, which is the thing that
+    /// runs; <see cref="PlayPreflight.ConfirmationTarget"/> decides between the two,
+    /// so the string in the dialog is never a description of the launch.
     /// </para>
     /// <para>
     /// Deliberately not a warning on every Play. Once somebody on this PC has
@@ -1919,7 +1942,7 @@ public partial class MainWindow : Window
     /// like any other.
     /// </para>
     /// </summary>
-    private void ShowLaunchConfirm(HotkeySlot slot, string exePath)
+    private void ShowLaunchConfirm(HotkeySlot slot, string target)
     {
         // A Play can arrive from another process while the window is hidden in
         // the tray, and a dialog behind a hidden window is indistinguishable from
@@ -1940,7 +1963,7 @@ public partial class MainWindow : Window
         content.Children.Add(new TextBlock
         {
             Style = (Style)FindResource("CardSub"),
-            Text = "This slot came from an imported backup, so its game path has never been checked on this PC. Play will start:",
+            Text = "This slot came from an imported backup, so what it starts has never been checked on this PC. Play will start:",
             TextWrapping = TextWrapping.Wrap,
             LineHeight = 19,
             Margin = new Thickness(0, 12, 0, 0),
@@ -1949,7 +1972,7 @@ public partial class MainWindow : Window
         content.Children.Add(new TextBlock
         {
             Style = (Style)FindResource("CardSub"),
-            Text = exePath,
+            Text = target,
             TextWrapping = TextWrapping.Wrap,
             Foreground = (Brush)FindResource("TextMid"),
             Margin = new Thickness(0, 8, 0, 0),
@@ -2000,6 +2023,11 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Which of the two Play will do, decided here and used below rather than
+        // re-read from the slot: the watchdog's timeout and the log line both
+        // depend on this answer, and a policy that changed between the two reads
+        // would leave them disagreeing about what happened.
+        LaunchVia via = PlayPreflight.ViaFor(slot, out string launchUri);
         PlayPreflight.TryTarget(slot, out string exePath);
         string processName = AppProfileTools.ProcessNameOf(exePath);
         bool alreadyRunning = IsProcessRunning(processName);
@@ -2037,7 +2065,11 @@ public partial class MainWindow : Window
 
         if (!alreadyRunning)
         {
-            if (!TryStartGame(exePath, out string failure))
+            bool started = via == LaunchVia.None
+                ? TryStartGame(exePath, out string failure)
+                : TryStartLauncher(launchUri, out failure);
+
+            if (!started)
             {
                 // Undone here rather than by the exit path, because there is no
                 // process to exit. This was the case that left a slot's screen,
@@ -2053,7 +2085,10 @@ public partial class MainWindow : Window
             // longer than that. Until it does, nothing else would ever put this
             // slot back if it never appears, so the watchdog owns that window and
             // cancels itself the moment the process exists.
-            ArmPlayWatchdog(slot, processName, PlayLaunchKind.Direct);
+            ArmPlayWatchdog(
+                slot,
+                processName,
+                via == LaunchVia.None ? PlayLaunchKind.Direct : PlayLaunchKind.Launcher);
         }
 
         List<string> parts = new()
@@ -2064,6 +2099,14 @@ public partial class MainWindow : Window
         if (!alreadyRunning && preflight.Summary != "no profile changes")
         {
             parts.Add(preflight.Summary);
+        }
+
+        // How it was started belongs on the same line as what was loaded: through
+        // a launcher, the game can be a minute away from appearing, and the user
+        // should not be left guessing whether the click did anything.
+        if (!alreadyRunning && via != LaunchVia.None)
+        {
+            parts.Add(LaunchUriPolicy.Describe(via));
         }
 
         if (!_lastPlayScreenTookIt)
@@ -2105,7 +2148,8 @@ public partial class MainWindow : Window
 
         Flash(message, warn);
 
-        TraceLog.Write("PLAY " + slot.Name + " <- " + exePath
+        TraceLog.Write("PLAY " + slot.Name + " <- " + (via == LaunchVia.None ? exePath : launchUri)
+            + (via == LaunchVia.None ? string.Empty : " (" + LaunchUriPolicy.Describe(via) + ")")
             + (alreadyRunning ? " (already running)" : " (started)"));
     }
 
@@ -2122,6 +2166,51 @@ public partial class MainWindow : Window
         }
         catch
         {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Asks the launcher to start the game, which is how the game expects to be
+    /// started.
+    /// <para>
+    /// The URI is checked here rather than trusted from the slot, because this is
+    /// the line where a string out of a profile becomes a command the shell runs.
+    /// It is the same policy the picker used, applied again at the only moment
+    /// that matters.
+    /// </para>
+    /// <para>
+    /// No arguments and no working directory: the launcher owns both. A machine
+    /// with no handler registered for the scheme fails here with the shell's own
+    /// error, which <see cref="RevertFailedPlay"/> then puts the slot back for.
+    /// </para>
+    /// </summary>
+    private static bool TryStartLauncher(string uri, out string error)
+    {
+        error = string.Empty;
+
+        if (!LaunchUriPolicy.IsAllowed(uri))
+        {
+            error = "that launcher link is not one this app starts";
+            TraceLog.Write("PLAY START refused " + uri);
+            return false;
+        }
+
+        try
+        {
+            ProcessStartInfo start = new()
+            {
+                FileName = uri,
+                UseShellExecute = true
+            };
+
+            Process.Start(start);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            TraceLog.Write("PLAY START", ex);
             return false;
         }
     }
