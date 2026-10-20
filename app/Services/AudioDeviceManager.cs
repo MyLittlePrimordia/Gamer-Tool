@@ -69,13 +69,67 @@ public sealed class AudioDeviceManager
     // spectrum at runtime, which is a slow and confusing way to rediscover it.
     public event Action<string>? StatusChanged;
 
-    public IReadOnlyList<AudioDeviceInfo> GetOutputDevices()
+    public IReadOnlyList<AudioDeviceInfo> GetOutputDevices() =>
+        GetDevices(DataFlow.Render, "OUTPUT", reportStatus: true);
+
+    /// <summary>
+    /// The microphones and other capture endpoints Windows currently reports.
+    /// <para>
+    /// Same shape and same disposal rules as the output list. This was a second
+    /// copy of the enumeration for one feature, and the copy would have been the
+    /// one that forgot to dispose a device when a later refactor touched only one
+    /// of the two loops.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<AudioDeviceInfo> GetInputDevices() =>
+        GetDevices(DataFlow.Capture, "INPUT", reportStatus: false);
+
+    /// <summary>
+    /// Every endpoint Windows still remembers for this PC, plugged in or not.
+    /// <para>
+    /// This exists for one question the active list cannot answer: whether an
+    /// endpoint id that arrived in an imported backup belongs to this machine.
+    /// An id for a headset that is merely switched off at import time is still
+    /// this PC's endpoint - it is sitting in the registry as unplugged - and
+    /// clearing it would delete a route that works the moment the headset comes
+    /// back. An id from somebody else's PC is in no state at all here, which is
+    /// the distinction being drawn.
+    /// </para>
+    /// <para>
+    /// Same enumerator, same per-device disposal and the same per-device failure
+    /// log as the lists above, because this is the same walk with a wider mask
+    /// rather than a second copy of it. It reports no status: a machine with a
+    /// disabled endpoint is not a machine with no sound.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> GetKnownEndpointIds()
+    {
+        List<string> ids = new();
+
+        foreach (AudioDeviceInfo device in GetDevices(DataFlow.Render, "OUTPUT", reportStatus: false, DeviceState.All))
+        {
+            ids.Add(device.Id);
+        }
+
+        foreach (AudioDeviceInfo device in GetDevices(DataFlow.Capture, "INPUT", reportStatus: false, DeviceState.All))
+        {
+            ids.Add(device.Id);
+        }
+
+        return ids;
+    }
+
+    private IReadOnlyList<AudioDeviceInfo> GetDevices(
+        DataFlow flow,
+        string label,
+        bool reportStatus,
+        DeviceState state = DeviceState.Active)
     {
         List<AudioDeviceInfo> devices = new();
         try
         {
             using MMDeviceEnumerator enumerator = new();
-            foreach (MMDevice device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+            foreach (MMDevice device in enumerator.EnumerateAudioEndPoints(flow, state))
             {
                 // Disposed per iteration. An MMDevice holds a COM reference to the
                 // endpoint, and this is called on every startup, every rescan and
@@ -110,7 +164,7 @@ public sealed class AudioDeviceManager
                             // every device after it.
                             Id = device.ID,
                             Name = string.IsNullOrWhiteSpace(name)
-                                ? "OUTPUT " + (devices.Count + 1).ToString()
+                                ? label + " " + (devices.Count + 1).ToString()
                                 : name,
                             FormFactor = ReadFormFactor(device),
                         });
@@ -130,7 +184,7 @@ public sealed class AudioDeviceManager
                         // handler. The name already read is the only identifier
                         // known to be safe, and it is empty when even that failed.
                         TraceLog.Write(
-                            string.IsNullOrWhiteSpace(name) ? "OUTPUT device skipped" : "OUTPUT device skipped: " + name,
+                            string.IsNullOrWhiteSpace(name) ? label + " device skipped" : label + " device skipped: " + name,
                             ex);
                     }
                 }
@@ -138,12 +192,19 @@ public sealed class AudioDeviceManager
         }
         catch (Exception ex)
         {
-            StatusChanged?.Invoke("NO DEVICE");
+            // The rail line belongs to the output picker and the spectrum. An
+            // unreadable capture list does not mean the machine has no speakers,
+            // and a slot route that cannot see microphones should not make the
+            // Audio tab claim the output side is gone.
+            if (reportStatus)
+            {
+                StatusChanged?.Invoke("NO DEVICE");
+            }
 
             // The whole enumeration failed, so the picker will be empty and every
             // other explanation for that is a guess. Debug.WriteLine was compiled
             // out of Release, which is the build that ships, so this reached nobody.
-            TraceLog.Write("OUTPUT device list unreadable", ex);
+            TraceLog.Write(label + " device list unreadable", ex);
         }
 
         return devices;
@@ -209,6 +270,35 @@ public sealed class AudioDeviceManager
         }
         catch (Exception ex)
         {
+            Debug.WriteLine(ex.Message);
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// The id of the endpoint Windows currently uses for one flow and role.
+    /// <para>
+    /// Used both to remember what was there before a slot routed it and to prove
+    /// that a switch actually happened. An undocumented setter can return success
+    /// and leave the default where it was, so the answer that matters is the one
+    /// read back, not the HRESULT.
+    /// </para>
+    /// </summary>
+    public string GetDefaultDeviceId(bool recording, bool communications)
+    {
+        try
+        {
+            using MMDeviceEnumerator enumerator = new();
+            using MMDevice device = enumerator.GetDefaultAudioEndpoint(
+                recording ? DataFlow.Capture : DataFlow.Render,
+                communications ? Role.Communications : Role.Multimedia);
+
+            return device.ID;
+        }
+        catch (Exception ex)
+        {
+            // There is no default endpoint for every flow on every machine: a
+            // machine with no microphone is ordinary, not broken.
             Debug.WriteLine(ex.Message);
             return string.Empty;
         }

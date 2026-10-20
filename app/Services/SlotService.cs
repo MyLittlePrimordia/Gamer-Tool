@@ -139,8 +139,21 @@ new HotkeySlot
         copy.CrosshairPresetId = source.CrosshairPresetId;
         copy.MonitorDevice = source.MonitorDevice;
         copy.MonitorKey = source.MonitorKey;
+        copy.WindowsPlaybackDeviceId = source.WindowsPlaybackDeviceId;
+        copy.WindowsRecordingDeviceId = source.WindowsRecordingDeviceId;
+        copy.WindowsPlaybackCommunications = source.WindowsPlaybackCommunications;
+        copy.WindowsRecordingCommunications = source.WindowsRecordingCommunications;
+        copy.WindowsAudioBypassFxSound = source.WindowsAudioBypassFxSound;
+        copy.HdrMode = source.HdrMode;
         copy.ApplyOnStart = source.ApplyOnStart;
         copy.Enabled = source.Enabled;
+
+        // The launcher URI travels with the target it belongs to, and the target
+        // itself does not, so this comes over only as far as it can still be
+        // true. A copy is untargeted: it names no game until the user picks one,
+        // and a URI left behind would be a Play that starts the slot it was
+        // copied from.
+        copy.LaunchUri = string.Empty;
 
         // The wildcard is not carried over. A duplicate exists to give a second
         // key to the same look, and a copy of the one wildcard would mean two slots
@@ -228,6 +241,26 @@ new HotkeySlot
             if (string.IsNullOrWhiteSpace(slot.Name))
             {
                 slot.Name = "SLOT";
+            }
+
+            // A hand-edited or pre-feature profile can carry nulls where the
+            // route fields were added. They are strings that are tested with
+            // IsNullOrWhiteSpace everywhere else, but a null that reaches the
+            // device matcher is still a null somebody has to remember about.
+            slot.WindowsPlaybackDeviceId ??= string.Empty;
+            slot.WindowsRecordingDeviceId ??= string.Empty;
+
+            // Same reason, for the launcher URI added after them. Empty means
+            // "start the executable", which is the behaviour every profile
+            // written before this field expects.
+            slot.LaunchUri ??= string.Empty;
+
+            // An enum out of JSON is a number, and a hand-edited profile can carry
+            // one this build has never heard of. Leave is the safe reading: an
+            // unknown value must not switch HDR on or off on somebody's panel.
+            if (slot.HdrMode is not (SlotHdrMode.Leave or SlotHdrMode.On or SlotHdrMode.Off))
+            {
+                slot.HdrMode = SlotHdrMode.Leave;
             }
 
             // The three target modes are mutually exclusive, and a file can arrive

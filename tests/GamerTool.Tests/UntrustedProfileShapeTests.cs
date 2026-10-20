@@ -204,6 +204,7 @@ public class UntrustedProfileShapeTests
             new List<string>(),
             new List<AppCandidate>(),
             AudioService.DefaultFxSoundPath,
+            new List<string>(),
             report);
 
         Assert.Equal(AudioService.DefaultFxSoundPath, imported.FxSoundPath);
@@ -223,7 +224,7 @@ public class UntrustedProfileShapeTests
         AppSettings imported = new() { FxSoundPath = @"E:\Games\FxSound\FxSound.exe" };
         RestoreReport report = new();
         backups.Repair(imported, new List<MonitorChoice>(), new List<string>(), new List<AppCandidate>(),
-            AudioService.DefaultFxSoundPath, report);
+            AudioService.DefaultFxSoundPath, new List<string>(), report);
 
         Assert.Equal(AudioService.DefaultFxSoundPath, imported.FxSoundPath);
         Assert.True(report.FxSoundPathReset);
@@ -270,7 +271,7 @@ public class UntrustedProfileShapeTests
         var backups = new BackupService();
         RestoreReport report = new();
         backups.Repair(normalized, new List<MonitorChoice>(), new List<string>(), new List<AppCandidate>(),
-            AudioService.DefaultFxSoundPath, report);
+            AudioService.DefaultFxSoundPath, new List<string>(), report);
     }
 
     /// <summary>

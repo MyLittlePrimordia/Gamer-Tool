@@ -447,6 +447,12 @@ public partial class MainWindow : Window
         ApplyPresetBacklight(effective, monitorDevice, announce);
 
         _appliedMonitor = monitorDevice;
+
+        // HDR may have been flipped before this preset was pushed, and the note
+        // describes the screen as it is now rather than as it was when the tab
+        // was opened.
+        UpdateScreenHdrNote();
+
         _liveDisplayName = preset.Name.ToUpperInvariant();
         _settings.ActiveDisplayPresetId = preset.Id;
         _activeDisplayId = preset.Id;
@@ -701,6 +707,224 @@ public partial class MainWindow : Window
 
 
     /// <summary>
+    /// The slot's HDR switch. A dialog rather than another column, because the
+    /// slot row is already measured to the pixel and HDR is a three-way choice
+    /// that only matters for a screen-bound slot.
+    /// </summary>
+    private void ShowHdrDialog(HotkeySlot slot)
+    {
+        string device = _display.ResolveDevice(slot.MonitorKey, slot.MonitorDevice);
+        HdrReading reading = _hdr.Read(device);
+
+        List<HdrChoice> choices = new()
+        {
+            new HdrChoice { Mode = SlotHdrMode.Leave, Name = "Leave alone" },
+            new HdrChoice { Mode = SlotHdrMode.On, Name = "HDR on" },
+            new HdrChoice { Mode = SlotHdrMode.Off, Name = "HDR off" },
+        };
+
+        ComboBox picker = new()
+        {
+            Style = (Style)FindResource("ModernCombo"),
+            ItemContainerStyle = (Style)FindResource("ModernComboItem"),
+            ItemsSource = choices,
+            Tag = slot.Id + "|hdr",
+            ToolTip = "HDR for this slot",
+        };
+        System.Windows.Automation.AutomationProperties.SetName(picker, "HDR for " + slot.Name);
+
+        int index = choices.FindIndex(c => c.Mode == slot.HdrMode);
+        picker.SelectedIndex = index < 0 ? 0 : index;
+
+        StackPanel content = new();
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = "Choose what this slot should do with HDR on its screen. Leave alone keeps the current state.",
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 19,
+            Margin = new Thickness(0, 12, 0, 0),
+        });
+
+        content.Children.Add(RouteHeading("HDR"));
+        content.Children.Add(picker);
+
+        string note;
+        bool warn;
+
+        if (slot.IsAnyGameTarget)
+        {
+            note = "An Any game slot cannot change HDR. Pick one game for this slot first.";
+            warn = true;
+        }
+        else if (string.IsNullOrWhiteSpace(device))
+        {
+            note = "Pick a screen for this slot first. HDR is skipped on All screens.";
+            warn = true;
+        }
+        else if (!reading.Known)
+        {
+            note = "This screen did not report HDR support. The slot will skip HDR here.";
+            warn = true;
+        }
+        else if (!reading.Supported)
+        {
+            note = "This screen does not support HDR. The slot will skip HDR here.";
+            warn = true;
+        }
+        else if (reading.Active)
+        {
+            note = "HDR is on now on this screen.";
+            warn = false;
+        }
+        else
+        {
+            note = "HDR is off now on this screen.";
+            warn = false;
+        }
+
+        if (reading.IsLegacy)
+        {
+            note += " This PC only reports advanced colour, so turning HDR off may also turn automatic colour off.";
+            warn = true;
+        }
+
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = note,
+            Foreground = (Brush)FindResource(warn ? "Amber" : "TextMid"),
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 18,
+            Margin = new Thickness(8, 8, 8, 0),
+        });
+
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = "Applies the next time this slot loads. HDR is not changed while you alt-tab.",
+            Margin = new Thickness(0, 12, 0, 0),
+        });
+
+        ShowCustomModal("HDR ON THIS SCREEN", content, "SAVE", () =>
+        {
+            slot.HdrMode = picker.SelectedItem is HdrChoice choice ? choice.Mode : SlotHdrMode.Leave;
+
+            Commit();
+            BuildSlots();
+            UpdateScreenHdrNote();
+
+            Flash(slot.HdrMode == SlotHdrMode.Leave
+                ? "HDR left alone for " + slot.Name
+                : "HDR " + (slot.HdrMode == SlotHdrMode.On ? "on" : "off") + " saved for " + slot.Name);
+        }, initialFocus: picker);
+    }
+
+    private sealed class HdrChoice
+    {
+        public SlotHdrMode Mode { get; init; }
+
+        public string Name { get; init; } = string.Empty;
+
+        public override string ToString() => Name;
+    }
+
+
+    /// <summary>
+    /// The one line on the Display tab that explains why a screen preset can look
+    /// inert. It follows the screen the preset was applied to, not the primary
+    /// display, because that is the panel the user is tuning.
+    /// </summary>
+    private void UpdateScreenHdrNote()
+    {
+        if (ScreenHdrNote is null)
+        {
+            return;
+        }
+
+        string note = string.Empty;
+
+        if (_appliedMonitor.Length > 0)
+        {
+            HdrReading reading = _hdr.Read(_appliedMonitor);
+
+            if (reading.Known && reading.Active)
+            {
+                note = HdrNotes.HdrOn;
+            }
+            else if (!reading.Known)
+            {
+                note = HdrNotes.Unknown;
+            }
+        }
+
+        if (note.Length == 0)
+        {
+            // A slot that asks for HDR but has no screen is a mistake that is
+            // invisible until the game starts, and it is made on the slot board
+            // rather than here. This is the only place both facts are in hand.
+            bool slotWithoutScreen = _settings.Slots.Any(s =>
+                s.HdrMode != SlotHdrMode.Leave
+                && string.IsNullOrWhiteSpace(s.MonitorKey)
+                && string.IsNullOrWhiteSpace(s.MonitorDevice));
+
+            if (slotWithoutScreen)
+            {
+                note = HdrNotes.SlotWithoutMonitor;
+            }
+        }
+
+        ScreenHdrNote.Text = note;
+        ScreenHdrNote.Visibility = note.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+
+    /// <summary>
+    /// Puts HDR back when a slot is genuinely stood down. Not called by the focus
+    /// pause: an alt-tab is not the end of the slot, and flipping HDR there would
+    /// blink the screen every time the user checks something else.
+    /// </summary>
+    private void RestoreHdrOnStandDown(bool emergency)
+    {
+        if (!_hdr.Touched)
+        {
+            return;
+        }
+
+        IReadOnlyList<string> warnings = _hdr.RestoreAll(_display.ResolveDevice);
+
+        foreach (string warning in warnings)
+        {
+            TraceLog.Write("HDR RESTORE " + warning);
+        }
+
+        if (emergency && warnings.Count > 0)
+        {
+            Flash(warnings[0], true);
+        }
+    }
+
+
+    /// <summary>
+    /// The exit-path restore, called beside the audio route restore so both
+    /// persistent changes are put back before <see cref="EmergencyReset"/> runs.
+    /// The journal added later covers the paths this cannot reach.
+    /// </summary>
+    private void RestoreHdrForExit()
+    {
+        if (!_hdr.Touched)
+        {
+            return;
+        }
+
+        foreach (string warning in _hdr.RestoreAll(_display.ResolveDevice))
+        {
+            TraceLog.Write("HDR RESTORE " + warning);
+        }
+    }
+
+
+    /// <summary>
     /// The one definition of "back to normal" for the screen: a hard reset.
     /// <para>
     /// The reset button, the tray menu, the global off hotkey and the panic key all
@@ -720,6 +944,11 @@ public partial class MainWindow : Window
     /// </summary>
     public void GoScreenNeutral(bool emergency = false)
     {
+        // Before the ramp comes off, and on the hard-reset path as well as the
+        // stand-down one. Panic is the user saying the screen is wrong right now;
+        // leaving a monitor in HDR would be the same failure as leaving it dim.
+        RestoreHdrOnStandDown(emergency);
+
         // Panic takes the crosshair away whoever put it there. A normal reset only
         // takes one a slot put up, since a hand-made one is nothing to do with the
         // screen being reset.
@@ -755,6 +984,26 @@ public partial class MainWindow : Window
     /// </para>
     /// </summary>
     public void GoScreenStandDown()
+    {
+        // A stand-down is the slot ending: the game closed, the slot was switched
+        // off, or the wildcard lost fullscreen. HDR goes back with it.
+        RestoreHdrOnStandDown(false);
+
+        HideSlotCrosshair();
+        StandDownScreen(restorePanel: _presetOwnsPanel);
+    }
+
+
+    /// <summary>
+    /// The focus-pause stand-down, which is the one that must leave HDR alone.
+    /// <para>
+    /// An alt-tab is not the slot ending. Flipping HDR there would blink the
+    /// screen black for a moment every time the user checked a browser, and
+    /// flipping it back on return would blink again - the single most annoying
+    /// thing this feature could do. Only the gamma ramp stands down.
+    /// </para>
+    /// </summary>
+    private void GoScreenStandDownForFocusPause()
     {
         HideSlotCrosshair();
         StandDownScreen(restorePanel: _presetOwnsPanel);
@@ -892,6 +1141,7 @@ public partial class MainWindow : Window
         }
 
         _appliedMonitor = string.Empty;
+        UpdateScreenHdrNote();
         _liveDisplayName = "STANDARD";
         _activeDisplayId = "flat";
 

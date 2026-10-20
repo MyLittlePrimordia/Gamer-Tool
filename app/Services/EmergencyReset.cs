@@ -23,6 +23,20 @@ public sealed class SessionState
     public Action? RestoreBacklight { get; set; }
 
     /// <summary>
+    /// Puts back the changes that outlive a reboot: the Windows default audio
+    /// endpoints and the HDR state of a monitor.
+    /// <para>
+    /// Beside the backlight rather than inside the display/audio reset because
+    /// those two flags describe what this session applied, and a crash can leave
+    /// a route or an HDR change on disk without either flag being set. This has
+    /// its own answer to "was anything changed" - the journal - and its own
+    /// once-only guard in <see cref="EmergencyReset"/>, because Run can execute
+    /// twice in one process.
+    /// </para>
+    /// </summary>
+    public Action? RestoreSystemChanges { get; set; }
+
+    /// <summary>
     /// Set the moment the app starts going away, so the fault handlers can tell a
     /// problem worth showing from teardown noise.
     /// <para>
@@ -242,6 +256,9 @@ public static class EmergencyReset
     /// <summary>Set once the backlight has been put back, so a second exit hook does not repeat it.</summary>
     private static int _backlightRestored;
 
+    /// <summary>Set once the audio routes and HDR have been put back, for the same reason.</summary>
+    private static int _systemRestored;
+
     public static void Run()
     {
         SessionState state = SessionState.Current;
@@ -282,6 +299,22 @@ public static class EmergencyReset
             catch (Exception ex)
             {
                 TraceLog.Write("BACKLIGHT RESTORE", ex);
+            }
+        }
+
+        // Before the display/audio flags are consulted. A route or an HDR change
+        // can be on disk without either flag being set - a launch that only
+        // loaded a slot's route, or a crash between the apply and the flag write -
+        // and this is the only hook on Application.Exit and ProcessExit.
+        if (Interlocked.Exchange(ref _systemRestored, 1) == 0)
+        {
+            try
+            {
+                state.RestoreSystemChanges?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                TraceLog.Write("SYSTEM RESTORE", ex);
             }
         }
 

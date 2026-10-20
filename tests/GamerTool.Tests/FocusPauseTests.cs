@@ -162,7 +162,7 @@ public class FocusPauseTests
         int end = slots.IndexOf("\n    private void CancelFocusPause", tick, System.StringComparison.Ordinal);
         string body = slots.Substring(tick, end - tick);
 
-        Assert.Contains("GoScreenStandDown();", body, System.StringComparison.Ordinal);
+        Assert.Contains("GoScreenStandDownForFocusPause();", body, System.StringComparison.Ordinal);
         Assert.DoesNotContain("GoSoundNeutralAsync", body, System.StringComparison.Ordinal);
         Assert.DoesNotContain("ApplyAudioToDevice", body, System.StringComparison.Ordinal);
     }
@@ -201,7 +201,7 @@ public class FocusPauseTests
 
         int locals = body.IndexOf("string slotId = _autoSlotId;", System.StringComparison.Ordinal);
         int processLocal = body.IndexOf("string process = _autoProcess;", System.StringComparison.Ordinal);
-        int standDown = body.IndexOf("GoScreenStandDown();", System.StringComparison.Ordinal);
+        int standDown = body.IndexOf("GoScreenStandDownForFocusPause();", System.StringComparison.Ordinal);
         int restore = body.LastIndexOf("_pausedSlotId = slotId;", System.StringComparison.Ordinal);
         int restoreProcess = body.LastIndexOf("_pausedProcess = process;", System.StringComparison.Ordinal);
 

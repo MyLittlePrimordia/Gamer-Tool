@@ -33,6 +33,7 @@ Boost shadow brightness to spot enemies in dark games, switch to a warm night mo
 - 🖥️ **Display Presets:** Instant profiles like *Competitive*, *Cinema*, *Daylight*, and *Night*, plus custom brightness, contrast, and color dials.
 - 🎧 **Audio Presets & EQ:** Sound profiles and a multi-band equalizer (via free [FxSound](https://www.fxsound.com/)) with automatic distortion protection.
 - ⌨️ **One-Key Switching:** Link a screen preset + a sound preset to a single hotkey (e.g. `Ctrl+Shift+1`) or have it turn on automatically when a game starts.
+- ▶️ **Play With Profile:** A slot's Play button loads that slot - screen, sound, Windows audio routing, HDR - *before* it starts the game, then puts everything back when you exit. A game from Steam or Epic is started by its own launcher, so it behaves exactly as it does from the store; a shortcut can do the same from outside the window.
 - 🎯 **Crosshair Overlay:** Eight minimal shapes in six high-contrast colors (or any color from the built-in picker), plus a browsable pack of ready-made crosshair PNGs. Size, thickness, gap, opacity, rotation, outline, glow and an optional center dot all work on shapes *and* pictures. Pick one per slot, or toggle and cycle them with their own hotkeys.
 - 🪶 **Lightweight & Clean:** No accounts, no background telemetry, no installer. Lives quietly in your system tray, where you can toggle or switch your crosshair without opening the window.
 
@@ -70,6 +71,7 @@ Boost shadow brightness to spot enemies in dark games, switch to a warm night mo
 <details>
 <summary><b>🛠️ Advanced Notes & Hardware Brightness</b></summary>
 
+- **Verify setup:** the Settings row of that name tries brightness, HDR and Windows sound routing on this PC, puts every one of them back, and lists what answered. If a feature does nothing on your machine, that list is the first thing to paste into a report.
 - **Hardware Brightness (DDC/CI):** Off by default. Some monitors support changing real backlight levels directly over the display cable. If a monitor fails to respond twice, Gamer Tool disables it safely to prevent freezing.
 - **Settings Location:** Everything is stored locally in `%APPDATA%\GamerTool`. Copy this folder if you want to move your setup to a new PC.
 - **Portable mode:** Put a `settings.json` next to `GamerTool.exe` and the whole setup moves into that folder — settings *and* the log. Handy for a USB stick. Leave the file out and nothing changes.

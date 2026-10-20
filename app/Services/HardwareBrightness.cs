@@ -429,6 +429,18 @@ public sealed class DisplayLink
     /// <summary>As the compositor names the target. Often the same generic string the driver gives.</summary>
     public string FriendlyName { get; init; } = string.Empty;
 
+    /// <summary>
+    /// The source's GDI name, <c>\\.\DISPLAYn</c>, carried on the link so the
+    /// app can map the monitor a slot names to the compositor target it needs.
+    /// <para>
+    /// Name matching was the only option before this, and it was wrong often
+    /// enough to matter: two identical panels report the same friendly name, and
+    /// a driver is free to give a generic one. The source name is the identifier
+    /// both APIs can actually agree on.
+    /// </para>
+    /// </summary>
+    public string GdiDeviceName { get; init; } = string.Empty;
+
     /// <summary>DisplayPort, HDMI, DVI and so on, or "unknown".</summary>
     public string Connection { get; init; } = "unknown";
 
@@ -459,7 +471,8 @@ public sealed class DisplayLink
     /// </para>
     /// </summary>
     public bool Matches(string deviceName, string friendlyName) =>
-        (FriendlyName.Length > 0
+        (GdiDeviceName.Length > 0 && GdiDeviceName.Equals(deviceName, StringComparison.OrdinalIgnoreCase))
+        || (FriendlyName.Length > 0
             && (FriendlyName.Equals(friendlyName, StringComparison.OrdinalIgnoreCase)
                 || friendlyName.Contains(FriendlyName, StringComparison.OrdinalIgnoreCase)))
         || (FriendlyName.Length > 0 && FriendlyName.Equals(deviceName, StringComparison.OrdinalIgnoreCase));
@@ -1559,6 +1572,15 @@ Task? abandoned = null;
                     ? name.monitorFriendlyDeviceName
                     : string.Empty;
 
+                // The source name is the only identifier the dxva2 and compositor
+                // sides agree on, so it is what maps a slot's monitor to a target.
+                // Asked here rather than in a second pass: the path is already in
+                // hand and the call is cheap next to the topology query.
+                var source = SourceRequest(path);
+                string gdi = DisplayConfigGetSourceDeviceName(ref source) == 0
+                    ? source.viewGdiDeviceName
+                    : string.Empty;
+
                 var colour = new DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO
                 {
                     header = new DISPLAYCONFIG_DEVICE_INFO_HEADER
@@ -1578,6 +1600,7 @@ Task? abandoned = null;
                 links.Add(new DisplayLink
                 {
                     FriendlyName = friendly,
+                    GdiDeviceName = gdi,
                     Connection = ConnectionNameOf(path.targetInfo.videoOutputTechnology),
                     HdrActive = flags.HdrOn,
                     HdrKnown = advancedKnown,
@@ -1604,6 +1627,279 @@ Task? abandoned = null;
 
         return links;
     }
+
+
+    /// <summary>
+    /// One active compositor target, with the identifiers the HDR calls need.
+    /// <para>
+    /// The GDI name is the only field a slot can be matched on. The adapter LUID
+    /// and target id are what every device-info packet carries, and they cannot
+    /// be reconstructed from <c>\\.\DISPLAYn</c> without asking the compositor.
+    /// </para>
+    /// </summary>
+    internal readonly record struct DisplayTargetRef(
+        string GdiDeviceName,
+        string FriendlyName,
+        uint AdapterLowPart,
+        int AdapterHighPart,
+        uint TargetId);
+
+
+    /// <summary>
+    /// Every active target, read once for the HDR path. Best effort: an empty
+    /// list means the question could not be asked, not that the machine has no
+    /// screens.
+    /// </summary>
+    internal static IReadOnlyList<DisplayTargetRef> ReadDisplayTargets()
+    {
+        List<DisplayTargetRef> targets = new();
+
+        try
+        {
+            if (GetDisplayConfigBufferSizes(QueryDisplayConfigOnlyActive, out uint pathCount, out uint modeCount) != 0
+                || pathCount == 0)
+            {
+                return targets;
+            }
+
+            var paths = new DISPLAYCONFIG_PATH_INFO[pathCount];
+            var modes = new DISPLAYCONFIG_MODE_INFO[modeCount];
+
+            if (QueryDisplayConfig(
+                    QueryDisplayConfigOnlyActive,
+                    ref pathCount,
+                    paths,
+                    ref modeCount,
+                    modes,
+                    IntPtr.Zero) != 0)
+            {
+                return targets;
+            }
+
+            foreach (DISPLAYCONFIG_PATH_INFO path in paths)
+            {
+                if (!path.targetInfo.targetAvailable)
+                {
+                    continue;
+                }
+
+                var name = TargetNameRequest(path);
+                string friendly = DisplayConfigGetTargetDeviceName(ref name) == 0
+                    ? name.monitorFriendlyDeviceName
+                    : string.Empty;
+
+                var source = SourceRequest(path);
+                string gdi = DisplayConfigGetSourceDeviceName(ref source) == 0
+                    ? source.viewGdiDeviceName
+                    : string.Empty;
+
+                targets.Add(new DisplayTargetRef(
+                    gdi,
+                    friendly,
+                    path.targetInfo.adapterId.LowPart,
+                    path.targetInfo.adapterId.HighPart,
+                    path.targetInfo.id));
+            }
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("HWB display targets failed", ex);
+        }
+
+        return targets;
+    }
+
+
+    /// <summary>
+    /// The current HDR state of one screen, preferring the 24H2 API that can tell
+    /// real HDR from advanced colour on an SDR panel.
+    /// <para>
+    /// The legacy call is kept as a fallback rather than removed: on Windows 10
+    /// and on 23H2 the newer struct does not exist, and the legacy answer is the
+    /// only one available. Its result is labelled <see cref="HdrReadSource.Legacy"/>
+    /// so callers can keep the wording advisory where it cannot distinguish HDR
+    /// from ACM.
+    /// </para>
+    /// </summary>
+    internal static HdrReading ReadHdrState(string deviceName)
+    {
+        DisplayTargetRef? found = FindTarget(deviceName);
+        if (found is not { } target)
+        {
+            return HdrReading.Unknown;
+        }
+
+        if (SupportsInfo2())
+        {
+            var request = new DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2
+            {
+                header = new DISPLAYCONFIG_DEVICE_INFO_HEADER
+                {
+                    type = AdvancedColorInfo2Type,
+                    size = (uint)Marshal.SizeOf<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2>(),
+                    adapterId = new DISPLAYCONFIG_LUID { LowPart = target.AdapterLowPart, HighPart = target.AdapterHighPart },
+                    id = target.TargetId
+                }
+            };
+
+            if (DisplayConfigGetAdvancedColorInfo2(ref request) == 0)
+            {
+                AdvancedColorInfo2 info = AdvancedColorInfo2.Decode(request.value, request.activeColorMode);
+                return new HdrReading(
+                    Known: true,
+                    Supported: info.HdrSupported,
+                    Active: info.HdrActive,
+                    UserEnabled: info.HdrUserEnabled,
+                    LimitedByPolicy: info.LimitedByPolicy,
+                    Source: HdrReadSource.Info2);
+            }
+        }
+
+        var legacy = new DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO
+        {
+            header = new DISPLAYCONFIG_DEVICE_INFO_HEADER
+            {
+                type = AdvancedColorInfoType,
+                size = (uint)Marshal.SizeOf<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO>(),
+                adapterId = new DISPLAYCONFIG_LUID { LowPart = target.AdapterLowPart, HighPart = target.AdapterHighPart },
+                id = target.TargetId
+            }
+        };
+
+        if (DisplayConfigGetAdvancedColorInfo(ref legacy) == 0)
+        {
+            AdvancedColorFlags flags = AdvancedColorFlags.Decode(legacy.value);
+            return new HdrReading(
+                Known: true,
+                Supported: flags.Supported,
+                Active: flags.HdrOn,
+                UserEnabled: flags.Enabled,
+                LimitedByPolicy: flags.ForceDisabled,
+                Source: HdrReadSource.Legacy);
+        }
+
+        return HdrReading.Unknown;
+    }
+
+
+    /// <summary>
+    /// Switches HDR on one screen and proves the switch by reading it back.
+    /// <para>
+    /// The setter can return success without changing anything. The verification
+    /// is not optional: a caller that trusted the return code would record a
+    /// restore value for a screen that never moved, and would tell the user their
+    /// game was in HDR when it was not.
+    /// </para>
+    /// <para>
+    /// <c>SET_HDR_STATE</c> is tried first on 24H2. If it fails, the legacy
+    /// advanced-colour setter is tried, which is also the only path on older
+    /// builds. On the legacy path "off" turns advanced colour off, including the
+    /// ACM variant, because that is the only switch the old API has.
+    /// </para>
+    /// </summary>
+    internal static bool TrySetHdrState(string deviceName, bool enable, out string error)
+    {
+        error = string.Empty;
+
+        DisplayTargetRef? found = FindTarget(deviceName);
+        if (found is not { } target)
+        {
+            error = "the screen is not attached";
+            return false;
+        }
+
+        int hresult = 0;
+
+        if (SupportsInfo2())
+        {
+            var set = new DISPLAYCONFIG_SET_HDR_STATE
+            {
+                header = new DISPLAYCONFIG_DEVICE_INFO_HEADER
+                {
+                    type = SetHdrStateType,
+                    size = (uint)Marshal.SizeOf<DISPLAYCONFIG_SET_HDR_STATE>(),
+                    adapterId = new DISPLAYCONFIG_LUID { LowPart = target.AdapterLowPart, HighPart = target.AdapterHighPart },
+                    id = target.TargetId
+                },
+                value = enable ? 1u : 0u
+            };
+
+            hresult = DisplayConfigSetHdrState(ref set);
+
+            if (hresult == 0 && HdrReadingMatches(deviceName, enable))
+            {
+                return true;
+            }
+        }
+
+        var legacy = new DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE
+        {
+            header = new DISPLAYCONFIG_DEVICE_INFO_HEADER
+            {
+                type = SetAdvancedColorStateType,
+                size = (uint)Marshal.SizeOf<DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE>(),
+                adapterId = new DISPLAYCONFIG_LUID { LowPart = target.AdapterLowPart, HighPart = target.AdapterHighPart },
+                id = target.TargetId
+            },
+            value = enable ? 1u : 0u
+        };
+
+        int legacyResult = DisplayConfigSetAdvancedColorState(ref legacy);
+        if (legacyResult == 0 && HdrReadingMatches(deviceName, enable))
+        {
+            return true;
+        }
+
+        int last = legacyResult != 0 ? legacyResult : hresult;
+        error = last != 0
+            ? "hresult=0x" + last.ToString("X8")
+            : "the switch was not kept";
+        return false;
+    }
+
+
+    private static bool HdrReadingMatches(string deviceName, bool enable)
+    {
+        HdrReading reading = ReadHdrState(deviceName);
+        return reading.Known && reading.Active == enable;
+    }
+
+
+    private static DisplayTargetRef? FindTarget(string deviceName)
+    {
+        if (string.IsNullOrWhiteSpace(deviceName))
+        {
+            return null;
+        }
+
+        foreach (DisplayTargetRef target in ReadDisplayTargets())
+        {
+            if (target.GdiDeviceName.Equals(deviceName, StringComparison.OrdinalIgnoreCase))
+            {
+                return target;
+            }
+        }
+
+        return null;
+    }
+
+
+    /// <summary>
+    /// 24H2 is build 26100. The newer device-info types are not documented as
+    /// available before it, and an older build answers them with
+    /// ERROR_INVALID_PARAMETER - which would make every read look like a driver
+    /// refusal rather than a build that has not been asked the right question.
+    /// </summary>
+    private static bool SupportsInfo2() => Environment.OSVersion.Version.Build >= 26100;
+
+
+    internal static int DeviceInfoHeaderSize => Marshal.SizeOf<DISPLAYCONFIG_DEVICE_INFO_HEADER>();
+
+    internal static int AdvancedColorInfo2Size => Marshal.SizeOf<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2>();
+
+    internal static int SetHdrStateSize => Marshal.SizeOf<DISPLAYCONFIG_SET_HDR_STATE>();
+
+    internal static int SetAdvancedColorStateSize => Marshal.SizeOf<DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE>();
 
 
     /// <summary>
@@ -1799,13 +2095,33 @@ Task? abandoned = null;
     /// DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO, which is 9.
     /// <para>
     /// Checked against the wingdi.h enum rather than trusted, because the
-    /// neighbouring entries look like a continuation: GET_SDR_WHITE_LEVEL is 11, and
-    /// the newer GET_ADVANCED_COLOR_INFO_2 is 14. Reading 35 off the SDK struct name
-    /// and "fixing" this line to match would make every query fail while looking
-    /// like a correction.
+    /// neighbouring entries look like a continuation: GET_SDR_WHITE_LEVEL is 11,
+    /// MONITOR_SPECIALIZATION is 12 and 13, SET_RESERVED1 is 14, and the newer
+    /// GET_ADVANCED_COLOR_INFO_2 is 15. Reading 35 off the SDK struct name and
+    /// "fixing" this line to match would make every query fail while looking like
+    /// a correction.
     /// </para>
     /// </summary>
     private const uint AdvancedColorInfoType = 9;
+
+    /// <summary>
+    /// DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2, which is 15. The
+    /// struct is 36 bytes and is the only read that can distinguish HDR from
+    /// advanced colour on an SDR panel.
+    /// </summary>
+    internal const uint AdvancedColorInfo2Type = 15;
+
+    /// <summary>
+    /// DISPLAYCONFIG_DEVICE_INFO_SET_HDR_STATE, which is 16. Header plus one
+    /// word, 24 bytes, bit 0 enables HDR.
+    /// </summary>
+    internal const uint SetHdrStateType = 16;
+
+    /// <summary>
+    /// DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE, which is 10. The
+    /// legacy switch, and the only one older builds have.
+    /// </summary>
+    internal const uint SetAdvancedColorStateType = 10;
 
 
     [StructLayout(LayoutKind.Sequential)]
@@ -2370,6 +2686,51 @@ Task? abandoned = null;
 
 
     /// <summary>
+    /// The 24H2 read: header, the same four flag words, and a separate active
+    /// colour mode. 36 bytes.
+    /// <para>
+    /// The extra word is the whole point. The legacy struct's "enabled" flag is
+    /// true for HDR and for advanced colour on an SDR panel, so it cannot answer
+    /// the question this app needs to ask before pushing a gamma ramp.
+    /// </para>
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2
+    {
+        public DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+
+        public uint value;
+
+        public uint colorEncoding;
+
+        public uint bitsPerColorChannel;
+
+        /// <summary>0 SDR, 1 wide colour gamut, 2 HDR.</summary>
+        public uint activeColorMode;
+    }
+
+
+    /// <summary>The 24H2 HDR switch. Header plus one word, 24 bytes, bit 0 enables.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DISPLAYCONFIG_SET_HDR_STATE
+    {
+        public DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+
+        public uint value;
+    }
+
+
+    /// <summary>The legacy advanced-colour switch. Header plus one word, 24 bytes.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE
+    {
+        public DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+
+        public uint value;
+    }
+
+
+    /// <summary>
     /// The source's GDI name, carried as the control for the target queries: if this
     /// one is answered then the topology query is working and the driver is
     /// declining about the target specifically, rather than the whole call having
@@ -2453,6 +2814,15 @@ Task? abandoned = null;
 
     [DllImport("user32.dll", EntryPoint = "DisplayConfigGetDeviceInfo")]
     private static extern int DisplayConfigGetAdvancedColorInfo(ref DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO requestPacket);
+
+    [DllImport("user32.dll", EntryPoint = "DisplayConfigGetDeviceInfo")]
+    private static extern int DisplayConfigGetAdvancedColorInfo2(ref DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 requestPacket);
+
+    [DllImport("user32.dll", EntryPoint = "DisplayConfigSetDeviceInfo")]
+    private static extern int DisplayConfigSetHdrState(ref DISPLAYCONFIG_SET_HDR_STATE requestPacket);
+
+    [DllImport("user32.dll", EntryPoint = "DisplayConfigSetDeviceInfo")]
+    private static extern int DisplayConfigSetAdvancedColorState(ref DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE requestPacket);
 
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -74,6 +75,12 @@ public partial class MainWindow : Window
         {
             existing.AppExePath = game.ExePath;
             existing.AppName = game.Name;
+
+            // Bound to the program that is running, so the executable is the
+            // target. Any launcher link the slot used to carry belongs to the game
+            // it used to name.
+            existing.LaunchUri = string.Empty;
+            existing.LaunchConfirmed = true;
             existing.IsSelfTarget = false;
             existing.IsAnyGameTarget = false;
             existing.ApplyOnStart = false;
@@ -98,6 +105,10 @@ public partial class MainWindow : Window
         slot.Name = game.Name;
         slot.AppExePath = game.ExePath;
         slot.AppName = game.Name;
+
+        // Bound from the program running on this machine, so there is nothing to
+        // confirm later: the user is looking at it.
+        slot.LaunchConfirmed = true;
 
         // Armed, because the reason the user pressed this is that they are playing
         // it now and want it to load itself. Turning it on is the whole point of
@@ -170,12 +181,14 @@ public partial class MainWindow : Window
     /// The slot row's column widths, shared by a slot card and the caption strip
     /// above it so the two can never drift apart.
     /// <para>
-    /// One row, eight controls, and it adds up. This was measured rather than
+    /// One row, nine controls, and it adds up. This was measured rather than
     /// guessed, twice: the first attempt assumed ten pixel gaps and generous
     /// minimums for the name and the game picker, came out 114px short, and the
     /// answer given was that a single row was not possible. It was possible.
     /// The name only has to hold a word rather than a field, and the game picker
-    /// has the marquee, so 194px is a real width and not a compromise.
+    /// has the marquee, so 194px is a real width and not a compromise. The Play
+    /// button paid for itself out of the gaps, which went from ten to six, so the
+    /// game picker kept that width instead of losing a column's worth.
     /// </para>
     /// <para>
     /// What pays for the row is that four of these carry text the user wrote or
@@ -191,9 +204,10 @@ public partial class MainWindow : Window
     /// </summary>
     private static readonly GridLength[] SlotColumns =
     {
-        new(120), new(10), new(100), new(10), new(142), new(10),
-        new(142), new(10), new(116), new(10), new(100), new(10),
-        new(130), new(10), new(1, GridUnitType.Star), new(10), new(30)
+        new(120), new(6), new(100), new(6), new(142), new(6),
+        new(142), new(6), new(116), new(6), new(100), new(6),
+        new(130), new(6), new(1, GridUnitType.Star), new(6), new(24),
+        new(6), new(30)
     };
 
     /// <summary>
@@ -376,7 +390,10 @@ public partial class MainWindow : Window
             : "Press a key box, then hold Ctrl or Alt and press the combo you want.";
 
         if (count == 0)
+        {
+            UpdateScreenHdrNote();
             return;
+        }
 
         SlotList.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         SlotList.Children.Add(SlotHeaderRow());
@@ -388,6 +405,10 @@ public partial class MainWindow : Window
             Grid.SetRow(card, i + 1);
             SlotList.Children.Add(card);
         }
+
+        // The Display-tab note names a slot that asks for HDR without a screen.
+        // Rebuilding the rows is exactly when that can have changed.
+        UpdateScreenHdrNote();
     }
 
 
@@ -550,6 +571,28 @@ public partial class MainWindow : Window
         ComboBox appBox = AppCombo(slot);
         Grid.SetColumn(appBox, 14);
 
+        // Play is the one control here that does something outside the window:
+        // it applies the slot before starting the game, so the profile is already
+        // on the screen when the game gives it up. The tooltip is the pre-flight
+        // checklist, built from the same object the click uses, so what the user
+        // reads on hover is what the app has actually decided.
+        IconButton play = new()
+        {
+            Style = (Style)FindResource("IconButton"),
+            Icon = Icons.Play,
+            Tag = slot.Id,
+            Width = 24,
+            Height = 28,
+            ToolTip = PlayPreflightFor(slot).Tooltip,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        ToolTipService.SetShowOnDisabled(play, true);
+        System.Windows.Automation.AutomationProperties.SetName(
+            play, "Play " + slot.Name + " with its profile");
+        play.Click += OnSlotPlayClick;
+        Grid.SetColumn(play, 16);
+
         IconButton remove = new()
         {
             Style = (Style)FindResource("IconButton"),
@@ -573,7 +616,7 @@ public partial class MainWindow : Window
             RegisterHotkeys();
             ApplyWatchState();
         };
-        Grid.SetColumn(remove, 16);
+        Grid.SetColumn(remove, 18);
 
         row.Children.Add(namePlate);
         row.Children.Add(keyBox);
@@ -583,19 +626,37 @@ public partial class MainWindow : Window
         row.Children.Add(monitorBox);
         row.Children.Add(outputBox);
         row.Children.Add(appBox);
+        row.Children.Add(play);
         row.Children.Add(remove);
 
-        // Duplicate lives here rather than as a third button.
+        // Duplicate and the shortcut live here rather than as buttons.
         //
-        // It is the one action in here that is a convenience rather than
-        // something done often enough to earn a permanent place, and the name row
-        // has a gap at the right of the name that would look like a missing
-        // control if something were left out of it. So it is a context menu: no
-        // width at all, and nothing to line up.
+        // Duplicate is a convenience rather than something done often enough to
+        // earn a permanent place. The shortcut is the same action as Play, just in
+        // a form that can sit on the desktop; the row already has one button for
+        // the action itself. Both are context menu items: no width at all, and
+        // nothing to line up.
         ContextMenu menu = new();
+
+        // HDR is per slot and per screen, so it belongs with the thing that owns
+        // both. The row has no room for another column, and the dialog is the
+        // same shape as the audio routing one.
+        MenuItem hdr = new() { Header = "HDR on this screen..." };
+        hdr.Click += (s, e) => ShowHdrDialog(slot);
+        menu.Items.Add(hdr);
+        menu.Items.Add(new Separator());
+
+        MenuItem route = new() { Header = "Windows audio routing..." };
+        route.Click += (s, e) => ShowWindowsAudioRoutingDialog(slot);
+        menu.Items.Add(route);
+        menu.Items.Add(new Separator());
         MenuItem duplicate = new() { Header = "Duplicate" };
         duplicate.Click += (s, e) => DuplicateSlot(slot);
         menu.Items.Add(duplicate);
+        menu.Items.Add(new Separator());
+        MenuItem shortcut = new() { Header = "Create Play shortcut" };
+        shortcut.Click += (s, e) => CreatePlayShortcut(slot);
+        menu.Items.Add(shortcut);
         card.ContextMenu = menu;
 
         return card;
@@ -839,13 +900,24 @@ public partial class MainWindow : Window
         // name is the only thing on the row that says which row it is.
         string name = kind == "display" ? "Screen Preset" : "Sound Preset";
 
+        // The one place the two halves of a slot disagree. Windows ignores the
+        // gamma ramp in HDR, so a screen preset beside HDR On is a preset that
+        // will not be visible on that monitor. Said on the control rather than
+        // only on the Display tab, because the slot board is where the user made
+        // the combination.
+        string hdrNote = kind == "display"
+            && slot.HdrMode == SlotHdrMode.On
+            && !string.IsNullOrWhiteSpace(slot.DisplayPresetId)
+                ? "  ·  HDR is on, so this preset's gamma won't apply"
+                : string.Empty;
+
         ComboBox box = new()
         {
             Style = (Style)FindResource("ModernCombo"),
             ItemContainerStyle = (Style)FindResource("ModernComboItem"),
             ItemsSource = choices,
             Tag = slot.Id + "|" + kind,
-            ToolTip = name
+            ToolTip = name + hdrNote
         };
         System.Windows.Automation.AutomationProperties.SetName(box, name + " for " + slot.Name);
 
@@ -1382,6 +1454,8 @@ public partial class MainWindow : Window
             slot.AutoActivate = false;
             slot.AppExePath = null;
             slot.AppName = null;
+            slot.LaunchUri = string.Empty;
+            slot.LaunchConfirmed = false;
 
             // The three modes are mutually exclusive. Choosing one has to clear
             // the other two, because HasTarget, TargetText and the matching code
@@ -1404,6 +1478,8 @@ public partial class MainWindow : Window
             slot.ApplyOnStart = false;
             slot.AppExePath = null;
             slot.AppName = null;
+            slot.LaunchUri = string.Empty;
+            slot.LaunchConfirmed = false;
 
             // Armed, because a wildcard that has to be switched on separately is
             // the same discoverability problem it is meant to solve. At most one
@@ -1441,6 +1517,11 @@ public partial class MainWindow : Window
                 slot.AppExePath = picked;
                 slot.AppName = System.IO.Path.GetFileNameWithoutExtension(picked);
 
+                // A file the user picked is started directly. Any launcher link
+                // the slot carried pointed at whatever it used to name.
+                slot.LaunchUri = string.Empty;
+                slot.LaunchConfirmed = true;
+
                 // A picked file is a specific target, so it clears the wildcard
                 // rather than sitting alongside it. Same reason as the two above.
                 slot.IsAnyGameTarget = false;
@@ -1461,6 +1542,18 @@ public partial class MainWindow : Window
         slot.ApplyOnStart = false;
         slot.AppExePath = choice.ExePath.Length == 0 ? null : choice.ExePath;
         slot.AppName = choice.ExePath.Length == 0 ? null : choice.Name;
+
+        // Only what the policy accepts, and only for the game that was just
+        // chosen. A candidate from Steam or Epic carries the launcher's own way of
+        // starting it; every other candidate carries nothing and the executable is
+        // the target.
+        slot.LaunchUri = choice.ExePath.Length > 0 && LaunchUriPolicy.IsAllowed(choice.LaunchUri)
+            ? choice.LaunchUri
+            : string.Empty;
+
+        // Chosen from this PC's own scan, so the path is one this machine found.
+        // Cleared rather than left standing when the slot is pointed at no game.
+        slot.LaunchConfirmed = choice.ExePath.Length > 0;
         if (slot.AppExePath is not null)
         {
             slot.AutoActivate = true;
@@ -1633,6 +1726,694 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>
+    /// Whether the window has finished loading and the first startup restore has
+    /// had its chance. A play request that arrives before this is kept rather
+    /// than applied against half-loaded audio devices.
+    /// </summary>
+    private bool _startupComplete;
+
+    /// <summary>An IPC play request that arrived before the window was ready.</summary>
+    private string _pendingPlayId = string.Empty;
+
+    /// <summary>One launch at a time, so a double click cannot start two games.</summary>
+    private bool _playInFlight;
+
+    /// <summary>
+    /// Watches a launch that has not produced a process yet, so a slot applied
+    /// for a game that never starts can still be undone. Null when nothing is
+    /// being watched.
+    /// </summary>
+    private DispatcherTimer? _playWatch;
+
+    /// <summary>When the launch being watched was started.</summary>
+    private DateTime _playWatchStarted;
+
+    /// <summary>The slot the watched launch is for.</summary>
+    private string _playWatchSlotId = string.Empty;
+
+    /// <summary>The process the watched launch should produce.</summary>
+    private string _playWatchProcess = string.Empty;
+
+    /// <summary>Direct or through a launcher, which is what sets the timeout.</summary>
+    private PlayLaunchKind _playWatchKind;
+
+    /// <summary>
+    /// The settle wait for the HDR flip this Play started. Play awaits it before
+    /// launching, because starting a game while the display is mid-mode-switch
+    /// risks the game reading a transitional mode. Null when HDR was not moved.
+    /// </summary>
+    private Task<bool>? _lastHdrSettleTask;
+
+    /// <summary>HDR warnings for the same one OSD line as the route warnings.</summary>
+    private readonly List<string> _lastHdrWarnings = new();
+
+    /// <summary>
+    /// Whether the last <see cref="PlaySlot"/> call managed to push the screen.
+    /// Kept beside the call because the Play summary is written after the audio
+    /// queue has drained, by which time the local in that method is gone.
+    /// </summary>
+    private bool _lastPlayScreenTookIt = true;
+
+    private PlayPreflight PlayPreflightFor(HotkeySlot slot)
+    {
+        bool monitorTargeted = !string.IsNullOrWhiteSpace(slot.MonitorKey)
+            || !string.IsNullOrWhiteSpace(slot.MonitorDevice);
+
+        string resolved = _display.ResolveDevice(slot.MonitorKey, slot.MonitorDevice);
+
+        // The slot board is built before the first display scan on a cold start.
+        // An empty monitor list is "not known yet", not "the panel was unplugged";
+        // saying the latter on every row's tooltip would be a false warning that
+        // disappears only if something happens to rebuild the rows later.
+        bool monitorResolved = !monitorTargeted
+            || resolved.Length > 0
+            || _display.Monitors.Count == 0;
+
+        return PlayPreflight.Build(
+            slot,
+            targetExists: PlayPreflight.TargetExists(slot),
+            displayExists: FindDisplay(slot.DisplayPresetId) is not null,
+            audioExists: FindAudio(slot.AudioPresetId) is not null,
+            crosshairExists: FindCrosshair(slot.CrosshairPresetId) is not null,
+            audioInstalled: _audio.IsInstalled,
+            monitorResolved: monitorResolved);
+    }
+
+    private async void OnSlotPlayClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string id })
+        {
+            return;
+        }
+
+        try
+        {
+            await PlaySlotByIdAsync(id);
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("PLAY", ex);
+            Flash("Could not start that slot. Details are in the log.", true);
+        }
+    }
+
+    /// <summary>
+    /// A play request that came from another process, delivered by the window
+    /// hook. Kept until the window is ready if it is early, and otherwise handed
+    /// to the same path the button uses.
+    /// </summary>
+    private void QueuePlayRequest(string slotId)
+    {
+        if (!PlayRequest.TrySlotId(slotId, out string id))
+        {
+            return;
+        }
+
+        _ = Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!_startupComplete)
+            {
+                _pendingPlayId = id;
+                return;
+            }
+
+            _ = PlaySlotByIdAsync(id);
+        }), DispatcherPriority.Normal);
+    }
+
+    /// <summary>
+    /// The cold-start half of the same request. Waits for the startup audio
+    /// restore, then applies the slot, so a slow engine cannot have the restore
+    /// land after the game's profile and overwrite it.
+    /// </summary>
+    private async Task RunStartupPlayAsync(Task startupAudio, string commandLineSlotId)
+    {
+        try
+        {
+            await startupAudio;
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("STARTUP PLAY", ex);
+        }
+
+        _startupComplete = true;
+
+        string slotId = _pendingPlayId.Length > 0 ? _pendingPlayId : commandLineSlotId;
+        _pendingPlayId = string.Empty;
+
+        if (slotId.Length > 0)
+        {
+            await PlaySlotByIdAsync(slotId);
+        }
+    }
+
+    private async Task PlaySlotByIdAsync(string slotId)
+    {
+        if (!PlayRequest.TrySlotId(slotId, out string id))
+        {
+            return;
+        }
+
+        HotkeySlot? slot = _settings.Slots.FirstOrDefault(s =>
+            string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
+
+        if (slot is null)
+        {
+            // A shortcut outlives the slot it names when a profile is edited.
+            // Bring the window up rather than leaving the click with no visible
+            // result at all.
+            RailStatus.Text = "SLOT NOT FOUND";
+            Flash("That Play shortcut points at a slot that is gone", true);
+            ShowFromSecondLaunch();
+            return;
+        }
+
+        if (_playInFlight)
+        {
+            Flash("Already starting a game");
+            return;
+        }
+
+        // Before anything is applied, not after: the whole question is whether this
+        // path may be executed at all, and a slot applied for a launch the user then
+        // cancels would have to be reverted for no reason.
+        if (slot.NeedsLaunchConfirmation
+            && PlayPreflight.TryLaunchTarget(slot, out string unconfirmedUri, out _, out _))
+        {
+            ShowLaunchConfirm(slot, PlayPreflight.ConfirmationTarget(slot, unconfirmedUri));
+            return;
+        }
+
+        _playInFlight = true;
+        try
+        {
+            await PlaySlotWithLaunchAsync(slot);
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("PLAY", ex);
+            RailStatus.Text = "PLAY FAILED";
+            Flash("Could not start that slot. Details are in the log.", true);
+        }
+        finally
+        {
+            _playInFlight = false;
+        }
+    }
+
+    /// <summary>
+    /// The one confirmation before Play runs a path this machine has never seen
+    /// anybody choose.
+    /// <para>
+    /// Until Play, a slot's path was only ever compared against process names.
+    /// Now it is executed, and it can arrive in a backup written elsewhere - the
+    /// same untrusted file that the FxSound path is checked against before it is
+    /// ever started. The modal shows the exact target rather than the game's name,
+    /// because the name is the part a planted path gets right. For a launcher slot
+    /// that target is the URI handed to Steam or Epic, which is the thing that
+    /// runs; <see cref="PlayPreflight.ConfirmationTarget"/> decides between the two,
+    /// so the string in the dialog is never a description of the launch.
+    /// </para>
+    /// <para>
+    /// Deliberately not a warning on every Play. Once somebody on this PC has
+    /// looked at the path and said yes, the slot is confirmed and Play behaves
+    /// like any other.
+    /// </para>
+    /// </summary>
+    private void ShowLaunchConfirm(HotkeySlot slot, string target)
+    {
+        // A Play can arrive from another process while the window is hidden in
+        // the tray, and a dialog behind a hidden window is indistinguishable from
+        // nothing happening at all.
+        ShowFromSecondLaunch();
+
+        if (_modalLayer.Visibility == Visibility.Visible)
+        {
+            // Something else already owns the dialog - an install in progress, most
+            // likely. Replacing it would interrupt that; stacking is not something
+            // this modal system can do.
+            Flash("Close the open dialog first, then press Play", true);
+            return;
+        }
+
+        StackPanel content = new();
+
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = "This slot came from an imported backup, so what it starts has never been checked on this PC. Play will start:",
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 19,
+            Margin = new Thickness(0, 12, 0, 0),
+        });
+
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = target,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)FindResource("TextMid"),
+            Margin = new Thickness(0, 8, 0, 0),
+        });
+
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = "If that is not the game you expect, cancel and set the target again.",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)FindResource("TextMid"),
+            Margin = new Thickness(0, 12, 0, 0),
+        });
+
+        ShowCustomModal("START THIS GAME?", content, "PLAY", () =>
+        {
+            // Saved before the launch rather than after it, so a launch that fails
+            // does not ask again the next time.
+            slot.LaunchConfirmed = true;
+            Commit();
+
+            _ = PlaySlotByIdAsync(slot.Id);
+        });
+    }
+
+
+    /// <summary>
+    /// Work out the checklist, apply the slot, wait for the audio engine, then
+    /// start the game.
+    /// <para>
+    /// The wait is the whole point of the feature. Applying a slot already queues
+    /// the sound; starting the game immediately would leave the first seconds of
+    /// it on the previous tune, and on a slow engine that is long enough to hear.
+    /// The watcher is told the slot is already loaded before the process exists,
+    /// so its next poll does not apply the profile a second time - and does not
+    /// overwrite the pre-game record with the profile it just applied.
+    /// </para>
+    /// </summary>
+    private async Task PlaySlotWithLaunchAsync(HotkeySlot slot)
+    {
+        PlayPreflight preflight = PlayPreflightFor(slot);
+
+        if (!preflight.CanLaunch)
+        {
+            RailStatus.Text = "PLAY BLOCKED";
+            Flash(preflight.BlockedReason, true);
+            TraceLog.Write("PLAY BLOCKED " + slot.Name + " <- " + preflight.BlockedReason);
+            return;
+        }
+
+        // Which of the two Play will do, decided here and used below rather than
+        // re-read from the slot: the watchdog's timeout and the log line both
+        // depend on this answer, and a policy that changed between the two reads
+        // would leave them disagreeing about what happened.
+        LaunchVia via = PlayPreflight.ViaFor(slot, out string launchUri);
+        PlayPreflight.TryTarget(slot, out string exePath);
+        string processName = AppProfileTools.ProcessNameOf(exePath);
+        bool alreadyRunning = IsProcessRunning(processName);
+
+        // First capture wins, exactly as the auto path does. The slot is about to
+        // replace the active ids, so this has to be read before PlaySlot.
+        if (_autoSlotId.Length == 0)
+        {
+            CapturePreGame();
+        }
+
+        // Set before PlaySlot rather than after Process.Start. The watcher polls
+        // in the background, and a poll between the two would see a new process
+        // and apply the slot a second time.
+        _autoStamp = DateTime.UtcNow;
+        _autoSlotId = slot.Id;
+        _autoProcess = processName;
+        _autoWildcardProcess = string.Empty;
+
+        PlaySlot(slot, announce: false);
+
+        // PlaySlot queues the engine half. Nothing below should start while that
+        // queue is still moving.
+        await WaitForAudioQueueAsync();
+
+        // The game waits for the display to settle. The gamma half was pushed
+        // already and is re-pushed by the settle task if Windows discarded it.
+        if (_lastHdrSettleTask is { } hdrSettle)
+        {
+            if (!await hdrSettle)
+            {
+                _lastHdrWarnings.Add("HDR did not switch");
+            }
+        }
+
+        if (!alreadyRunning)
+        {
+            bool started = via == LaunchVia.None
+                ? TryStartGame(exePath, out string failure)
+                : TryStartLauncher(launchUri, out failure);
+
+            if (!started)
+            {
+                // Undone here rather than by the exit path, because there is no
+                // process to exit. This was the case that left a slot's screen,
+                // routes and HDR applied for the rest of the session: a cancelled
+                // UAC prompt, a deleted exe, or a launcher that refused to run. The
+                // reason travels with the line, because "did not start" on its own
+                // sends the user looking for the wrong thing.
+                RevertFailedPlay(slot, "start failed", failure);
+                return;
+            }
+
+            // The game may take a while to appear - and through a launcher, much
+            // longer than that. Until it does, nothing else would ever put this
+            // slot back if it never appears, so the watchdog owns that window and
+            // cancels itself the moment the process exists.
+            ArmPlayWatchdog(
+                slot,
+                processName,
+                via == LaunchVia.None ? PlayLaunchKind.Direct : PlayLaunchKind.Launcher);
+        }
+
+        List<string> parts = new()
+        {
+            alreadyRunning ? slot.Name + " profile loaded" : "Playing " + slot.Name,
+        };
+
+        if (!alreadyRunning && preflight.Summary != "no profile changes")
+        {
+            parts.Add(preflight.Summary);
+        }
+
+        // How it was started belongs on the same line as what was loaded: through
+        // a launcher, the game can be a minute away from appearing, and the user
+        // should not be left guessing whether the click did anything.
+        if (!alreadyRunning && via != LaunchVia.None)
+        {
+            parts.Add(LaunchUriPolicy.Describe(via));
+        }
+
+        if (!_lastPlayScreenTookIt)
+        {
+            parts.Add("screen blocked");
+        }
+
+        if (preflight.Warnings.Count > 0)
+        {
+            parts.Add(string.Join(", ", preflight.Warnings.Select(w =>
+                w.Label.ToLowerInvariant() + " " + w.Detail)));
+        }
+
+        // The route is applied after the checklist is built, because it depends
+        // on what is plugged in and on whether FxSound is running right now. Its
+        // outcome belongs on the same line as the rest of the play result.
+        if (_lastWindowsAudioWarnings.Count > 0)
+        {
+            parts.Add(string.Join(", ", _lastWindowsAudioWarnings));
+        }
+
+        if (_lastHdrWarnings.Count > 0)
+        {
+            parts.Add(string.Join(", ", _lastHdrWarnings));
+        }
+
+        if (alreadyRunning)
+        {
+            parts.Add("already running");
+        }
+
+        string message = string.Join(" · ", parts);
+        bool warn = preflight.Warnings.Count > 0
+            || _lastWindowsAudioWarnings.Count > 0
+            || _lastHdrWarnings.Count > 0
+            || !_lastPlayScreenTookIt;
+
+        RailStatus.Text = "PLAYING " + slot.Name.ToUpperInvariant();
+
+        Flash(message, warn);
+
+        TraceLog.Write("PLAY " + slot.Name + " <- " + (via == LaunchVia.None ? exePath : launchUri)
+            + (via == LaunchVia.None ? string.Empty : " (" + LaunchUriPolicy.Describe(via) + ")")
+            + (alreadyRunning ? " (already running)" : " (started)"));
+    }
+
+    private static bool IsProcessRunning(string processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName))
+        {
+            return false;
+        }
+
+        try
+        {
+            return Process.GetProcessesByName(processName).Length > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Asks the launcher to start the game, which is how the game expects to be
+    /// started.
+    /// <para>
+    /// The URI is checked here rather than trusted from the slot, because this is
+    /// the line where a string out of a profile becomes a command the shell runs.
+    /// It is the same policy the picker used, applied again at the only moment
+    /// that matters.
+    /// </para>
+    /// <para>
+    /// No arguments and no working directory: the launcher owns both. A machine
+    /// with no handler registered for the scheme fails here with the shell's own
+    /// error, which <see cref="RevertFailedPlay"/> then puts the slot back for.
+    /// </para>
+    /// </summary>
+    private static bool TryStartLauncher(string uri, out string error)
+    {
+        error = string.Empty;
+
+        if (!LaunchUriPolicy.IsAllowed(uri))
+        {
+            error = "that launcher link is not one this app starts";
+            TraceLog.Write("PLAY START refused " + uri);
+            return false;
+        }
+
+        try
+        {
+            ProcessStartInfo start = new()
+            {
+                FileName = uri,
+                UseShellExecute = true
+            };
+
+            Process.Start(start);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            TraceLog.Write("PLAY START", ex);
+            return false;
+        }
+    }
+
+    private static bool TryStartGame(string exePath, out string error)
+    {
+        error = string.Empty;
+
+        try
+        {
+            ProcessStartInfo start = new()
+            {
+                FileName = exePath,
+                WorkingDirectory = Path.GetDirectoryName(exePath) ?? string.Empty,
+                UseShellExecute = true
+            };
+
+            Process.Start(start);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            TraceLog.Write("PLAY START", ex);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Puts everything a Play applied back, because the game never started.
+    /// <para>
+    /// The exit path's three steps in the same order - the screen stands down and
+    /// releases the auto claim, the user's own preset goes back on, then the sound
+    /// falls through to neutral with the Windows routes restored - because from the
+    /// user's side this is the same event. A launch that failed and left the screen
+    /// dimmed and the headset as the default microphone would be the app changing
+    /// things and then having no way to change them back.
+    /// </para>
+    /// <para>
+    /// Guarded on the claim, the way every other revert is: if the slot has already
+    /// been stood down or replaced, or the app is quitting, there is nothing here
+    /// that is still ours to undo.
+    /// </para>
+    /// </summary>
+    private void RevertFailedPlay(HotkeySlot slot, string reason, string detail)
+    {
+        CancelPlayWatch();
+
+        bool ours = !_quitting
+            && string.Equals(_autoSlotId, slot.Id, StringComparison.OrdinalIgnoreCase);
+
+        if (ours)
+        {
+            GoScreenStandDown();
+            RevertToPreGame(slot);
+            _ = GoSoundNeutralAsync();
+        }
+
+        RailStatus.Text = "PLAY FAILED";
+
+        string message = PlayLaunchWatch.GiveUpMessage(slot.Name);
+
+        if (!string.IsNullOrWhiteSpace(detail))
+        {
+            message += " · " + detail;
+        }
+
+        Flash(message, true);
+
+        TraceLog.Write("PLAY " + slot.Name + " <- " + reason
+            + (ours ? " (settings put back)" : " (nothing to put back)"));
+    }
+
+
+    /// <summary>
+    /// Starts watching a launch that has not produced its process yet.
+    /// <para>
+    /// Armed only after a successful <c>Process.Start</c>. A game that is already
+    /// running needs none of this: the slot was loaded for something that is up,
+    /// and its exit is already watched.
+    /// </para>
+    /// </summary>
+    private void ArmPlayWatchdog(HotkeySlot slot, string processName, PlayLaunchKind kind)
+    {
+        CancelPlayWatch();
+
+        if (string.IsNullOrWhiteSpace(processName))
+        {
+            // Nothing to look for, so there is no question this can answer. The
+            // pre-flight already refuses a slot with no exact target.
+            return;
+        }
+
+        _playWatchSlotId = slot.Id;
+        _playWatchProcess = processName;
+        _playWatchKind = kind;
+        _playWatchStarted = DateTime.UtcNow;
+
+        // One tick a second, on the dispatcher. The work is a process list and two
+        // string comparisons, and doing it here means the revert it may trigger
+        // runs on the thread that owns the window without a second hop.
+        _playWatch = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _playWatch.Tick += OnPlayWatchTick;
+        _playWatch.Start();
+
+        TraceLog.Write("PLAY WATCH " + slot.Name + " <- " + processName
+            + " for " + (int)PlayLaunchWatch.TimeoutFor(kind).TotalSeconds + "s");
+    }
+
+    private void CancelPlayWatch()
+    {
+        if (_playWatch is null)
+        {
+            return;
+        }
+
+        _playWatch.Stop();
+        _playWatch.Tick -= OnPlayWatchTick;
+        _playWatch = null;
+        _playWatchSlotId = string.Empty;
+        _playWatchProcess = string.Empty;
+    }
+
+    /// <summary>
+    /// One poll of the launch watchdog.
+    /// <para>
+    /// The claim is the authority rather than the fields this timer was armed
+    /// with: a stand-down, the slot's own key, the panic key, quitting or another
+    /// Play all change it, and none of them want this watchdog finishing its job
+    /// afterwards. That check is also what stops a second Play from inheriting the
+    /// first one's countdown.
+    /// </para>
+    /// </summary>
+    private void OnPlayWatchTick(object? sender, EventArgs e)
+    {
+        if (_quitting)
+        {
+            CancelPlayWatch();
+            return;
+        }
+
+        HotkeySlot? slot = _settings.Slots.FirstOrDefault(s =>
+            string.Equals(s.Id, _playWatchSlotId, StringComparison.OrdinalIgnoreCase));
+
+        if (slot is null
+            || !string.Equals(_autoSlotId, _playWatchSlotId, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(_autoProcess, _playWatchProcess, StringComparison.OrdinalIgnoreCase))
+        {
+            CancelPlayWatch();
+            return;
+        }
+
+        PlayLaunchWatchAction action = PlayLaunchWatch.Decide(
+            DateTime.UtcNow - _playWatchStarted,
+            IsProcessRunning(_playWatchProcess),
+            _playWatchKind);
+
+        if (action == PlayLaunchWatchAction.Wait)
+        {
+            return;
+        }
+
+        if (action == PlayLaunchWatchAction.Started)
+        {
+            TraceLog.Write("PLAY WATCH " + slot.Name + " <- started");
+            CancelPlayWatch();
+            return;
+        }
+
+        TraceLog.Write("PLAY WATCH " + slot.Name + " <- gave up after "
+            + (int)(DateTime.UtcNow - _playWatchStarted).TotalSeconds + "s");
+
+        RevertFailedPlay(slot, "did not start", string.Empty);
+    }
+
+    private void CreatePlayShortcut(HotkeySlot slot)
+    {
+        PlayPreflight preflight = PlayPreflightFor(slot);
+        if (!preflight.CanLaunch)
+        {
+            Flash(preflight.BlockedReason, true);
+            return;
+        }
+
+        string folder = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        if (string.IsNullOrWhiteSpace(folder))
+        {
+            Flash("Could not find the desktop", true);
+            return;
+        }
+
+        if (!PlayShortcut.TryCreate(folder, slot.Name, slot.Id, out string path, out string error))
+        {
+            TraceLog.Write("SHORTCUT " + slot.Name + " <- " + error);
+            Flash("Could not create the shortcut", true);
+            return;
+        }
+
+        RailStatus.Text = "SHORTCUT CREATED";
+        Flash("Play shortcut created: " + Path.GetFileName(path));
+    }
+
+
     /// <param name="screenOnly">
     /// Push the screen only and leave the sound alone. Used when the screen is being
     /// restored from a focus pause: the sound was never taken down, so pushing it
@@ -1667,7 +2448,11 @@ public partial class MainWindow : Window
         DisplayPreset? display = FindDisplay(slot.DisplayPresetId);
         AudioPreset? audio = FindAudio(slot.AudioPresetId);
 
-        if (display is null && audio is null && FindCrosshair(slot.CrosshairPresetId) is null)
+        if (display is null
+            && audio is null
+            && FindCrosshair(slot.CrosshairPresetId) is null
+            && slot.HdrMode == SlotHdrMode.Leave
+            && !slot.HasWindowsAudioRouting)
         {
             // There is nothing to load, so nothing is about to be loaded. Saying
             // otherwise left the status bar and the toast claiming a preset that
@@ -1677,6 +2462,11 @@ public partial class MainWindow : Window
             Flash("Nothing set on " + slot.Name, true);
             return;
         }
+
+        // HDR first, because the mode change throws the gamma ramp away. A resume
+        // from a focus pause does not touch it: the alt-tab did not end the slot,
+        // and flipping HDR there would blink the panel every time.
+        ApplySlotHdr(slot, announce, screenOnly);
 
         bool screenTookIt = true;
         if (display is not null)
@@ -1690,6 +2480,11 @@ public partial class MainWindow : Window
                 _display.ResolveDevice(slot.MonitorKey, slot.MonitorDevice),
                 false);
         }
+
+        // Read by the Play path after the audio queue has drained. The local
+        // above is gone by then, and the refusal still has to reach the one OSD
+        // line the play gesture shows.
+        _lastPlayScreenTookIt = screenTookIt;
 
         // Announced before the slow half, not after it.
         //
@@ -1716,6 +2511,24 @@ public partial class MainWindow : Window
         // resume after an alt-tab as well, because standing the screen down hid it.
         ApplySlotCrosshair(slot);
 
+        // Windows defaults are part of what the slot asked for. They are not
+        // applied on a resume: an alt-tab did not put the game's headset back on
+        // the desk, and re-running the switch there would fight a user who had
+        // changed the default in the meantime.
+        if (!screenOnly)
+        {
+            ApplyWindowsAudioRouting(slot);
+
+            if (announce && _lastWindowsAudioWarnings.Count > 0)
+            {
+                Flash(string.Join(", ", _lastWindowsAudioWarnings), true);
+            }
+        }
+        else
+        {
+            _lastWindowsAudioWarnings = Array.Empty<string>();
+        }
+
         if (audio is not null && !screenOnly)
         {
             ApplyAudioToDevice(audio.Copy(), false, slot);
@@ -1736,6 +2549,104 @@ public partial class MainWindow : Window
                 Flash(slot.Name + " loaded, screen did not take it", true);
             }
         }
+    }
+
+
+    /// <summary>
+    /// Applies a slot's HDR request and starts the settle wait, if there is one.
+    /// <para>
+    /// The apply is synchronous because the mode switch has to happen before the
+    /// gamma ramp is written. The wait is not: a flip can take a few seconds on a
+    /// slow panel, and blocking the dispatcher for it would freeze the window on
+    /// the app's primary gesture. Play awaits the returned task before it starts
+    /// the game; a hotkey lets it finish in the background and re-pushes the ramp.
+    /// </para>
+    /// </summary>
+    private void ApplySlotHdr(HotkeySlot slot, bool announce, bool screenOnly)
+    {
+        _lastHdrWarnings.Clear();
+        _lastHdrSettleTask = null;
+
+        if (screenOnly || slot.HdrMode == SlotHdrMode.Leave)
+        {
+            return;
+        }
+
+        if (slot.IsAnyGameTarget)
+        {
+            // A wildcard would flip HDR for a video player or a browser game. The
+            // slot still loads everything else; this part is refused.
+            _lastHdrWarnings.Add("HDR is not applied on Any game");
+            TraceLog.Write("HDR " + slot.Name + " <- Any game");
+            return;
+        }
+
+        string device = _display.ResolveDevice(slot.MonitorKey, slot.MonitorDevice);
+
+        if (device.Length == 0)
+        {
+            _lastHdrWarnings.Add("Pick one screen for HDR");
+            TraceLog.Write("HDR " + slot.Name + " <- no screen");
+            return;
+        }
+
+        HdrApplyResult result = _hdr.Apply(device, slot.MonitorKey, slot.HdrMode);
+
+        if (result.Warning.Length > 0)
+        {
+            _lastHdrWarnings.Add(result.Warning);
+            TraceLog.Write("HDR " + slot.Name + " <- " + result.Warning);
+        }
+
+        if (!result.Applied)
+        {
+            if (announce && _lastHdrWarnings.Count > 0)
+            {
+                Flash(string.Join(", ", _lastHdrWarnings), true);
+            }
+
+            return;
+        }
+
+        bool wanted = slot.HdrMode == SlotHdrMode.On;
+        _lastHdrSettleTask = SettleHdrAndRepushAsync(device, wanted);
+
+        TraceLog.Write("HDR " + slot.Name + " -> " + (wanted ? "on" : "off")
+            + (result.LegacyPath ? " (legacy advanced colour)" : string.Empty));
+
+        if (announce && _lastHdrWarnings.Count > 0)
+        {
+            Flash(string.Join(", ", _lastHdrWarnings), true);
+        }
+    }
+
+
+    /// <summary>
+    /// Waits for the flip to land, then puts the gamma ramp back if Windows threw
+    /// it away. The re-push is the reason the apply can stay synchronous: the first
+    /// ramp write happens before the mode change has settled, and this is what
+    /// makes the picture right once it has.
+    /// </summary>
+    private async Task<bool> SettleHdrAndRepushAsync(string device, bool wanted)
+    {
+        bool settled = await _hdr.SettleAsync(device, wanted, TimeSpan.FromSeconds(4));
+
+        if (!settled)
+        {
+            TraceLog.Write("HDR did not settle " + device);
+            return false;
+        }
+
+        if (_display.ShouldDefend)
+        {
+            await Dispatcher.InvokeAsync(() =>
+            {
+                _display.Push();
+                TraceLog.Write("DISPLAY ramp re-pushed after an HDR flip");
+            });
+        }
+
+        return true;
     }
 
 
@@ -2216,7 +3127,9 @@ public partial class MainWindow : Window
         _pausedSlotId = slotId;
         _pausedProcess = process;
 
-        GoScreenStandDown();
+        // HDR deliberately stays on while the user is away. Only the gamma ramp
+        // stands down; a mode flip here would blink the screen on every alt-tab.
+        GoScreenStandDownForFocusPause();
 
         // Restored afterwards, because StandDownScreen also clears a pause that is
         // still armed - correct for every other caller, since a user taking the

@@ -41,6 +41,12 @@ public partial class MainWindow : Window
     private readonly DisplayService _display = new(new GammaBaselineStore());
 
 
+    private readonly HdrControl _hdr = new();
+
+
+    private readonly SystemRestoreJournal _restoreJournal = SystemRestoreJournal.Default;
+
+
     private readonly AudioService _audio = new();
 
 
@@ -469,6 +475,16 @@ public partial class MainWindow : Window
         // otherwise.
         SessionState.Current.RestoreBacklight = () => Backlight.RestoreAll();
 
+        // The two persistent changes this app makes. EmergencyReset reaches this
+        // from Application.Exit and ProcessExit, which are the paths the window's
+        // own close handler cannot cover. Idempotent, because the normal exit
+        // already calls both directly.
+        SessionState.Current.RestoreSystemChanges = () =>
+        {
+            RestoreWindowsAudioRoutes();
+            RestoreHdrForExit();
+        };
+
         SyncControlsFromSettings();
 
         WireTray();
@@ -675,6 +691,16 @@ public partial class MainWindow : Window
     private static bool StartHidden()
     {
         string[] args = Environment.GetCommandLineArgs();
+
+        // A play request starts the game, so showing the tool first would steal
+        // the foreground from the thing the user asked this click to start. The
+        // generated shortcut also passes --tray; a hand-written command line
+        // gets the same behaviour from --play alone.
+        if (PlayRequest.TryParse(args, out _))
+        {
+            return true;
+        }
+
         foreach (string arg in args)
         {
             if (arg.Equals("--tray", StringComparison.OrdinalIgnoreCase))
@@ -977,6 +1003,8 @@ private void HideToTray()
         Show();
         _audioPreview.Pause();
         StopNightScheduleTimer();
+        RestoreWindowsAudioRoutes();
+        RestoreHdrForExit();
         EmergencyReset.Run();
 
         // Released here rather than waiting for the close handler, so the WASAPI
@@ -1246,6 +1274,14 @@ private void HideToTray()
     /// </summary>
     private HwndSource? _displayHookSource;
 
+    /// <summary>
+    /// Whether the command line's hidden start has already been applied on the
+    /// loaded path. Loaded is not guaranteed to fire only once, and hiding again
+    /// after the user brings the window back from the tray would make the tray
+    /// icon unable to open it.
+    /// </summary>
+    private bool _startHiddenApplied;
+
     private readonly DisplayChangeDebounce _displayDebounce = new();
 
     private DispatcherTimer? _displayDebounceTimer;
@@ -1281,6 +1317,16 @@ private void HideToTray()
     /// </summary>
     private IntPtr OnWindowMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        if (msg == WindowMessage.WmCopyData
+            && WindowMessage.TryReadPlayCopyData(lParam, out string playSlotId))
+        {
+            // Claimed: this is our payload, and no other handler should try to
+            // read the block after this method returns.
+            handled = true;
+            QueuePlayRequest(playSlotId);
+            return IntPtr.Zero;
+        }
+
         if (WindowMessage.IsShowMe(msg))
         {
             // Claimed, so nothing else sees it: the broadcast went to every window
@@ -1428,11 +1474,13 @@ private void HideToTray()
             IReadOnlyList<string> after = _display.Monitors;
             bool added = after.Count > before.Count;
             bool removed = after.Count < before.Count;
+            bool listChanged = DisplayService.MonitorListChanged(before, after);
 
             TraceLog.Write("DISPLAY rescan: "
                 + before.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 + " -> " + after.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                + (added ? " (added)" : removed ? " (removed)" : string.Empty));
+                + (added ? " (added)" : removed ? " (removed)" : string.Empty)
+                + (listChanged ? string.Empty : " (same list)"));
 
             // Ownership of the panel dropped, if the panel this preset moved is not
             // in the list any more.
@@ -1469,21 +1517,27 @@ private void HideToTray()
             // something.
             Backlight.ForgetDetached(after);
 
-            // Read before the rebuild, because the rebuild is what destroys it.
-            // A docking station is plugged in by somebody who may well have been
-            // halfway through editing that exact slot row with the keyboard, and
-            // rebuilding under them drops focus to nothing.
-            string? focused = FocusedSlotTag();
+            // The rebuild is only for a changed set of screens. A resolution
+            // change, a refresh change and an HDR flip all raise the same display
+            // event, and none of them changes what the dropdowns can offer. The
+            // old code rebuilt on every one of those, which dropped keyboard focus
+            // out of a slot row mid-edit and pulled the rows out from under an
+            // apply that was still running.
+            if (listChanged)
+            {
+                // Read before the rebuild, because the rebuild is what destroys it.
+                string? focused = FocusedSlotTag();
 
-            // Both lists have to be rebuilt from the new set: a slot row's monitor
-            // dropdown is a snapshot of MonitorChoices taken when the row was built,
-            // so without this the dropdown keeps offering a screen that was just
-            // unplugged. BuildSlots is already the whole answer - it is what every
-            // other change to the slot list calls.
-            RefreshPresetBoxes();
-            BuildSlots();
-            RestoreSlotFocus(focused);
-            RefreshTraySlots();
+                // Both lists have to be rebuilt from the new set: a slot row's monitor
+                // dropdown is a snapshot of MonitorChoices taken when the row was built,
+                // so without this the dropdown keeps offering a screen that was just
+                // unplugged. BuildSlots is already the whole answer - it is what every
+                // other change to the slot list calls.
+                RefreshPresetBoxes();
+                BuildSlots();
+                RestoreSlotFocus(focused);
+                RefreshTraySlots();
+            }
 
             // And the ramp, because Windows has just thrown it away. Only when
             // there is one of ours to put back: pushing when IsEnabled is false
@@ -1511,6 +1565,15 @@ private void HideToTray()
         // with a tint still on the screen.
         _display.RestoreAfterCrash();
 
+        // The warning is about the live screen, so it is refreshed after the
+        // scan and before the user can open the tab.
+        UpdateScreenHdrNote();
+
+        // After the display restore, because HDR entries are keyed by monitor and
+        // need the scan; before the audio startup, because a route put back here
+        // must not be overwritten by the remembered preset restore.
+        ProcessPendingSystemRestore();
+
         _display.StartLock();
         _display.SetLock(_settings.GammaLock);
 
@@ -1530,7 +1593,7 @@ private void HideToTray()
         RestoreStartupDisplay();
 
         UpdateFxBanner();
-        _ = FinishStartupAsync();
+        Task startupAudio = FinishStartupAsync();
 
         // Created here, started by UpdateAudioTabActivity and not before, so nothing
         // polls the engine before the window is up.
@@ -1655,6 +1718,25 @@ private void HideToTray()
         {
             PromptForFxSound();
         }
+
+        // The constructor calls this before App's Show(), and a Hide before Show
+        // is undone by the Show that follows. Doing it here, on the loaded path,
+        // is what makes --tray and --play actually start out of the way. For a
+        // play request it also matters for the foreground: the game should get
+        // it, not the tool that launched it.
+        if (!_startHiddenApplied && StartHidden())
+        {
+            _startHiddenApplied = true;
+            HideToTray();
+        }
+
+        // A play request waits for the device list and the startup restore, but
+        // not for the user. The window is hidden on this path, so the only thing
+        // in front of the game is the profile being applied. The method marks the
+        // window ready as well, so an IPC request that arrives during the wait is
+        // kept rather than applied against half-loaded audio devices.
+        PlayRequest.TryParse(Environment.GetCommandLineArgs(), out string playSlotId);
+        _ = RunStartupPlayAsync(startupAudio, playSlotId);
     }
 
 

@@ -174,6 +174,7 @@ public class MonitorKeyTests
             Array.Empty<string>(),
             Array.Empty<AppCandidate>(),
             null,
+            Array.Empty<string>(),
             report);
 
         HotkeySlot slot = Assert.Single(settings.Slots);
@@ -202,6 +203,7 @@ public class MonitorKeyTests
             Array.Empty<string>(),
             Array.Empty<AppCandidate>(),
             null,
+            Array.Empty<string>(),
             report);
 
         HotkeySlot slot = Assert.Single(settings.Slots);

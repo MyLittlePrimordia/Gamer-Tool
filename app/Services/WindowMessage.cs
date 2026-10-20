@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace GamerTool.Services;
 
@@ -73,6 +74,27 @@ public static class WindowMessage
     /// <summary>Every top level window on the desktop. The one target that needs no handle.</summary>
     private static readonly IntPtr HwndBroadcast = new(0xFFFF);
 
+    /// <summary>
+    /// The window message that carries a play request. <c>WM_COPYDATA</c> is the
+    /// documented way to send a block of bytes to another process in this
+    /// session, and unlike the registered broadcast above it needs the target's
+    /// handle - which is the trade: a broadcast cannot carry the slot id, and a
+    /// play request is useless without it.
+    /// </summary>
+    public const int WmCopyData = 0x004A;
+
+    private const long PlayCopyDataId = 0x47504C59;
+
+    private const uint SmtoBlock = 0x0001;
+
+    private const uint SmtoAbortIfHung = 0x0002;
+
+    private const int PlayDeliveryAttempts = 20;
+
+    private const int PlayDeliveryDelayMilliseconds = 50;
+
+    private const uint PlayDeliveryTimeoutMilliseconds = 2000;
+
     public static uint ShowMe => ShowMeId;
 
     /// <summary>
@@ -120,10 +142,137 @@ public static class WindowMessage
         return PostMessage(HwndBroadcast, ShowMeId, IntPtr.Zero, IntPtr.Zero);
     }
 
+    /// <summary>
+    /// Asks the running copy to apply one slot and start its game.
+    /// <para>
+    /// The window is found by title rather than by process id because this
+    /// process has no handle to the other one. The title is a constant in the
+    /// page and the app is single-instance, so there is exactly one candidate.
+    /// It retries briefly for the case the mutex already describes: a replacement
+    /// process can be starting while the old one is still tearing down, and the
+    /// window may not exist for a moment after the claim is released.
+    /// </para>
+    /// <para>
+    /// False means the request was not delivered. The caller falls back to
+    /// showing the window, so a shortcut never becomes a click that does
+    /// nothing at all.
+    /// </para>
+    /// </summary>
+    public static bool BroadcastPlay(string slotId)
+    {
+        if (!PlayRequest.TrySlotId(slotId, out string id))
+        {
+            return false;
+        }
+
+        IntPtr window = IntPtr.Zero;
+        for (int attempt = 0; attempt < PlayDeliveryAttempts && window == IntPtr.Zero; attempt++)
+        {
+            window = FindWindow(null, "Gamer Tool");
+            if (window == IntPtr.Zero && attempt + 1 < PlayDeliveryAttempts)
+            {
+                Thread.Sleep(PlayDeliveryDelayMilliseconds);
+            }
+        }
+
+        if (window == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        string payload = PlayRequest.Payload(id);
+        IntPtr text = Marshal.StringToHGlobalUni(payload);
+        IntPtr data = Marshal.AllocHGlobal(Marshal.SizeOf<CopyDataStruct>());
+
+        try
+        {
+            CopyDataStruct copy = new()
+            {
+                dwData = new IntPtr(PlayCopyDataId),
+                cbData = (payload.Length + 1) * sizeof(char),
+                lpData = text
+            };
+
+            Marshal.StructureToPtr(copy, data, fDeleteOld: false);
+
+            IntPtr sent = SendMessageTimeout(
+                window,
+                WmCopyData,
+                IntPtr.Zero,
+                data,
+                SmtoBlock | SmtoAbortIfHung,
+                PlayDeliveryTimeoutMilliseconds,
+                out _);
+
+            return sent != IntPtr.Zero;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(data);
+            Marshal.FreeHGlobal(text);
+        }
+    }
+
+    /// <summary>
+    /// Reads a play request out of a received <c>WM_COPYDATA</c>.
+    /// <para>
+    /// The id and the size are checked before the pointer is touched. A window
+    /// receives this message from any program in the session, so the caller must
+    /// be able to reject a sender that is not this app without first trusting
+    /// its idea of how long a string is.
+    /// </para>
+    /// </summary>
+    public static bool TryReadPlayCopyData(IntPtr lParam, out string slotId)
+    {
+        slotId = string.Empty;
+
+        if (lParam == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        CopyDataStruct copy = Marshal.PtrToStructure<CopyDataStruct>(lParam);
+
+        if (copy.dwData.ToInt64() != PlayCopyDataId
+            || copy.lpData == IntPtr.Zero
+            || copy.cbData < sizeof(char)
+            || copy.cbData > 8192
+            || copy.cbData % sizeof(char) != 0)
+        {
+            return false;
+        }
+
+        string? payload = Marshal.PtrToStringUni(copy.lpData, copy.cbData / sizeof(char));
+        return PlayRequest.TryReadPayload(payload, out slotId);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CopyDataStruct
+    {
+        public IntPtr dwData;
+
+        public int cbData;
+
+        public IntPtr lpData;
+    }
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint RegisterWindowMessage(string message);
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr FindWindow(string? lpClassName, string lpWindowName);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SendMessageTimeout(
+        IntPtr hWnd,
+        uint msg,
+        IntPtr wParam,
+        IntPtr lParam,
+        uint flags,
+        uint timeout,
+        out IntPtr result);
 }

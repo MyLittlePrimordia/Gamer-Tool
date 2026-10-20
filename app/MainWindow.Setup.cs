@@ -188,6 +188,167 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>
+    /// True while the setup check is running, so a second click on the row cannot
+    /// start a second run on top of the first. The check moves real system settings
+    /// and puts them back; two of them interleaved would fight over the restore.
+    /// </summary>
+    private bool _setupCheckRunning;
+
+    /// <summary>
+    /// The settings row that tries the hardware instead of describing it.
+    /// <para>
+    /// Everything it does is visible and temporary - the screen dims for a
+    /// fraction of a second, HDR flips and comes back, the default sound device
+    /// moves and returns - so it asks once, in full, before any of it happens. The
+    /// wording is the consent: a user who reads it knows what they are about to
+    /// see, and a check that surprised somebody would be worse than no check.
+    /// </para>
+    /// </summary>
+    private void OnVerifySetupClick(object sender, RoutedEventArgs e)
+    {
+        if (_modalLayer.Visibility == Visibility.Visible)
+        {
+            Flash("Close the open dialog first", true);
+            return;
+        }
+
+        StackPanel content = new();
+
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = "This tries the parts of the app that depend on your hardware, then puts every setting back. It takes a few seconds:",
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 19,
+            Margin = new Thickness(0, 12, 0, 0),
+        });
+
+        foreach (string line in new[]
+        {
+            "\u2022 brightness: the screen dims for a moment",
+            "\u2022 HDR: switched on or off and straight back, if this screen supports it",
+            "\u2022 sound: the default device moves to another one and back, so anything playing will jump for a second",
+        })
+        {
+            content.Children.Add(new TextBlock
+            {
+                Style = (Style)FindResource("CardSub"),
+                Text = line,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = (Brush)FindResource("TextMid"),
+                Margin = new Thickness(0, 6, 0, 0),
+            });
+        }
+
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = "Nothing is left changed, and the result is written to the log.",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)FindResource("TextMid"),
+            Margin = new Thickness(0, 12, 0, 0),
+        });
+
+        ShowCustomModal("CHECK THIS PC?", content, "RUN THE CHECK", () => _ = RunSetupCheckAsync());
+    }
+
+    /// <summary>
+    /// Runs the setup check and shows what it found.
+    /// <para>
+    /// The report is a dialog rather than a toast because it is a list of four
+    /// answers, and a toast can hold that only by scrolling past half of them.
+    /// The one line summary still goes to the status bar, so the outcome is
+    /// visible without opening anything again.
+    /// </para>
+    /// </summary>
+    private async System.Threading.Tasks.Task RunSetupCheckAsync()
+    {
+        if (_setupCheckRunning)
+        {
+            return;
+        }
+
+        _setupCheckRunning = true;
+        if (VerifySetupButton is not null)
+        {
+            VerifySetupButton.IsEnabled = false;
+        }
+
+        RailStatus.Text = "CHECKING...";
+
+        try
+        {
+            WindowsSetupProbe probe = new(_display, _hdr, _devices, () => _audio.IsRunning);
+            SetupCheckRunner runner = new(probe.Screens, probe.Gamma, probe.Hdr, probe.Routes);
+
+            SetupCheckReport report = await runner.RunAsync();
+
+            TraceLog.Write("SETUP CHECK " + report.Summary + " | " + report.LogText);
+
+            ShowSetupReport(report);
+
+            RailStatus.Text = report.HasFailure ? "CHECK FAILED" : "CHECKED";
+            Flash(report.Summary, report.HasFailure);
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("SETUP CHECK failed", ex);
+            RailStatus.Text = "CHECK FAILED";
+            Flash("The check did not finish. Details are in the log.", true);
+        }
+        finally
+        {
+            _setupCheckRunning = false;
+            if (VerifySetupButton is not null)
+            {
+                VerifySetupButton.IsEnabled = true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The report itself: one line per check, in the order they ran, with the
+    /// answer written the way the log writes it. Failures are the only thing that
+    /// changes colour, because a check that passed does not need reading.
+    /// </summary>
+    private void ShowSetupReport(SetupCheckReport report)
+    {
+        StackPanel content = new();
+
+        foreach (SetupCheckItem item in report.Items)
+        {
+            content.Children.Add(new TextBlock
+            {
+                Text = item.Mark + " " + item.Label.PadRight(9) + item.Detail,
+                TextWrapping = TextWrapping.Wrap,
+                LineHeight = 19,
+                Margin = new Thickness(0, 10, 0, 0),
+                FontFamily = (FontFamily)FindResource("Sans"),
+                FontSize = 12,
+                Foreground = (Brush)FindResource(item.State == SetupCheckState.Fail ? "Red" : "TextHi"),
+            });
+        }
+
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = report.HasFailure
+                ? "The failed line above is the feature that will not work. The log has the same list, which is what to paste with a bug report."
+                : "Everything this app needs from your hardware answered. The same list is in the log.",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)FindResource("TextMid"),
+            Margin = new Thickness(0, 14, 0, 0),
+        });
+
+        ShowCustomModal(report.Summary, content, "CLOSE", () => { });
+
+        // A report has nothing to cancel, and Cancel next to Close on a list of
+        // results reads as though the run could be taken back.
+        _modalCancelButton.Visibility = Visibility.Collapsed;
+    }
+
+
     private void OnStartupOptionChanged(object sender, RoutedEventArgs e)
     {
         if (!_ready)
@@ -882,6 +1043,8 @@ public partial class MainWindow : Window
         _display.StopLock();
         _audioPreview.Dispose();
         _spectrum?.Release();
+        RestoreWindowsAudioRoutes();
+        RestoreHdrForExit();
         EmergencyReset.Run();
 
         // Written after the restore, not before it, and the order is the whole

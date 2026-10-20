@@ -3,6 +3,27 @@ using System.Collections.Generic;
 
 namespace GamerTool.Models;
 
+/// <summary>
+/// What a slot asks the compositor to do with HDR on its screen.
+/// <para>
+/// Leave is the default and the only value an older profile can carry. It is
+/// deliberately not "Off": a slot made before HDR existed must not turn it off
+/// on the first load, and a slot with no screen must not guess which panel the
+/// user meant.
+/// </para>
+/// </summary>
+public enum SlotHdrMode
+{
+    /// <summary>Leave the screen's HDR state exactly as it is.</summary>
+    Leave,
+
+    /// <summary>Switch HDR on for this slot.</summary>
+    On,
+
+    /// <summary>Switch HDR off for this slot.</summary>
+    Off,
+}
+
 public sealed class HotkeySlot
 {
     public string Id { get; set; } = string.Empty;
@@ -51,6 +72,23 @@ public sealed class HotkeySlot
 
     public string? AppName { get; set; }
 
+    /// <summary>
+    /// The launcher URI Play hands to the shell for this game, or empty.
+    /// <para>
+    /// Copied from the candidate the user picked, and only for a game that came
+    /// out of Steam or Epic. It exists because the exe underneath a launcher is a
+    /// guess: Steam games relaunch themselves through Steam, and an Epic game
+    /// usually refuses to start except through its launcher. The watcher is
+    /// unaffected - it still matches the process the exe names - so this changes
+    /// how a game is started and nothing about how it is recognised.
+    /// </para>
+    /// <para>
+    /// Never trusted: checked against <c>LaunchUriPolicy</c> at launch time and
+    /// again on import, because a profile is a file somebody else can write.
+    /// </para>
+    /// </summary>
+    public string? LaunchUri { get; set; }
+
     public bool AutoActivate { get; set; }
 
     public bool ApplyOnStart { get; set; }
@@ -87,6 +125,98 @@ public sealed class HotkeySlot
     /// </para>
     /// </summary>
     public string OutputDeviceId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The Windows playback endpoint this slot makes the default, or empty to
+    /// leave the default alone.
+    /// <para>
+    /// This is separate from <see cref="OutputDeviceId"/> on purpose. That one is
+    /// FxSound's own output, and it only matters while FxSound is in the chain.
+    /// This one is the endpoint Windows hands to every program that does not have
+    /// an output picker of its own. Conflating them would either move the Windows
+    /// default when the user only meant to move FxSound, or leave the game on the
+    /// previous speakers when they meant to move Windows.
+    /// </para>
+    /// </summary>
+    public string WindowsPlaybackDeviceId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The Windows recording endpoint this slot makes the default microphone, or
+    /// empty to leave it alone.
+    /// </summary>
+    public string WindowsRecordingDeviceId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Also make the slot's playback device the Windows communications device,
+    /// which is the endpoint voice chat picks by default.
+    /// </summary>
+    public bool WindowsPlaybackCommunications { get; set; }
+
+    /// <summary>
+    /// Also make the slot's microphone the Windows communications microphone.
+    /// </summary>
+    public bool WindowsRecordingCommunications { get; set; }
+
+    /// <summary>
+    /// True only when the user has explicitly allowed this slot to point the
+    /// Windows default playback at a physical endpoint while FxSound is running.
+    /// <para>
+    /// FxSound works by being the Windows default and forwarding the processed
+    /// sound to its own output. Switching the default to a physical headset while
+    /// FxSound is running therefore turns the equalizer off for every program that
+    /// follows the default. That is a legitimate choice for a slot, and it is a
+    /// terrible surprise when it happens without one. This flag is the choice.
+    /// </para>
+    /// </summary>
+    public bool WindowsAudioBypassFxSound { get; set; }
+
+    /// <summary>
+    /// Whether this slot switches HDR on its monitor, or leaves it alone.
+    /// <para>
+    /// Applied before the gamma ramp, because Windows discards the ramp when the
+    /// display mode changes. Restored when the slot is stood down for a real
+    /// reason, never when the user only alt-tabbed away.
+    /// </para>
+    /// </summary>
+    public SlotHdrMode HdrMode { get; set; } = SlotHdrMode.Leave;
+
+    /// <summary>
+    /// True once the user has bound this slot's game on this machine, or has
+    /// looked at the full path and told Play to go ahead.
+    /// <para>
+    /// Until Play existed a slot's path was only ever matched against running
+    /// processes; nothing executed it. Play executes it, and a path can arrive
+    /// from a backup somebody else wrote - the same untrusted file the FxSound
+    /// path check exists for. This is the one question that closes that gap:
+    /// has a person on this PC seen this exact path and said yes to it.
+    /// </para>
+    /// <para>
+    /// Cleared by a backup import, because the file cannot vouch for it. Not a
+    /// warning on every Play - only the first one for a slot whose path has never
+    /// been confirmed here.
+    /// </para>
+    /// </summary>
+    public bool LaunchConfirmed { get; set; }
+
+    /// <summary>
+    /// Whether Play should show the exact target and ask before starting this
+    /// slot.
+    /// <para>
+    /// Only an exact executable or one of the two allowed launcher URIs is ever
+    /// started, so the two special targets and a folder never need asking: Play
+    /// refuses to start them at all. A URI counts because it is imported content
+    /// too - the case this covers is a backup whose target is a protocol call.
+    /// </para>
+    /// </summary>
+    public bool NeedsLaunchConfirmation =>
+        !LaunchConfirmed
+        && !IsSelfTarget
+        && !IsAnyGameTarget
+        && (!string.IsNullOrWhiteSpace(AppExePath) || !string.IsNullOrWhiteSpace(LaunchUri));
+
+    public bool HasWindowsAudioRouting =>
+        !string.IsNullOrWhiteSpace(WindowsPlaybackDeviceId)
+        || !string.IsNullOrWhiteSpace(WindowsRecordingDeviceId);
 
     public bool IsSelfTarget { get; set; }
 
@@ -136,7 +266,9 @@ public sealed class HotkeySlot
         {
             return !string.IsNullOrWhiteSpace(DisplayPresetId)
                 || !string.IsNullOrWhiteSpace(AudioPresetId)
-                || !string.IsNullOrWhiteSpace(CrosshairPresetId);
+                || !string.IsNullOrWhiteSpace(CrosshairPresetId)
+                || HdrMode != SlotHdrMode.Leave
+                || HasWindowsAudioRouting;
         }
     }
 
@@ -185,6 +317,8 @@ public sealed class HotkeySlot
             bool hasScreen = !string.IsNullOrWhiteSpace(DisplayPresetId);
             bool hasSound = !string.IsNullOrWhiteSpace(AudioPresetId);
             bool hasCrosshair = !string.IsNullOrWhiteSpace(CrosshairPresetId);
+            bool hasHdr = HdrMode != SlotHdrMode.Leave;
+            bool hasRoute = HasWindowsAudioRouting;
 
             // One word per thing the slot does, joined. The original three
             // phrases are unchanged when there is no crosshair, so nothing that
@@ -195,9 +329,19 @@ public sealed class HotkeySlot
                 parts.Add("SCREEN");
             }
 
+            if (hasHdr)
+            {
+                parts.Add("HDR");
+            }
+
             if (hasSound)
             {
                 parts.Add("SOUND");
+            }
+
+            if (hasRoute)
+            {
+                parts.Add("ROUTE");
             }
 
             if (hasCrosshair)
@@ -227,6 +371,7 @@ public sealed class HotkeySlot
             Hotkey = Hotkey,
             AppExePath = AppExePath,
             AppName = AppName,
+            LaunchUri = LaunchUri,
             TargetFolder = TargetFolder,
             AutoActivate = AutoActivate,
             ApplyOnStart = ApplyOnStart,
@@ -235,6 +380,13 @@ public sealed class HotkeySlot
             MonitorDevice = MonitorDevice,
             MonitorKey = MonitorKey,
             OutputDeviceId = OutputDeviceId,
+            WindowsPlaybackDeviceId = WindowsPlaybackDeviceId,
+            WindowsRecordingDeviceId = WindowsRecordingDeviceId,
+            WindowsPlaybackCommunications = WindowsPlaybackCommunications,
+            WindowsRecordingCommunications = WindowsRecordingCommunications,
+            WindowsAudioBypassFxSound = WindowsAudioBypassFxSound,
+            HdrMode = HdrMode,
+            LaunchConfirmed = LaunchConfirmed,
             Enabled = Enabled
         };
     }

@@ -104,6 +104,15 @@ public partial class MainWindow : Window
     /// </summary>
     private IReadOnlyList<string> _knownOutputDevices = Array.Empty<string>();
 
+    /// <summary>
+    /// The Windows defaults a slot changed. The memory owns the first-before /
+    /// last-after rule, so this class only has to ask whether a flow is still
+    /// ours before putting it back.
+    /// </summary>
+    private readonly WindowsAudioRouteMemory _windowsAudioBefore = new();
+
+    private IReadOnlyList<string> _lastWindowsAudioWarnings = Array.Empty<string>();
+
     private void LoadDevicesFrom(List<DeviceChoice> choices)
     {
         _knownOutputDevices = choices
@@ -302,6 +311,492 @@ public partial class MainWindow : Window
     {
         return DeviceBox.SelectedItem is DeviceChoice choice ? choice.Id : string.Empty;
     }
+
+    /// <summary>
+    /// Saves what Windows should switch to when a slot loads. The change is
+    /// deliberately not applied here: the approved shape has no Apply button,
+    /// and a slot is the thing that owns the route. Saying "saved" rather than
+    /// "applied" is the difference between a promise and a report.
+    /// </summary>
+    private void ShowWindowsAudioRoutingDialog(HotkeySlot slot)
+    {
+        IReadOnlyList<AudioDeviceInfo> playbackDevices = _devices.GetOutputDevices();
+        IReadOnlyList<AudioDeviceInfo> recordingDevices = _devices.GetInputDevices();
+        bool fxRunning = _audio.IsRunning;
+
+        List<DeviceChoice> playbackChoices = RouteChoices(playbackDevices);
+        List<DeviceChoice> recordingChoices = RouteChoices(recordingDevices);
+
+        bool playbackMissing = AddSavedRouteIfMissing(playbackChoices, slot.WindowsPlaybackDeviceId);
+        bool recordingMissing = AddSavedRouteIfMissing(recordingChoices, slot.WindowsRecordingDeviceId);
+
+        ComboBox playback = RouteCombo(
+            playbackChoices,
+            slot.WindowsPlaybackDeviceId,
+            "Default playback device for this slot");
+        ComboBox recording = RouteCombo(
+            recordingChoices,
+            slot.WindowsRecordingDeviceId,
+            "Default microphone for this slot");
+
+        OptionToggle playbackCommunications = RouteToggle(
+            "Also make this the voice chat output",
+            slot.WindowsPlaybackCommunications,
+            "Speaker");
+        OptionToggle recordingCommunications = RouteToggle(
+            "Also make this the voice chat microphone",
+            slot.WindowsRecordingCommunications,
+            "Chat");
+        OptionToggle bypass = RouteToggle(
+            "Allow playback to bypass FxSound",
+            slot.WindowsAudioBypassFxSound,
+            "Speaker");
+
+        StackPanel content = new();
+
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = "Choose what Windows should switch to when this slot loads. Leave alone keeps the current default.",
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 19,
+            Margin = new Thickness(0, 12, 0, 0)
+        });
+
+        content.Children.Add(RouteHeading("GAME SOUND"));
+        content.Children.Add(playback);
+        content.Children.Add(playbackCommunications);
+
+        content.Children.Add(RouteHeading("MICROPHONE"));
+        content.Children.Add(recording);
+        content.Children.Add(recordingCommunications);
+
+        content.Children.Add(RouteHeading("FXSOUND"));
+        content.Children.Add(bypass);
+
+        string fxNote = fxRunning
+            ? "FxSound is running. A direct playback route turns its EQ off for this slot; leave the box above unticked to keep the EQ and route only the microphone."
+            : "If FxSound is running when this slot loads, a direct playback route would turn its EQ off. The box above is the explicit permission for that.";
+
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = fxNote,
+            Foreground = (Brush)FindResource(fxRunning ? "Amber" : "TextMid"),
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 18,
+            Margin = new Thickness(8, 2, 8, 0)
+        });
+
+        if (playbackMissing || recordingMissing)
+        {
+            content.Children.Add(new TextBlock
+            {
+                Style = (Style)FindResource("CardSub"),
+                Text = "A saved device is not connected. It is kept in the list so saving does not silently erase it.",
+                Foreground = (Brush)FindResource("Amber"),
+                TextWrapping = TextWrapping.Wrap,
+                LineHeight = 18,
+                Margin = new Thickness(8, 10, 8, 0)
+            });
+        }
+
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = "Applies the next time this slot loads.",
+            Margin = new Thickness(0, 12, 0, 0)
+        });
+
+        ShowCustomModal("WINDOWS AUDIO ROUTING", content, "SAVE", () =>
+        {
+            slot.WindowsPlaybackDeviceId = SelectedRouteId(playback);
+            slot.WindowsRecordingDeviceId = SelectedRouteId(recording);
+            slot.WindowsPlaybackCommunications =
+                playbackCommunications.IsChecked == true && slot.WindowsPlaybackDeviceId.Length > 0;
+            slot.WindowsRecordingCommunications =
+                recordingCommunications.IsChecked == true && slot.WindowsRecordingDeviceId.Length > 0;
+            slot.WindowsAudioBypassFxSound = bypass.IsChecked == true;
+
+            Commit();
+            BuildSlots();
+            Flash("Windows audio route saved for " + slot.Name
+                + (slot.HasWindowsAudioRouting ? " - it applies next load" : " - left alone"));
+        }, initialFocus: playback);
+    }
+
+    private static TextBlock RouteHeading(string text) => new()
+    {
+        Style = (Style)Application.Current.FindResource("SectionHeader"),
+        Text = text,
+        Margin = new Thickness(0, 14, 0, 4)
+    };
+
+    private static OptionToggle RouteToggle(string label, bool isChecked, string glyph) =>
+        new()
+        {
+            Style = (Style)Application.Current.FindResource("OptionRow"),
+            Label = label,
+            Glyph = glyph.ToLowerInvariant(),
+            IsChecked = isChecked,
+            Margin = new Thickness(0, 2, 0, 0)
+        };
+
+    private static List<DeviceChoice> RouteChoices(IReadOnlyList<AudioDeviceInfo> devices)
+    {
+        List<DeviceChoice> choices = new()
+        {
+            new DeviceChoice { Id = string.Empty, Name = "Leave alone" }
+        };
+
+        // Two endpoints can report the same friendly name, and a picker that
+        // shows two identical rows is a picker the user cannot aim. The id is
+        // still what gets stored; the number is only there to tell them apart.
+        Dictionary<string, int> totals = devices
+            .GroupBy(device => device.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, int> seen = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (AudioDeviceInfo device in devices)
+        {
+            seen.TryGetValue(device.Name, out int number);
+            seen[device.Name] = ++number;
+
+            choices.Add(new DeviceChoice
+            {
+                Id = device.Id,
+                Name = totals[device.Name] > 1
+                    ? device.Name + " (" + number.ToString(CultureInfo.InvariantCulture) + ")"
+                    : device.Name
+            });
+        }
+
+        return choices;
+    }
+
+    private static bool AddSavedRouteIfMissing(List<DeviceChoice> choices, string savedId)
+    {
+        if (string.IsNullOrWhiteSpace(savedId)
+            || choices.Any(choice => string.Equals(choice.Id, savedId, StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        choices.Add(new DeviceChoice
+        {
+            Id = savedId,
+            Name = "Saved device (not connected)"
+        });
+        return true;
+    }
+
+    private static ComboBox RouteCombo(
+        List<DeviceChoice> choices,
+        string selectedId,
+        string automationName)
+    {
+        ComboBox combo = new()
+        {
+            Style = (Style)Application.Current.FindResource("ModernCombo"),
+            Height = 32,
+            ItemsSource = choices,
+            DisplayMemberPath = "Name",
+            Margin = new Thickness(0, 0, 0, 2)
+        };
+
+        int index = choices.FindIndex(choice =>
+            string.Equals(choice.Id, selectedId, StringComparison.OrdinalIgnoreCase));
+        combo.SelectedIndex = index < 0 ? 0 : index;
+        System.Windows.Automation.AutomationProperties.SetName(combo, automationName);
+        return combo;
+    }
+
+    private static string SelectedRouteId(ComboBox combo) =>
+        combo.SelectedItem is DeviceChoice choice ? choice.Id : string.Empty;
+
+    /// <summary>
+    /// Applies a slot's Windows default devices, and remembers what they were.
+    /// <para>
+    /// The enumeration and the switch happen at the moment the slot loads, not
+    /// when the dialog is saved. A saved USB headset that is not plugged in next
+    /// week must not block the rest of the slot, and the plan reports that as a
+    /// warning rather than a failure.
+    /// </para>
+    /// </summary>
+    private void ApplyWindowsAudioRouting(HotkeySlot slot)
+    {
+        _lastWindowsAudioWarnings = Array.Empty<string>();
+
+        if (!slot.HasWindowsAudioRouting)
+        {
+            return;
+        }
+
+        WindowsAudioRoutePlan plan = WindowsAudioRouting.Plan(
+            slot,
+            _devices.GetOutputDevices(),
+            _devices.GetInputDevices(),
+            _audio.IsRunning);
+
+        if (!plan.HasRoutes)
+        {
+            _lastWindowsAudioWarnings = plan.Notes;
+            if (plan.Notes.Count > 0)
+            {
+                TraceLog.Write("ROUTE " + slot.Name + " <- " + string.Join("; ", plan.Notes));
+            }
+
+            return;
+        }
+
+        Dictionary<WindowsAudioFlow, string> before = new();
+        foreach (WindowsAudioRoute route in plan.Routes)
+        {
+            string current = _devices.GetDefaultDeviceId(
+                route.Flow.IsRecording(),
+                route.Flow.IsCommunications());
+
+            if (!string.IsNullOrWhiteSpace(current))
+            {
+                before[route.Flow] = current;
+            }
+        }
+
+        // The journal is written before the switch, not after it. A kill between
+        // the COM call and the write would otherwise leave the default changed
+        // with nothing on disk to put it back. The entry is optimistic - it names
+        // the value the slot asked for - and is removed below for any route the
+        // switch did not keep while the default is still the old one.
+        foreach (WindowsAudioRoute route in plan.Routes)
+        {
+            if (before.TryGetValue(route.Flow, out string? previous))
+            {
+                _restoreJournal.Record(
+                    SystemRestoreKinds.For(route.Flow),
+                    route.Flow.ToString(),
+                    previous,
+                    route.DeviceId);
+            }
+        }
+
+        WindowsAudioApplyResult result = WindowsAudioRouting.Apply(plan, _devices);
+
+        foreach (WindowsAudioRoute route in plan.Routes)
+        {
+            if (result.Applied.Any(applied => applied.Flow == route.Flow)
+                || !before.TryGetValue(route.Flow, out string? previous))
+            {
+                continue;
+            }
+
+            // The switch did not keep. If the default is still the old value the
+            // entry describes a change that never happened; if it is the target
+            // the setter did move it despite reporting failure, and the entry is
+            // exactly what a crash recovery needs.
+            string current = _devices.GetDefaultDeviceId(
+                route.Flow.IsRecording(),
+                route.Flow.IsCommunications());
+
+            if (string.Equals(current, previous, StringComparison.OrdinalIgnoreCase))
+            {
+                _restoreJournal.Remove(
+                    SystemRestoreKinds.For(route.Flow),
+                    route.Flow.ToString());
+            }
+        }
+
+        foreach (WindowsAudioRoute route in result.Applied)
+        {
+            if (before.TryGetValue(route.Flow, out string? previous))
+            {
+                _windowsAudioBefore.Remember(route.Flow, previous, route.DeviceId);
+            }
+        }
+
+        _lastWindowsAudioWarnings = result.Warnings;
+
+        TraceLog.Write("ROUTE " + slot.Name + " <- "
+            + (result.Applied.Count > 0 ? string.Join(", ", result.Applied.Select(route => route.Label)) : "none")
+            + (result.HasWarnings ? " (" + string.Join("; ", result.Warnings) + ")" : string.Empty));
+    }
+
+    /// <summary>
+    /// Puts the Windows defaults back after a slot's sound has been stood down.
+    /// <para>
+    /// Only the flows the app set are touched, and only while the current default
+    /// is still the value it set. A user who changed the default by hand during
+    /// the game has made a newer decision, and the reset leaves it alone.
+    /// </para>
+    /// </summary>
+    private void RestoreWindowsAudioRoutes()
+    {
+        if (_windowsAudioBefore.Count == 0)
+        {
+            return;
+        }
+
+        foreach (WindowsAudioFlow flow in _windowsAudioBefore.Flows)
+        {
+            string current = _devices.GetDefaultDeviceId(
+                flow.IsRecording(),
+                flow.IsCommunications());
+
+            string kind = SystemRestoreKinds.For(flow);
+            string target = flow.ToString();
+
+            if (_windowsAudioBefore.ShouldRestore(flow, current, out string previous))
+            {
+                if (WindowsAudioRouting.TrySetDefault(flow, previous, _devices, out string error))
+                {
+                    TraceLog.Write("ROUTE restored " + flow);
+                    _restoreJournal.Remove(kind, target);
+                }
+                else
+                {
+                    TraceLog.Write("ROUTE restore failed " + flow + " <- " + error);
+
+                    // A device that is gone is not a failure to retry forever.
+                    // The journal entry goes, because there is nothing on this PC
+                    // to put back.
+                    if (!EndpointExists(flow, previous))
+                    {
+                        _restoreJournal.Remove(kind, target);
+                    }
+                }
+            }
+            else
+            {
+                // The user changed it, or the memory entry is gone. Either way
+                // this app no longer owns the value, so the journal must not
+                // restore it on the next launch.
+                _restoreJournal.Remove(kind, target);
+            }
+
+            _windowsAudioBefore.Forget(flow);
+        }
+    }
+
+
+    /// <summary>
+    /// Finishes the changes a previous run could not put back. Called once at
+    /// startup, after the display scan and before the startup presets, so a
+    /// restored route is not immediately overwritten by the remembered preset.
+    /// <para>
+    /// Every entry is removed only when the value is verified back, or when the
+    /// user's own newer value makes the entry obsolete. An entry that cannot be
+    /// answered stays for the next launch; that is the whole point of a journal
+    /// that is not boot-gated.
+    /// </para>
+    /// </summary>
+    private void ProcessPendingSystemRestore()
+    {
+        IReadOnlyList<SystemRestoreEntry> entries = _restoreJournal.Entries;
+
+        if (entries.Count == 0)
+        {
+            return;
+        }
+
+        int restored = 0;
+
+        foreach (SystemRestoreEntry entry in entries)
+        {
+            try
+            {
+                if (string.Equals(entry.Kind, SystemRestoreKinds.Hdr, StringComparison.OrdinalIgnoreCase))
+                {
+                    // The journal target is the monitor key. Resolving it against
+                    // the fresh scan is what keeps the entry following the panel
+                    // rather than the display number it had last time.
+                    string device = _display.ResolveDevice(entry.Target, entry.Target);
+
+                    HdrJournalOutcome outcome = _hdr.RestoreJournalEntry(
+                        entry.Target,
+                        device,
+                        HdrBool(entry.Before),
+                        HdrBool(entry.After),
+                        out string hdrError);
+
+                    if (outcome == HdrJournalOutcome.Restored)
+                    {
+                        restored++;
+                    }
+                    else if (outcome is HdrJournalOutcome.AlreadyDifferent or HdrJournalOutcome.NotConnected)
+                    {
+                        _restoreJournal.Remove(entry.Kind, entry.Target);
+                    }
+                    else
+                    {
+                        TraceLog.Write("SYSTEM RESTORE " + entry.Target + " <- " + hdrError);
+                    }
+
+                    continue;
+                }
+
+                if (!SystemRestoreKinds.TryFlow(entry.Kind, out WindowsAudioFlow flow))
+                {
+                    _restoreJournal.Remove(entry.Kind, entry.Target);
+                    continue;
+                }
+
+                string current = _devices.GetDefaultDeviceId(
+                    flow.IsRecording(),
+                    flow.IsCommunications());
+
+                if (!string.Equals(current, entry.After, StringComparison.OrdinalIgnoreCase))
+                {
+                    // The user changed it, or the endpoint is gone. Nothing to
+                    // put back, and keeping the entry would retry forever.
+                    _restoreJournal.Remove(entry.Kind, entry.Target);
+                    continue;
+                }
+
+                if (WindowsAudioRouting.TrySetDefault(flow, entry.Before, _devices, out string error))
+                {
+                    restored++;
+                    _restoreJournal.Remove(entry.Kind, entry.Target);
+                    TraceLog.Write("SYSTEM RESTORE " + entry.Kind + " restored");
+                    continue;
+                }
+
+                TraceLog.Write("SYSTEM RESTORE " + entry.Kind + " <- " + error);
+
+                if (!EndpointExists(flow, entry.Before))
+                {
+                    _restoreJournal.Remove(entry.Kind, entry.Target);
+                }
+            }
+            catch (Exception ex)
+            {
+                TraceLog.Write("SYSTEM RESTORE", ex);
+            }
+        }
+
+        if (restored > 0)
+        {
+            Flash("AUDIO / HDR RESTORED AFTER UNEXPECTED CLOSE");
+            TraceLog.Write("SYSTEM RESTORE restored " + restored + " change(s)");
+        }
+    }
+
+
+    private bool EndpointExists(WindowsAudioFlow flow, string id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return false;
+        }
+
+        IReadOnlyList<AudioDeviceInfo> devices = flow.IsRecording()
+            ? _devices.GetInputDevices()
+            : _devices.GetOutputDevices();
+
+        return devices.Any(device => string.Equals(device.Id, id, StringComparison.OrdinalIgnoreCase));
+    }
+
+
+    private static bool HdrBool(string value) =>
+        string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
 
 
     private void UpdateFxBanner()
@@ -1697,6 +2192,13 @@ public partial class MainWindow : Window
     /// </summary>
     public async System.Threading.Tasks.Task GoSoundNeutralAsync()
     {
+        // Every route into "sound back to normal" comes through here: the reset
+        // button, the tray item, the off hotkey, game exit and panic. Putting the
+        // Windows defaults back in the same place means there is no separate list
+        // of exits to keep in sync, and no exit that restores one half of the
+        // sound but not the other.
+        RestoreWindowsAudioRoutes();
+
         EnqueueAudio(AudioPushRequest.ForReset());
         await WaitForAudioQueueAsync();
     }
