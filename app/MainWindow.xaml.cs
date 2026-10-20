@@ -38,7 +38,7 @@ public partial class MainWindow : Window
     private readonly AudioPreviewPlayer _audioPreview = new();
 
 
-    private readonly DisplayService _display = new();
+    private readonly DisplayService _display = new(new GammaBaselineStore());
 
 
     private readonly AudioService _audio = new();
@@ -1497,6 +1497,13 @@ private void HideToTray()
     private void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
         _display.Rescan();
+
+        // After the scan, because the restore has to know which screens are here
+        // now, and before the lock, so the lock does not start defending a ramp
+        // that is about to be taken off. Its whole job is undoing a run that died
+        // with a tint still on the screen.
+        _display.RestoreAfterCrash();
+
         _display.StartLock();
         _display.SetLock(_settings.GammaLock);
 
@@ -1557,6 +1564,15 @@ private void HideToTray()
         if (_settings.ShowOsd)
         {
             Flash("Ready, hit a slot key to load");
+        }
+
+        // Said after the ready line rather than instead of it, for the same reason
+        // as the settings rescue below: the screen changing on its own as the app
+        // opens needs an explanation, or it reads as the app applying a preset
+        // nobody asked for.
+        if (_display.RestoredAfterCrash)
+        {
+            Flash("SCREEN RESTORED AFTER UNEXPECTED CLOSE");
         }
 
         // Said after the ready line rather than instead of it, because it explains

@@ -25,6 +25,21 @@ public sealed class DisplayService
 
     private readonly Dictionary<string, Ramp> _originalRamps = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Where the originals are kept between runs, or null in tests and on any
+    /// path that does not own the screen for the session.
+    /// </summary>
+    private readonly GammaBaselineStore? _store;
+
+    public DisplayService()
+        : this(null)
+    {
+    }
+
+    internal DisplayService(GammaBaselineStore? store)
+    {
+        _store = store;
+    }
 
     private readonly List<string> _monitors = new();
 
@@ -135,6 +150,12 @@ public sealed class DisplayService
 
 
     public bool IsEnabled { get; private set; }
+
+    /// <summary>
+    /// True when <see cref="RestoreAfterCrash"/> put a ramp back, so the window
+    /// can say why the screen changed on its own.
+    /// </summary>
+    public bool RestoredAfterCrash { get; private set; }
 
     /// <summary>
     /// Marks the service as holding a ramp on screen, for the tests.
@@ -412,6 +433,34 @@ public sealed class DisplayService
 
         char before = device[device.Length - wanted.Length - 1];
         return before == '.' || before == '\\';
+    }
+
+    /// <summary>
+    /// The panel behind a display device, as a name that survives a renumbering.
+    /// <para>
+    /// <c>\\.\DISPLAY2</c> is a slot in the adapter list, not a monitor. Undock a
+    /// laptop and the same panel comes back as DISPLAY1, so anything filed under
+    /// the old name - a saved baseline, a slot's screen - belongs to whichever
+    /// panel happens to take that number next. The PnP id includes the model and
+    /// the instance, so it follows the hardware.
+    /// </para>
+    /// <para>
+    /// Falls back to the device name when an adapter reports no monitor id, which
+    /// some virtual and remote displays do. The fallback is no worse than the old
+    /// behaviour and keeps a machine with an unhelpful driver working.
+    /// </para>
+    /// </summary>
+    internal static string MonitorKeyFor(string device)
+    {
+        DisplayDeviceInfo monitor = new();
+        monitor.Size = (uint)Marshal.SizeOf<DisplayDeviceInfo>();
+
+        if (EnumDisplayDevices(device, 0, ref monitor, 0) && !string.IsNullOrWhiteSpace(monitor.DeviceId))
+        {
+            return monitor.DeviceId;
+        }
+
+        return device;
     }
 
     private static string Label(DisplayDeviceInfo adapter, int ordinal, Dictionary<string, int> seen)
@@ -693,21 +742,31 @@ public sealed class DisplayService
 
         try
         {
+            Ramp? known = null;
             lock (_gate)
             {
                 if (!_originalRamps.ContainsKey(device))
                 {
-                    Ramp original = new()
-                    {
-                        Red = new ushort[RampSize],
-                        Green = new ushort[RampSize],
-                        Blue = new ushort[RampSize]
-                    };
+                    Ramp original = NewRamp();
                     if (GetDeviceGammaRamp(hdc, ref original))
                     {
                         _originalRamps[device] = original;
                     }
                 }
+
+                if (_originalRamps.TryGetValue(device, out Ramp captured))
+                {
+                    known = captured;
+                }
+            }
+
+            // Filed before the write, because the write is the thing a crash can
+            // leave on the screen. There is nothing to file when the driver would
+            // not read back; a later crash then falls back to identity rather than
+            // to a tint it cannot recognise.
+            if (known is Ramp baseline)
+            {
+                _store?.BeginDirty(MonitorKeyFor(device), Flatten(baseline));
             }
 
             Ramp ramp = BuildRamp(Working);
@@ -773,6 +832,7 @@ public sealed class DisplayService
         if (any)
         {
             SessionState.Current.DisplayTouched = false;
+            _store?.MarkClean();
         }
 
         lock (_gate)
@@ -784,6 +844,82 @@ public sealed class DisplayService
         Working = DisplayPreset.Flat();
         _dirty = false;
         StatusChanged?.Invoke(any ? "SCREEN RESET" : "NOTHING TO RESET");
+        return any;
+    }
+
+    /// <summary>
+    /// Puts back a ramp left on screen by a run that did not exit cleanly.
+    /// <para>
+    /// Runs once, at startup, and only when the stored marker was written during
+    /// this boot. A marker older than the boot is cleared without touching the
+    /// screen: Windows has already reset the gamma table, and writing an old
+    /// baseline over whatever the user has set since would be the app undoing
+    /// somebody else's work.
+    /// </para>
+    /// <para>
+    /// A screen with no stored baseline but a dirty file gets an identity ramp,
+    /// not a read-back. That read-back is the bug this whole file guards: after a
+    /// crash it returns the tint, and filing it as "original" makes the tint
+    /// permanent.
+    /// </para>
+    /// </summary>
+    public bool RestoreAfterCrash()
+    {
+        if (_store is null || !_store.Dirty)
+        {
+            return false;
+        }
+
+        if (!_store.DirtyAppliesToThisBoot(DateTime.UtcNow, TimeSpan.FromMilliseconds(Environment.TickCount64)))
+        {
+            TraceLog.Write("DISPLAY baseline is dirty but predates this boot; clearing it");
+            _store.MarkClean();
+            return false;
+        }
+
+        IReadOnlyList<string> devices = Monitors.Count > 0 ? Monitors : ScanMonitors();
+        bool any = false;
+
+        foreach (string device in devices)
+        {
+            ushort[]? saved = _store.Find(MonitorKeyFor(device), device);
+
+            // A screen this app never captured is left alone. Identity is only the
+            // answer when there is no baseline at all, which means the file knows a
+            // ramp was written but not what was under it.
+            if (saved is null && !_store.IsEmpty)
+            {
+                continue;
+            }
+
+            Ramp ramp = Unflatten(saved ?? GammaBaselineStore.Identity());
+
+            IntPtr hdc = CreateDC("DISPLAY", device, null, IntPtr.Zero);
+            if (hdc == IntPtr.Zero)
+            {
+                continue;
+            }
+
+            try
+            {
+                any |= SetDeviceGammaRamp(hdc, ref ramp);
+            }
+            finally
+            {
+                DeleteDC(hdc);
+            }
+        }
+
+        if (any)
+        {
+            // Clean only once the screen actually came back. If the write failed
+            // the marker has to stay, so the next launch - or the user's Reset -
+            // gets another turn at it.
+            _store.MarkClean();
+            RestoredAfterCrash = true;
+            TraceLog.Write("DISPLAY baseline restored after an unclean exit");
+        }
+
         return any;
     }
 
@@ -871,6 +1007,25 @@ public sealed class DisplayService
         Green = new ushort[RampSize],
         Blue = new ushort[RampSize]
     };
+
+    /// <summary>Three channels end to end, which is the shape the store writes.</summary>
+    private static ushort[] Flatten(Ramp ramp)
+    {
+        ushort[] all = new ushort[GammaBaselineStore.Values];
+        Array.Copy(ramp.Red, 0, all, 0, RampSize);
+        Array.Copy(ramp.Green, 0, all, RampSize, RampSize);
+        Array.Copy(ramp.Blue, 0, all, RampSize * 2, RampSize);
+        return all;
+    }
+
+    private static Ramp Unflatten(ushort[] all)
+    {
+        Ramp ramp = NewRamp();
+        Array.Copy(all, 0, ramp.Red, 0, RampSize);
+        Array.Copy(all, RampSize, ramp.Green, 0, RampSize);
+        Array.Copy(all, RampSize * 2, ramp.Blue, 0, RampSize);
+        return ramp;
+    }
 
     /// <summary>
     /// Files what the driver reports straight after a write as the table the lock
