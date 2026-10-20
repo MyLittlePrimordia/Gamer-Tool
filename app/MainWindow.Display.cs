@@ -593,6 +593,35 @@ public partial class MainWindow : Window
         ApplyDisplay(_workDisplay.Copy(), true);
     }
 
+
+    /// <summary>
+    /// Puts the remembered screen preset back on the hardware once, at startup.
+    /// <para>
+    /// The exit path restores the original ramp, so the remembered id describes
+    /// the next session rather than the screen in front of the user. Re-applying
+    /// here is what makes the dropdown true: the same reason a slot applies its
+    /// preset when it loads, for the one preset nobody is here to load.
+    /// </para>
+    /// <para>
+    /// Called after the night schedule has had its first say, so a running filter
+    /// is folded in by ApplyDisplay instead of being overwritten by the restore.
+    /// Silent, and only for a named preset that still exists; flat means leave
+    /// the screen alone.
+    /// </para>
+    /// </summary>
+    private void RestoreStartupDisplay()
+    {
+        string presetId = _workDisplay.Id;
+        if (!StartupRestore.ShouldApply(presetId, FindDisplay(presetId) is not null))
+        {
+            return;
+        }
+
+        TraceLog.Write("STARTUP display restore " + presetId);
+        ApplyDisplay(_workDisplay.Copy(), announce: false);
+    }
+
+
     /// <summary>
     /// Copies the live backlight reading into the working preset.
     /// <para>

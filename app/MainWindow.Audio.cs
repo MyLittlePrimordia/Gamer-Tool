@@ -1212,6 +1212,65 @@ public partial class MainWindow : Window
 
 
     /// <summary>
+    /// Puts the remembered sound preset back on the engine once, at startup.
+    /// <para>
+    /// The remembered id is an identity, not a report of what the engine is
+    /// doing: the exit path hands FxSound back before the app quits. Without
+    /// this step the dropdown shows the last preset while the engine is on
+    /// whatever the user left it on, and the only way to make the two agree is
+    /// to choose the preset again. Choosing a preset and pushing it is one
+    /// gesture everywhere else; this is that same gesture for the one case where
+    /// nobody is here to make it.
+    /// </para>
+    /// <para>
+    /// Silent, and only for a named preset that still exists. Flat means "leave
+    /// the hardware alone", so there is nothing to put back and writing a
+    /// neutral tune would overwrite whatever the user has chosen in FxSound.
+    /// </para>
+    /// </summary>
+    private async System.Threading.Tasks.Task RestoreStartupAudioAsync(string presetId)
+    {
+        // The device list is built on a worker and the user can choose a preset
+        // while that is happening. That choice has already been pushed, and it
+        // wins: this restore is only for the case where nobody has touched the
+        // tab yet. A slider move keeps the id and renames the working tune to
+        // "Tuned", so the copy below carries that tweak rather than undoing it.
+        if (!string.Equals(_activeAudioId, presetId, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(_workAudio.Id, presetId, StringComparison.OrdinalIgnoreCase)
+            || !ShouldRestoreStartupAudio(presetId))
+        {
+            return;
+        }
+
+        TraceLog.Write("STARTUP audio restore " + presetId);
+        _startupAudioRestoreInFlight = true;
+        try
+        {
+            ApplyAudio(_workAudio.Copy(), announce: false);
+
+            // Wait for the queue to drain so the curve check can resume against
+            // the state this push left behind. The queue's own verification is
+            // what reports a failure; CheckCurveApplied must not report the
+            // mismatch it sees while the push is still in flight.
+            await AudioQueue.WhenIdle();
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("STARTUP AUDIO RESTORE", ex);
+        }
+        finally
+        {
+            _startupAudioRestoreInFlight = false;
+        }
+    }
+
+
+    private bool ShouldRestoreStartupAudio(string presetId) =>
+        _audio.IsInstalled
+        && StartupRestore.ShouldApply(presetId, FindAudio(presetId) is not null);
+
+
+    /// <summary>
     /// How often a live slider change is allowed to reach the engine.
     /// <para>
     /// FxSound takes every change as a process that is spawned and waited on -
@@ -1958,6 +2017,16 @@ public partial class MainWindow : Window
     /// </summary>
     private void CheckCurveApplied(FxSoundState state)
     {
+        // The startup restore queues a push and the poll that follows can land on
+        // either side of it. Reporting a mismatch while that push is still in the
+        // queue would blame the engine for a tune it has not been given yet, and
+        // reporting the transition when it lands would put a toast on screen for
+        // a restore nobody asked for. The apply queue verifies the push itself.
+        if (_startupAudioRestoreInFlight)
+        {
+            return;
+        }
+
         int count = _bandSliders.Count;
         if (count == 0 || state.Equalizer.Bands.Count < count)
         {
@@ -1999,6 +2068,13 @@ public partial class MainWindow : Window
         }
     }
 
+
+    /// <summary>
+    /// True while the startup restore's push is still in the apply queue. The
+    /// curve check stands down for that window: a poll that lands on either side
+    /// of the push is not evidence that the engine refused the tune.
+    /// </summary>
+    private bool _startupAudioRestoreInFlight;
 
     /// <summary>Whether the engine currently reports the curve shown on screen.</summary>
     private bool _curveApplied = true;
