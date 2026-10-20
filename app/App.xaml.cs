@@ -32,6 +32,12 @@ public partial class App : Application
         }
 #endif
 
+        // Read before the single-instance check, because the second copy is the
+        // one that has to carry the request to the first. A shortcut starts this
+        // program with --play; on a cold start the window handles it, and on a
+        // warm one this is what travels instead of a second copy of the app.
+        bool playRequested = PlayRequest.TryParse(e.Args, out string playSlotId);
+
         // Ownership is taken with WaitOne rather than with the constructor's
         // initiallyOwned argument, because "created" only reports whether this
         // process made the named object. A replacement started by the in-app
@@ -95,7 +101,15 @@ public partial class App : Application
             // nothing about where the window was. The app lives in the tray, so
             // the second launch is the normal way somebody gets it back, and that
             // modal was a dead end on the most common path back to the app.
-            WindowMessage.BroadcastShowMe();
+            if (!playRequested || !WindowMessage.BroadcastPlay(playSlotId))
+            {
+                // Either there was nothing to play, or the request could not be
+                // delivered. Bring the window up rather than leaving the second
+                // launch looking dead; the user can press the slot's own Play
+                // button from there.
+                WindowMessage.BroadcastShowMe();
+            }
+
             Shutdown();
             return;
         }

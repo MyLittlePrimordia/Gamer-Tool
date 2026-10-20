@@ -675,6 +675,16 @@ public partial class MainWindow : Window
     private static bool StartHidden()
     {
         string[] args = Environment.GetCommandLineArgs();
+
+        // A play request starts the game, so showing the tool first would steal
+        // the foreground from the thing the user asked this click to start. The
+        // generated shortcut also passes --tray; a hand-written command line
+        // gets the same behaviour from --play alone.
+        if (PlayRequest.TryParse(args, out _))
+        {
+            return true;
+        }
+
         foreach (string arg in args)
         {
             if (arg.Equals("--tray", StringComparison.OrdinalIgnoreCase))
@@ -1246,6 +1256,14 @@ private void HideToTray()
     /// </summary>
     private HwndSource? _displayHookSource;
 
+    /// <summary>
+    /// Whether the command line's hidden start has already been applied on the
+    /// loaded path. Loaded is not guaranteed to fire only once, and hiding again
+    /// after the user brings the window back from the tray would make the tray
+    /// icon unable to open it.
+    /// </summary>
+    private bool _startHiddenApplied;
+
     private readonly DisplayChangeDebounce _displayDebounce = new();
 
     private DispatcherTimer? _displayDebounceTimer;
@@ -1281,6 +1299,16 @@ private void HideToTray()
     /// </summary>
     private IntPtr OnWindowMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        if (msg == WindowMessage.WmCopyData
+            && WindowMessage.TryReadPlayCopyData(lParam, out string playSlotId))
+        {
+            // Claimed: this is our payload, and no other handler should try to
+            // read the block after this method returns.
+            handled = true;
+            QueuePlayRequest(playSlotId);
+            return IntPtr.Zero;
+        }
+
         if (WindowMessage.IsShowMe(msg))
         {
             // Claimed, so nothing else sees it: the broadcast went to every window
@@ -1530,7 +1558,7 @@ private void HideToTray()
         RestoreStartupDisplay();
 
         UpdateFxBanner();
-        _ = FinishStartupAsync();
+        Task startupAudio = FinishStartupAsync();
 
         // Created here, started by UpdateAudioTabActivity and not before, so nothing
         // polls the engine before the window is up.
@@ -1655,6 +1683,25 @@ private void HideToTray()
         {
             PromptForFxSound();
         }
+
+        // The constructor calls this before App's Show(), and a Hide before Show
+        // is undone by the Show that follows. Doing it here, on the loaded path,
+        // is what makes --tray and --play actually start out of the way. For a
+        // play request it also matters for the foreground: the game should get
+        // it, not the tool that launched it.
+        if (!_startHiddenApplied && StartHidden())
+        {
+            _startHiddenApplied = true;
+            HideToTray();
+        }
+
+        // A play request waits for the device list and the startup restore, but
+        // not for the user. The window is hidden on this path, so the only thing
+        // in front of the game is the profile being applied. The method marks the
+        // window ready as well, so an IPC request that arrives during the wait is
+        // kept rather than applied against half-loaded audio devices.
+        PlayRequest.TryParse(Environment.GetCommandLineArgs(), out string playSlotId);
+        _ = RunStartupPlayAsync(startupAudio, playSlotId);
     }
 
 

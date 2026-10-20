@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -170,12 +171,14 @@ public partial class MainWindow : Window
     /// The slot row's column widths, shared by a slot card and the caption strip
     /// above it so the two can never drift apart.
     /// <para>
-    /// One row, eight controls, and it adds up. This was measured rather than
+    /// One row, nine controls, and it adds up. This was measured rather than
     /// guessed, twice: the first attempt assumed ten pixel gaps and generous
     /// minimums for the name and the game picker, came out 114px short, and the
     /// answer given was that a single row was not possible. It was possible.
     /// The name only has to hold a word rather than a field, and the game picker
-    /// has the marquee, so 194px is a real width and not a compromise.
+    /// has the marquee, so 194px is a real width and not a compromise. The Play
+    /// button paid for itself out of the gaps, which went from ten to six, so the
+    /// game picker kept that width instead of losing a column's worth.
     /// </para>
     /// <para>
     /// What pays for the row is that four of these carry text the user wrote or
@@ -191,9 +194,10 @@ public partial class MainWindow : Window
     /// </summary>
     private static readonly GridLength[] SlotColumns =
     {
-        new(120), new(10), new(100), new(10), new(142), new(10),
-        new(142), new(10), new(116), new(10), new(100), new(10),
-        new(130), new(10), new(1, GridUnitType.Star), new(10), new(30)
+        new(120), new(6), new(100), new(6), new(142), new(6),
+        new(142), new(6), new(116), new(6), new(100), new(6),
+        new(130), new(6), new(1, GridUnitType.Star), new(6), new(24),
+        new(6), new(30)
     };
 
     /// <summary>
@@ -550,6 +554,28 @@ public partial class MainWindow : Window
         ComboBox appBox = AppCombo(slot);
         Grid.SetColumn(appBox, 14);
 
+        // Play is the one control here that does something outside the window:
+        // it applies the slot before starting the game, so the profile is already
+        // on the screen when the game gives it up. The tooltip is the pre-flight
+        // checklist, built from the same object the click uses, so what the user
+        // reads on hover is what the app has actually decided.
+        IconButton play = new()
+        {
+            Style = (Style)FindResource("IconButton"),
+            Icon = Icons.Play,
+            Tag = slot.Id,
+            Width = 24,
+            Height = 28,
+            ToolTip = PlayPreflightFor(slot).Tooltip,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        ToolTipService.SetShowOnDisabled(play, true);
+        System.Windows.Automation.AutomationProperties.SetName(
+            play, "Play " + slot.Name + " with its profile");
+        play.Click += OnSlotPlayClick;
+        Grid.SetColumn(play, 16);
+
         IconButton remove = new()
         {
             Style = (Style)FindResource("IconButton"),
@@ -573,7 +599,7 @@ public partial class MainWindow : Window
             RegisterHotkeys();
             ApplyWatchState();
         };
-        Grid.SetColumn(remove, 16);
+        Grid.SetColumn(remove, 18);
 
         row.Children.Add(namePlate);
         row.Children.Add(keyBox);
@@ -583,19 +609,24 @@ public partial class MainWindow : Window
         row.Children.Add(monitorBox);
         row.Children.Add(outputBox);
         row.Children.Add(appBox);
+        row.Children.Add(play);
         row.Children.Add(remove);
 
-        // Duplicate lives here rather than as a third button.
+        // Duplicate and the shortcut live here rather than as buttons.
         //
-        // It is the one action in here that is a convenience rather than
-        // something done often enough to earn a permanent place, and the name row
-        // has a gap at the right of the name that would look like a missing
-        // control if something were left out of it. So it is a context menu: no
-        // width at all, and nothing to line up.
+        // Duplicate is a convenience rather than something done often enough to
+        // earn a permanent place. The shortcut is the same action as Play, just in
+        // a form that can sit on the desktop; the row already has one button for
+        // the action itself. Both are context menu items: no width at all, and
+        // nothing to line up.
         ContextMenu menu = new();
         MenuItem duplicate = new() { Header = "Duplicate" };
         duplicate.Click += (s, e) => DuplicateSlot(slot);
         menu.Items.Add(duplicate);
+        menu.Items.Add(new Separator());
+        MenuItem shortcut = new() { Header = "Create Play shortcut" };
+        shortcut.Click += (s, e) => CreatePlayShortcut(slot);
+        menu.Items.Add(shortcut);
         card.ContextMenu = menu;
 
         return card;
@@ -1633,6 +1664,346 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>
+    /// Whether the window has finished loading and the first startup restore has
+    /// had its chance. A play request that arrives before this is kept rather
+    /// than applied against half-loaded audio devices.
+    /// </summary>
+    private bool _startupComplete;
+
+    /// <summary>An IPC play request that arrived before the window was ready.</summary>
+    private string _pendingPlayId = string.Empty;
+
+    /// <summary>One launch at a time, so a double click cannot start two games.</summary>
+    private bool _playInFlight;
+
+    /// <summary>
+    /// Whether the last <see cref="PlaySlot"/> call managed to push the screen.
+    /// Kept beside the call because the Play summary is written after the audio
+    /// queue has drained, by which time the local in that method is gone.
+    /// </summary>
+    private bool _lastPlayScreenTookIt = true;
+
+    private PlayPreflight PlayPreflightFor(HotkeySlot slot)
+    {
+        bool monitorTargeted = !string.IsNullOrWhiteSpace(slot.MonitorKey)
+            || !string.IsNullOrWhiteSpace(slot.MonitorDevice);
+
+        string resolved = _display.ResolveDevice(slot.MonitorKey, slot.MonitorDevice);
+
+        // The slot board is built before the first display scan on a cold start.
+        // An empty monitor list is "not known yet", not "the panel was unplugged";
+        // saying the latter on every row's tooltip would be a false warning that
+        // disappears only if something happens to rebuild the rows later.
+        bool monitorResolved = !monitorTargeted
+            || resolved.Length > 0
+            || _display.Monitors.Count == 0;
+
+        return PlayPreflight.Build(
+            slot,
+            targetExists: PlayPreflight.TargetExists(slot),
+            displayExists: FindDisplay(slot.DisplayPresetId) is not null,
+            audioExists: FindAudio(slot.AudioPresetId) is not null,
+            crosshairExists: FindCrosshair(slot.CrosshairPresetId) is not null,
+            audioInstalled: _audio.IsInstalled,
+            monitorResolved: monitorResolved);
+    }
+
+    private async void OnSlotPlayClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string id })
+        {
+            return;
+        }
+
+        try
+        {
+            await PlaySlotByIdAsync(id);
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("PLAY", ex);
+            Flash("Could not start that slot. Details are in the log.", true);
+        }
+    }
+
+    /// <summary>
+    /// A play request that came from another process, delivered by the window
+    /// hook. Kept until the window is ready if it is early, and otherwise handed
+    /// to the same path the button uses.
+    /// </summary>
+    private void QueuePlayRequest(string slotId)
+    {
+        if (!PlayRequest.TrySlotId(slotId, out string id))
+        {
+            return;
+        }
+
+        _ = Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!_startupComplete)
+            {
+                _pendingPlayId = id;
+                return;
+            }
+
+            _ = PlaySlotByIdAsync(id);
+        }), DispatcherPriority.Normal);
+    }
+
+    /// <summary>
+    /// The cold-start half of the same request. Waits for the startup audio
+    /// restore, then applies the slot, so a slow engine cannot have the restore
+    /// land after the game's profile and overwrite it.
+    /// </summary>
+    private async Task RunStartupPlayAsync(Task startupAudio, string commandLineSlotId)
+    {
+        try
+        {
+            await startupAudio;
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("STARTUP PLAY", ex);
+        }
+
+        _startupComplete = true;
+
+        string slotId = _pendingPlayId.Length > 0 ? _pendingPlayId : commandLineSlotId;
+        _pendingPlayId = string.Empty;
+
+        if (slotId.Length > 0)
+        {
+            await PlaySlotByIdAsync(slotId);
+        }
+    }
+
+    private async Task PlaySlotByIdAsync(string slotId)
+    {
+        if (!PlayRequest.TrySlotId(slotId, out string id))
+        {
+            return;
+        }
+
+        HotkeySlot? slot = _settings.Slots.FirstOrDefault(s =>
+            string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
+
+        if (slot is null)
+        {
+            // A shortcut outlives the slot it names when a profile is edited.
+            // Bring the window up rather than leaving the click with no visible
+            // result at all.
+            RailStatus.Text = "SLOT NOT FOUND";
+            Flash("That Play shortcut points at a slot that is gone", true);
+            ShowFromSecondLaunch();
+            return;
+        }
+
+        if (_playInFlight)
+        {
+            Flash("Already starting a game");
+            return;
+        }
+
+        _playInFlight = true;
+        try
+        {
+            await PlaySlotWithLaunchAsync(slot);
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("PLAY", ex);
+            RailStatus.Text = "PLAY FAILED";
+            Flash("Could not start that slot. Details are in the log.", true);
+        }
+        finally
+        {
+            _playInFlight = false;
+        }
+    }
+
+    /// <summary>
+    /// Work out the checklist, apply the slot, wait for the audio engine, then
+    /// start the game.
+    /// <para>
+    /// The wait is the whole point of the feature. Applying a slot already queues
+    /// the sound; starting the game immediately would leave the first seconds of
+    /// it on the previous tune, and on a slow engine that is long enough to hear.
+    /// The watcher is told the slot is already loaded before the process exists,
+    /// so its next poll does not apply the profile a second time - and does not
+    /// overwrite the pre-game record with the profile it just applied.
+    /// </para>
+    /// </summary>
+    private async Task PlaySlotWithLaunchAsync(HotkeySlot slot)
+    {
+        PlayPreflight preflight = PlayPreflightFor(slot);
+
+        if (!preflight.CanLaunch)
+        {
+            RailStatus.Text = "PLAY BLOCKED";
+            Flash(preflight.BlockedReason, true);
+            TraceLog.Write("PLAY BLOCKED " + slot.Name + " <- " + preflight.BlockedReason);
+            return;
+        }
+
+        PlayPreflight.TryTarget(slot, out string exePath);
+        string processName = AppProfileTools.ProcessNameOf(exePath);
+        bool alreadyRunning = IsProcessRunning(processName);
+
+        // First capture wins, exactly as the auto path does. The slot is about to
+        // replace the active ids, so this has to be read before PlaySlot.
+        if (_autoSlotId.Length == 0)
+        {
+            CapturePreGame();
+        }
+
+        // Set before PlaySlot rather than after Process.Start. The watcher polls
+        // in the background, and a poll between the two would see a new process
+        // and apply the slot a second time.
+        _autoStamp = DateTime.UtcNow;
+        _autoSlotId = slot.Id;
+        _autoProcess = processName;
+        _autoWildcardProcess = string.Empty;
+
+        PlaySlot(slot, announce: false);
+
+        // PlaySlot queues the engine half. Nothing below should start while that
+        // queue is still moving.
+        await WaitForAudioQueueAsync();
+
+        bool launched = false;
+        string failure = string.Empty;
+
+        if (!alreadyRunning)
+        {
+            launched = TryStartGame(exePath, out failure);
+        }
+
+        if (!launched && !alreadyRunning)
+        {
+            // Nothing is running to hand the profile back from on exit. Leaving
+            // the guard set would make a later focus change behave as if a game
+            // had started.
+            _autoSlotId = string.Empty;
+            _autoProcess = string.Empty;
+            _autoWildcardProcess = string.Empty;
+        }
+
+        List<string> parts = new()
+        {
+            alreadyRunning
+                ? slot.Name + " profile loaded"
+                : launched ? "Playing " + slot.Name : "Profile loaded, game did not start",
+        };
+
+        if (!alreadyRunning && launched && preflight.Summary != "no profile changes")
+        {
+            parts.Add(preflight.Summary);
+        }
+
+        if (!_lastPlayScreenTookIt)
+        {
+            parts.Add("screen blocked");
+        }
+
+        if (preflight.Warnings.Count > 0)
+        {
+            parts.Add(string.Join(", ", preflight.Warnings.Select(w =>
+                w.Label.ToLowerInvariant() + " " + w.Detail)));
+        }
+
+        if (alreadyRunning)
+        {
+            parts.Add("already running");
+        }
+
+        if (!launched && !alreadyRunning)
+        {
+            parts.Add(failure.Length > 0 ? failure : "start failed");
+        }
+
+        string message = string.Join(" · ", parts);
+        bool warn = preflight.Warnings.Count > 0 || !_lastPlayScreenTookIt || (!launched && !alreadyRunning);
+
+        RailStatus.Text = (!launched && !alreadyRunning)
+            ? "PLAY FAILED"
+            : "PLAYING " + slot.Name.ToUpperInvariant();
+
+        Flash(message, warn);
+
+        TraceLog.Write("PLAY " + slot.Name + " <- " + exePath
+            + (alreadyRunning ? " (already running)" : launched ? " (started)" : " (start failed)"));
+    }
+
+    private static bool IsProcessRunning(string processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName))
+        {
+            return false;
+        }
+
+        try
+        {
+            return Process.GetProcessesByName(processName).Length > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryStartGame(string exePath, out string error)
+    {
+        error = string.Empty;
+
+        try
+        {
+            ProcessStartInfo start = new()
+            {
+                FileName = exePath,
+                WorkingDirectory = Path.GetDirectoryName(exePath) ?? string.Empty,
+                UseShellExecute = true
+            };
+
+            Process.Start(start);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            TraceLog.Write("PLAY START", ex);
+            return false;
+        }
+    }
+
+    private void CreatePlayShortcut(HotkeySlot slot)
+    {
+        PlayPreflight preflight = PlayPreflightFor(slot);
+        if (!preflight.CanLaunch)
+        {
+            Flash(preflight.BlockedReason, true);
+            return;
+        }
+
+        string folder = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        if (string.IsNullOrWhiteSpace(folder))
+        {
+            Flash("Could not find the desktop", true);
+            return;
+        }
+
+        if (!PlayShortcut.TryCreate(folder, slot.Name, slot.Id, out string path, out string error))
+        {
+            TraceLog.Write("SHORTCUT " + slot.Name + " <- " + error);
+            Flash("Could not create the shortcut", true);
+            return;
+        }
+
+        RailStatus.Text = "SHORTCUT CREATED";
+        Flash("Play shortcut created: " + Path.GetFileName(path));
+    }
+
+
     /// <param name="screenOnly">
     /// Push the screen only and leave the sound alone. Used when the screen is being
     /// restored from a focus pause: the sound was never taken down, so pushing it
@@ -1690,6 +2061,11 @@ public partial class MainWindow : Window
                 _display.ResolveDevice(slot.MonitorKey, slot.MonitorDevice),
                 false);
         }
+
+        // Read by the Play path after the audio queue has drained. The local
+        // above is gone by then, and the refusal still has to reach the one OSD
+        // line the play gesture shows.
+        _lastPlayScreenTookIt = screenTookIt;
 
         // Announced before the slow half, not after it.
         //

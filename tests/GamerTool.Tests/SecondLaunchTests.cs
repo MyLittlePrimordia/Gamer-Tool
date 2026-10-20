@@ -79,12 +79,16 @@ public class SecondLaunchTests
         int branch = app.IndexOf("if (!claimed)", StringComparison.Ordinal);
         Assert.True(branch >= 0, "the single-instance branch has moved or gone");
 
-        int end = app.IndexOf("MessageBox.Show", branch, StringComparison.Ordinal);
+        int end = app.IndexOf("// Opened as early", branch, StringComparison.Ordinal);
 
-        string body = end >= 0 && end - branch < 900
+        string body = end > branch
             ? app[branch..end]
-            : app[branch..Math.Min(app.Length, branch + 900)];
+            : app[branch..Math.Min(app.Length, branch + 1600)];
 
+        // A play shortcut is a second launch like any other, but its first
+        // choice is to hand the slot to the running copy. The show request is
+        // still the fallback when there is no play request or delivery failed.
+        Assert.Contains("WindowMessage.BroadcastPlay(playSlotId)", body, StringComparison.Ordinal);
         Assert.Contains("WindowMessage.BroadcastShowMe()", body, StringComparison.Ordinal);
         Assert.Contains("Shutdown()", body, StringComparison.Ordinal);
         Assert.DoesNotContain("ALREADY RUNNING", body, StringComparison.Ordinal);
