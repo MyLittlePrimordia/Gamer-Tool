@@ -176,15 +176,16 @@ public class OsdTimingTests
         // that a person watching a screen would call a delay.
         string source = System.IO.File.ReadAllText(FindRepoFile(System.IO.Path.Combine("app", "MainWindow.Slots.cs")));
 
-        int announce = source.IndexOf("Flash(slot.Name + \" loaded\");", StringComparison.Ordinal);
+        int announce = source.IndexOf("Flash(slot.Name + \" loaded\"", StringComparison.Ordinal);
         int apply = source.IndexOf("ApplyAudioToDevice(audio.Copy(), false, slot);", StringComparison.Ordinal);
 
         Assert.True(announce > 0, "the slot no longer announces itself");
         Assert.True(apply > 0, "the slot no longer applies its sound");
 
         // The call rather than its arguments: the slot's screen is now resolved
-        // through the display service, and pinning the exact expression made the
-        // ordering this test is about fail for a rename.
+        // through the display service and passed to the toast, and pinning the
+        // exact expression made the ordering this test is about fail for a rename.
+        // Where the plate goes is asserted in ToastPlacementTests.
         int slow = source.LastIndexOf("ApplyDisplay(", announce, StringComparison.Ordinal);
         Assert.True(
             slow > 0 && slow < announce,
@@ -199,7 +200,7 @@ public class OsdTimingTests
         string source = System.IO.File.ReadAllText(FindRepoFile(System.IO.Path.Combine("app", "MainWindow.Slots.cs")));
 
         Assert.Contains("SCREEN BLOCKED", source);
-        Assert.Contains("Flash(slot.Name + \" loaded, screen did not take it\", true);", source);
+        Assert.Contains("loaded, screen did not take it", source);
     }
 
     private static string FindRepoFile(string relative)

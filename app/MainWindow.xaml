@@ -533,7 +533,7 @@
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                     <Button Content="Apply" Style="{StaticResource PrimaryButton}" MinWidth="116"
                                             Click="OnApplyScreenClick" ToolTip="Apply" AutomationProperties.Name="Apply the screen preset" />
-                                    <ui:IconButton Icon="{x:Static ui:Icons.Refresh}" Style="{StaticResource IconButton}" Margin="10,0,0,0"
+                                    <ui:IconButton x:Name="ScreenResetButton" Icon="{x:Static ui:Icons.Refresh}" Style="{StaticResource IconButton}" Margin="10,0,0,0"
                                                    Click="OnResetScreenClick" ToolTip="Reset" AutomationProperties.Name="Reset the screen to normal" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="2" Orientation="Horizontal"
@@ -1151,7 +1151,7 @@
                                      round arrow goes on. -->
                                 <Button x:Name="SaveToFxSoundButton" Content="Save in FxSound" Style="{StaticResource GhostButton}"
                                         Click="OnSaveInFxSoundClick" ToolTip="Save in FxSound" />
-                                <ui:IconButton Icon="{x:Static ui:Icons.Refresh}" Style="{StaticResource IconButton}" Margin="10,0,0,0"
+                                <ui:IconButton x:Name="SoundResetButton" Icon="{x:Static ui:Icons.Refresh}" Style="{StaticResource IconButton}" Margin="10,0,0,0"
                                                Click="OnResetSoundClick" ToolTip="Reset" AutomationProperties.Name="Reset the sound to normal" />
                                 </StackPanel>
                             </Grid>
@@ -1852,6 +1852,8 @@
                                                    Margin="0,0,6,0" Click="OnXhSaveAsClick" ToolTip="Save" AutomationProperties.Name="Save this crosshair preset" />
                                     <ui:IconButton x:Name="XhRenameButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Pencil}"
                                                    Margin="0,0,6,0" Click="OnXhRenameClick" ToolTip="Rename" AutomationProperties.Name="Rename this crosshair preset" />
+                                    <ui:IconButton x:Name="XhDuplicateButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Copy}"
+                                                   Margin="0,0,6,0" Click="OnXhDuplicateClick" ToolTip="Duplicate" AutomationProperties.Name="Duplicate this crosshair onto a new preset" />
                                     <ui:IconButton x:Name="XhDeleteButton" Style="{StaticResource IconButton}" Icon="{x:Static ui:Icons.Trash}"
                                                    Click="OnXhDeleteClick" ToolTip="Delete" AutomationProperties.Name="Delete this crosshair preset" />
                                 </StackPanel>
@@ -1976,16 +1978,10 @@
                                         <RadioButton x:Name="XhSwatch3" GroupName="XhColor" Style="{StaticResource XhSwatch}" Background="#FF2BB0" Tag="3" Checked="OnXhSwatchChecked" AutomationProperties.Name="Magenta" />
                                         <RadioButton x:Name="XhSwatch4" GroupName="XhColor" Style="{StaticResource XhSwatch}" Background="#FFE633" Tag="4" Checked="OnXhSwatchChecked" AutomationProperties.Name="Yellow" />
                                         <RadioButton x:Name="XhSwatch5" GroupName="XhColor" Style="{StaticResource XhSwatch}" Background="#FFFFFF" Tag="5" Checked="OnXhSwatchChecked" AutomationProperties.Name="White" />
-                                        <RadioButton x:Name="XhSwatchCustom" GroupName="XhColor" Style="{StaticResource XhSwatchCustom}" Background="#262626" Tag="6" Click="OnXhCustomSwatchClick" ToolTip="Custom color" AutomationProperties.Name="Pick a custom color">
-                                            <!-- No permanent ring on this style; + is a simple cross centred in the disc. -->
-                                            <Path x:Name="XhSwatchPlus" Data="M 5,1.5 V 8.5 M 1.5,5 H 8.5"
-                                                  Width="10" Height="10"
-                                                  Stroke="{StaticResource TextMid}" StrokeThickness="1.6"
-                                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                                  Stretch="None"
-                                                  HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                  SnapsToDevicePixels="True" />
-                                        </RadioButton>
+                                        <!-- The wheel itself is the button, drawn by the style. The
+                                             Background here is only the dot in its middle, which
+                                             shows the colour this swatch is holding. -->
+                                        <RadioButton x:Name="XhSwatchCustom" GroupName="XhColor" Style="{StaticResource XhSwatchCustom}" Background="#262626" Tag="6" Click="OnXhCustomSwatchClick" ToolTip="Pick your own color" AutomationProperties.Name="Pick a custom color" />
 
                                         <!-- The colour picker. Opens under the plus swatch, changes the
                                              crosshair live as the mouse moves, and closes on a click
@@ -2010,6 +2006,24 @@
                                                 </StackPanel>
                                             </Border>
                                         </Popup>
+
+                                        <!-- Only for a picture: whether it is multiplied by the color
+                                             above or drawn as it was made. An imported animation is
+                                             often multi-colored, and the multiply is what used to
+                                             turn it into one flat color with no way back. On the
+                                             swatch row, not a row of its own: it is a decision
+                                             about the color beside it, and a paragraph under a
+                                             switch is most of what was pushing this page past the
+                                             panel. -->
+                                        <StackPanel x:Name="XhTintRow" Orientation="Horizontal" Margin="22,0,0,0"
+                                                    VerticalAlignment="Center" Visibility="Collapsed">
+                                            <ui:SwitchToggle x:Name="XhOwnColoursBox" Style="{StaticResource SwitchTrack}" Accent="{StaticResource AccentCrosshair}"
+                                                             VerticalAlignment="Center"
+                                                             Checked="OnXhToggleChanged" Unchecked="OnXhToggleChanged"
+                                                             ToolTip="Draw the picture in the colors it came with. The color beside this still paints the glow."
+                                                             AutomationProperties.Name="Own colors" />
+                                            <TextBlock Style="{StaticResource Label}" Text="OWN COLORS" VerticalAlignment="Center" Margin="8,0,0,0" />
+                                        </StackPanel>
                                     </StackPanel>
 
                                     <TextBlock Style="{StaticResource SectionHeader}" Text="TUNING" Margin="0,22,0,0" />
@@ -2025,7 +2039,7 @@
                                             <RowDefinition Height="Auto" />
                                         </Grid.RowDefinitions>
 
-                                        <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,0,18">
+                                        <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,0,14">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -2039,7 +2053,7 @@
                                                     ValueChanged="OnXhSliderChanged" AutomationProperties.Name="Crosshair size" />
                                         </StackPanel>
 
-                                        <StackPanel x:Name="XhThicknessPanel" Grid.Row="0" Grid.Column="2" Margin="0,0,0,18">
+                                        <StackPanel x:Name="XhThicknessPanel" Grid.Row="0" Grid.Column="2" Margin="0,0,0,14">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -2053,7 +2067,7 @@
                                                     ValueChanged="OnXhSliderChanged" AutomationProperties.Name="Crosshair thickness" />
                                         </StackPanel>
 
-                                        <StackPanel x:Name="XhGapPanel" Grid.Row="1" Grid.Column="0" Margin="0,0,0,18">
+                                        <StackPanel x:Name="XhGapPanel" Grid.Row="1" Grid.Column="0" Margin="0,0,0,14">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -2067,7 +2081,7 @@
                                                     ValueChanged="OnXhSliderChanged" ToolTip="Space in the center" AutomationProperties.Name="Crosshair gap" />
                                         </StackPanel>
 
-                                        <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,0,0,18">
+                                        <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,0,0,14">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -2094,6 +2108,105 @@
                                                     Minimum="0" Maximum="359" TickFrequency="1" IsSnapToTickEnabled="True"
                                                     ValueChanged="OnXhSliderChanged" AutomationProperties.Name="Crosshair rotation" />
                                         </StackPanel>
+
+                                        <!-- The dot's size, in the cell beside Rotation. It is dimmed
+                                             while there is no dot, so the row never jumps and the size
+                                             that will come back is still readable. Until it is moved it
+                                             reads the width the dot would have inherited from the line,
+                                             which is what every preset saved before it existed meant. -->
+                                        <StackPanel x:Name="XhDotSizePanel" Grid.Row="2" Grid.Column="2">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Style="{StaticResource Label}" Text="Dot size" />
+                                                <TextBlock x:Name="XhDotSizeValue" Grid.Column="1" Style="{StaticResource Value}" Text="2 px" />
+                                            </Grid>
+                                            <Slider x:Name="XhDotSizeSlider" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentCrosshair}"
+                                                    Minimum="1" Maximum="12" TickFrequency="1" IsSnapToTickEnabled="True"
+                                                    ValueChanged="OnXhSliderChanged" ToolTip="How wide the center dot is"
+                                                    AutomationProperties.Name="Center dot size" />
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <!-- Movement, for people who want it. Still by default and
+                                         still for every preset saved before this existed: an
+                                         effect is something you turn on, not something a crosshair
+                                         turns out to have. -->
+                                    <TextBlock Style="{StaticResource SectionHeader}" Text="EFFECT" Margin="0,20,0,0" />
+                                    <!-- The hint sits beside the dropdown rather than under it, so
+                                         the section costs one row and still says what the chosen
+                                         effect does. -->
+                                    <Grid Margin="0,10,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="300" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox x:Name="XhEffectBox" Style="{StaticResource PresetCombo}"
+                                                  ItemContainerStyle="{StaticResource ModernComboItem}"
+                                                  Width="300"
+                                                  MaxDropDownHeight="360"
+                                                  SelectionChanged="OnXhEffectChanged"
+                                                  AutomationProperties.Name="Crosshair effect">
+                                            <!-- A moving crosshair beside each name, drawn by the
+                                                 same element the preview and the overlay use, so
+                                                 the list shows the effect rather than asking the
+                                                 reader to imagine it. -->
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <Border Width="24" Height="24" CornerRadius="4"
+                                                                Background="#141418" ClipToBounds="True"
+                                                                Margin="0,0,9,0">
+                                                            <ui:CrosshairView Width="24" Height="24"
+                                                                              Magnification="1.4"
+                                                                              Preset="{Binding Preview}" />
+                                                        </Border>
+                                                        <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                        <TextBlock x:Name="XhEffectHint" Grid.Column="1" Style="{StaticResource CardSub}"
+                                                   Margin="14,0,0,0" VerticalAlignment="Center"
+                                                   TextWrapping="Wrap" Text="Still. Nothing moves." />
+                                    </Grid>
+
+                                    <Grid x:Name="XhEffectTuningPanel" Margin="0,12,0,0" Visibility="Collapsed">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="32" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Style="{StaticResource Label}" Text="Speed" />
+                                                <TextBlock x:Name="XhEffectSpeedValue" Grid.Column="1" Style="{StaticResource Value}" Text="50" />
+                                            </Grid>
+                                            <Slider x:Name="XhEffectSpeedSlider" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentCrosshair}"
+                                                    Minimum="1" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True"
+                                                    ValueChanged="OnXhEffectSliderChanged"
+                                                    AutomationProperties.Name="Effect speed" />
+                                        </StackPanel>
+                                        <StackPanel x:Name="XhEffectAmountPanel" Grid.Column="2">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Style="{StaticResource Label}" Text="Amount" />
+                                                <TextBlock x:Name="XhEffectAmountValue" Grid.Column="1" Style="{StaticResource Value}" Text="50" />
+                                            </Grid>
+                                            <Slider x:Name="XhEffectAmountSlider" Style="{StaticResource ModernSlider}" Foreground="{StaticResource AccentCrosshair}"
+                                                    Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True"
+                                                    ValueChanged="OnXhEffectSliderChanged"
+                                                    AutomationProperties.Name="Effect amount" />
+                                        </StackPanel>
                                     </Grid>
 
                                     <StackPanel Orientation="Horizontal" Margin="0,24,0,0">
@@ -2110,10 +2223,45 @@
                                                          VerticalAlignment="Center"
                                                          Checked="OnXhToggleChanged" Unchecked="OnXhToggleChanged" AutomationProperties.Name="Center dot" />
                                         <TextBlock Style="{StaticResource Label}" Text="CENTER DOT" VerticalAlignment="Center" Margin="8,0,0,0" />
+
+                                        <!-- The dot's own colour. It used to take the crosshair's,
+                                             which made a dot on a crosshair of the same colour
+                                             invisible - the one thing a dot that marks the exact
+                                             aim point must not be. -->
+                                        <Button x:Name="XhDotColorButton" Style="{StaticResource XhColorChip}"
+                                                Click="OnXhDotColorClick"
+                                                ToolTip="Center dot color" AutomationProperties.Name="Center dot color">
+                                            <!-- The wheel behind this is the button's template; the
+                                                 dot is the colour the centre dot is wearing, at the
+                                                 same size and edge as the custom swatch's picked dot. -->
+                                            <Ellipse x:Name="XhDotColorChip" Width="10" Height="10"
+                                                     Fill="#3CFF5A" Stroke="#88000000" StrokeThickness="1" />
+                                        </Button>
                                     </StackPanel>
 
-                                    <TextBlock Style="{StaticResource CardSub}" Margin="0,22,0,0" TextWrapping="Wrap"
-                                               Text="Works in borderless and windowed games. Exclusive fullscreen hides it." />
+                                    <!-- The dot's picker: the same one the crosshair colour uses,
+                                         opened under the chip, live as the mouse moves. -->
+                                    <Popup x:Name="XhDotColorPopup" PlacementTarget="{Binding ElementName=XhDotColorButton}"
+                                           Placement="Bottom" StaysOpen="False" AllowsTransparency="True"
+                                           PopupAnimation="Fade" Closed="OnXhDotColorPopupClosed">
+                                        <Border Style="{StaticResource Hero}" Padding="14" Margin="0,8,16,16">
+                                            <StackPanel>
+                                                <TextBlock Style="{StaticResource SectionHeader}" Text="CENTER DOT COLOR" Margin="0,0,0,10" />
+                                                <ui:HsvPicker x:Name="XhDotHsv" ColorChanged="OnXhDotHsvChanged" />
+                                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                                    <Border x:Name="XhDotPickPreview" Width="28" Height="28" CornerRadius="14"
+                                                            BorderBrush="#33FFFFFF" BorderThickness="1" Margin="0,0,10,0" />
+                                                    <TextBox x:Name="XhDotPickHex" Style="{StaticResource ModernTextBox}" Width="104" Height="28" MaxLength="7"
+                                                             VerticalContentAlignment="Center" Margin="0,0,10,0"
+                                                             KeyDown="OnXhDotPickHexKeyDown" LostFocus="OnXhDotPickHexCommit" AutomationProperties.Name="Center dot color hex" />
+                                                    <Button Content="Done" Style="{StaticResource PrimaryButtonCrosshair}" MinWidth="70" Click="OnXhDotColorDoneClick"
+                                                            AutomationProperties.Name="Close the center dot color picker" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Border>
+                                    </Popup>
+
+
                                 </StackPanel>
                             </Grid>
 
@@ -2127,9 +2275,34 @@
                                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                                     <Ellipse x:Name="XhLiveDot" Width="6" Height="6" Fill="{StaticResource TextLow}" VerticalAlignment="Center" Margin="0,0,8,0" />
                                     <TextBlock x:Name="XhStatusText" Style="{StaticResource CardSub}" VerticalAlignment="Center" Text="Hidden" />
+
+                                    <!-- OLED wear, beside the thing it acts on: whether there is
+                                         a crosshair on the screen. One switch and no options -
+                                         the only lever with a real effect is spending less time
+                                         lit, and the moment nobody is at the keyboard is the
+                                         time that costs nothing to give up. It used to be a
+                                         block of its own in the column, which is what pushed
+                                         the switches and the effect sliders off the page. -->
+                                    <ui:SwitchToggle x:Name="XhOledBox" Style="{StaticResource SwitchTrack}" Accent="{StaticResource AccentCrosshair}"
+                                                     Margin="18,0,0,0" VerticalAlignment="Center"
+                                                     Checked="OnXhOledChanged" Unchecked="OnXhOledChanged"
+                                                     ToolTip="Hides after 15 min idle"
+                                                     AutomationProperties.Name="OLED guard" />
+                                    <TextBlock Style="{StaticResource Label}" Text="OLED GUARD" VerticalAlignment="Center" Margin="8,0,0,0" />
                                 </StackPanel>
-                                <Button x:Name="XhShowButton" Grid.Column="1" Content="Show on screen" Style="{StaticResource PrimaryButtonCrosshair}" MinWidth="150"
-                                        VerticalAlignment="Center" Click="OnXhShowClick" AutomationProperties.Name="Show or hide the crosshair" />
+                                <!-- Reset sits with the button that puts the crosshair on the
+                                     screen, because that is where a crosshair that has been
+                                     tuned into a mess gets undone. It was in the SHAPE row,
+                                     where nothing about it was about shape and nobody found
+                                     it. -->
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button x:Name="XhResetButton" Content="Reset" Style="{StaticResource GhostButton}"
+                                            Margin="0,0,10,0" Click="OnXhResetClick"
+                                            ToolTip="Back to the default color and tuning, keeping this shape and picture"
+                                            AutomationProperties.Name="Reset the crosshair to its defaults" />
+                                    <Button x:Name="XhShowButton" Content="Show on screen" Style="{StaticResource PrimaryButtonCrosshair}" MinWidth="150"
+                                            VerticalAlignment="Center" Click="OnXhShowClick" AutomationProperties.Name="Show or hide the crosshair" />
+                                </StackPanel>
                                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right">
                                     <TextBlock Style="{StaticResource Label}" Text="KEY" VerticalAlignment="Center" Margin="0,0,8,0" />
                                     <TextBox x:Name="CrosshairKeyBox" Style="{StaticResource KeyCap}"

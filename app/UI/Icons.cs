@@ -30,6 +30,19 @@ public static class Icons
         "M 6.6 6.6 L 7.5 19.5 A 1.4 1.4 0 0 0 8.9 20.9 H 15.1 A 1.4 1.4 0 0 0 16.5 19.5 L 17.4 6.6 " +
         "M 10.1 10 V 17 M 13.9 10 V 17");
 
+    /// <summary>
+    /// Two sheets, one behind the other, for "make a copy of this preset".
+    /// </summary>
+    /// <remarks>
+    /// The back sheet is left open along the edges the front one covers, rather than
+    /// being drawn whole: the glyph is stroked and unfilled, so a closed back sheet
+    /// would show its outline running straight through the front one and read as
+    /// three overlapping boxes instead of two sheets.
+    /// </remarks>
+    public static Geometry Copy { get; } = Freeze(
+        "M 7.5 9 V 5 A 1.5 1.5 0 0 1 9 3.5 H 18 A 1.5 1.5 0 0 1 19.5 5 V 16 A 1.5 1.5 0 0 1 18 17.5 H 15 " +
+        "M 3.5 10.5 A 1.5 1.5 0 0 1 5 9 H 13.5 A 1.5 1.5 0 0 1 15 10.5 V 19 A 1.5 1.5 0 0 1 13.5 20.5 H 5 A 1.5 1.5 0 0 1 3.5 19 Z");
+
     public static Geometry Refresh { get; } = Freeze(
         "M 21.5 3.6 L 21.5 9.2 L 15.9 9.2 " +
         "M 19.1 14.4 A 8 8 0 1 1 17.2 6.1 L 21.5 9.2");
@@ -129,6 +142,10 @@ public static class Icons
 
         // The arrow head is heavier than the tail it sweeps from.
         [Refresh] = new Point(0.28, 0.93),
+
+        // The front sheet carries more of the ink and sits low and left of the
+        // middle of the pair, so the mark wants a nudge to the right.
+        [Copy] = new Point(0.44, 0.00),
 
         // The ring carries nearly all the mass and the handle almost none, so the
         // mark wants to sit down and right of the middle of its own box.

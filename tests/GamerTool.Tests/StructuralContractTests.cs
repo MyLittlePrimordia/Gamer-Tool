@@ -43,6 +43,7 @@ public class StructuralContractTests
         "MainWindow.Modal.cs",
         "MainWindow.Backup.cs",
         "MainWindow.Crosshair.cs",
+        "MainWindow.Oled.cs",
     };
 
     [Fact]
@@ -58,7 +59,7 @@ public class StructuralContractTests
                 + "by path, so moving one breaks the suite without changing behaviour.");
         }
 
-        // And nothing new has appeared beside them. An eleventh partial is not wrong in
+        // And nothing new has appeared beside them. Another partial is not wrong in
         // itself, but it is the shape of change this contract exists to make
         // somebody stop and think about, because every source-text test that scans
         // a partial is now scanning an incomplete picture of the window.
@@ -85,9 +86,9 @@ public class StructuralContractTests
         // of the window silently, and the x:Name lookups in the XAML would fail at
         // runtime rather than at build time.
         //
-        // Matched on the declaration without the base list, because only one of the
-        // ten carries ": Window" - the rest are bare partials, and there is no
-        // reason for the one that states the base type to be a particular file.
+        // Matched on the declaration without the base list, because only one of them
+        // carries ": Window" - the rest are bare partials, and there is no reason for
+        // the one that states the base type to be a particular file.
         foreach (string partial in WindowPartials)
         {
             string source = File.ReadAllText(Path.Combine(AppRoot(), partial));

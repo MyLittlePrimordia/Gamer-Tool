@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using GamerTool.Models;
@@ -49,6 +50,47 @@ public sealed class BackupFile
     /// </para>
     /// </summary>
     public AppSettings? Settings { get; set; }
+
+    /// <summary>
+    /// The crosshair pictures the settings above refer to, carried inside the file.
+    /// <para>
+    /// Version 1 carried only the settings, and a preset names its picture by file
+    /// name inside this app's own folder - so those backups restored presets that
+    /// pointed at pictures the new machine had never seen. The preset quietly drew
+    /// as a shape, and the missing files could then be pruned as unused.
+    /// </para>
+    /// <para>
+    /// Base64 rather than a folder or a zip, because a backup is one file somebody
+    /// can hand to somebody else, and that is the whole shape of the feature.
+    /// </para>
+    /// <para>
+    /// Null rather than an empty list when there is nothing to carry, so a profile
+    /// with no custom crosshairs exports exactly as it did before and an unchanged
+    /// export stays byte-for-byte reproducible.
+    /// </para>
+    /// </summary>
+    public List<BackupPicture>? Pictures { get; set; }
+}
+
+/// <summary>
+/// One stored crosshair picture, as it sits in a backup file.
+/// <para>
+/// The timing file is carried as text beside the picture rather than as fields,
+/// because it is what the store writes and what the store reads back; parsing and
+/// re-writing it here would be a second opinion about a format that already has
+/// one. It is still verified against the strip on the way in.
+/// </para>
+/// </summary>
+public sealed class BackupPicture
+{
+    /// <summary>The file name inside the crosshair folder. Never a path.</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>The stored PNG, base64.</summary>
+    public string Data { get; set; } = string.Empty;
+
+    /// <summary>The animation's timings, or null for a still.</summary>
+    public string? Timing { get; set; }
 }
 
 public sealed class RestoreReport
@@ -86,6 +128,28 @@ public sealed class RestoreReport
 
     public int ScreensReset { get; set; }
 
+    /// <summary>Pictures the file carried that were written to this PC.</summary>
+    public int PicturesRestored { get; set; }
+
+    /// <summary>
+    /// Presets naming a picture neither the file nor this PC has, so that crosshair
+    /// will draw as its shape instead of its picture.
+    /// <para>
+    /// Counted against the preset rather than the picture, because that is what the
+    /// user has to look at: a preset can name one picture, and a picture can be
+    /// named by several, so both numbers are true and only one of them is on screen.
+    /// </para>
+    /// </summary>
+    public int PicturesMissing { get; set; }
+
+    /// <summary>
+    /// Pictures the file carried that were refused, and why is in the log. A backup
+    /// is written by another copy of this app but read from a file that anything can
+    /// edit, so a payload that is not a picture it could have written is dropped
+    /// rather than trusted.
+    /// </summary>
+    public int PicturesRejected { get; set; }
+
     public int KeysCleared { get; set; }
 
     public bool SoundDeviceReset { get; set; }
@@ -110,6 +174,8 @@ public sealed class RestoreReport
                 || SlotsLostLaunch > 0
                 || FxSoundConsentReset > 0
                 || ScreensReset > 0
+                || PicturesMissing > 0
+                || PicturesRejected > 0
                 || KeysCleared > 0
                 || SoundDeviceReset
                 || FxSoundPathReset;
@@ -135,6 +201,8 @@ public sealed class RestoreReport
             Add(parts, SlotsCleared, "GAME MISSING, TARGET CLEARED");
             Add(parts, KeysCleared, "DUPLICATE KEYS CLEARED");
             Add(parts, SlotsLostScreen + SlotsLostSound, "MISSING PRESET CLEARED");
+            Add(parts, PicturesMissing, "CROSSHAIR PICTURE MISSING");
+            Add(parts, PicturesRejected, "CROSSHAIR PICTURE SKIPPED");
             Add(parts, SlotsLostRoute, "AUDIO ROUTE CLEARED");
             Add(parts, SlotsLostLaunch, "LAUNCHER LINK CLEARED");
             Add(parts, FxSoundConsentReset, "FXSOUND PERMISSION RESET");
@@ -166,7 +234,27 @@ public sealed class BackupService
 {
     public const string FormatTag = "GamerTool.Backup";
 
-    public const int FormatVersion = 1;
+    /// <summary>
+    /// Version 2 added the crosshair pictures.
+    /// <para>
+    /// A version 1 file still imports - the reader takes anything up to the current
+    /// version - and a version 2 file is refused by a build that only knows version
+    /// 1. That is the right way round: the alternative is silently restoring a
+    /// profile whose pictures the older build would never write.
+    /// </para>
+    /// </summary>
+    public const int FormatVersion = 2;
+
+    /// <summary>
+    /// Largest backup accepted, in bytes.
+    /// <para>
+    /// Over the settings file's ceiling because a version 2 backup also carries the
+    /// crosshair pictures, and an animation strip is the biggest thing this app
+    /// stores. Still bounded: a file past this is not one this app wrote, and half a
+    /// JSON document is not a shorter backup.
+    /// </para>
+    /// </summary>
+    public const long MaxFileBytes = 32L * 1024 * 1024;
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -174,12 +262,32 @@ public sealed class BackupService
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
+    private readonly string? _pictureFolder;
+
+    /// <summary>
+    /// <paramref name="pictureFolder"/> exists so a test can put its pictures
+    /// somewhere disposable, the same reason <see cref="ProfileManager"/> takes a
+    /// folder. The default is the live crosshair folder, resolved per use rather
+    /// than captured, because portable mode is decided by a file that can appear
+    /// beside the executable at any time.
+    /// </summary>
+    public BackupService(string? pictureFolder = null)
+    {
+        _pictureFolder = pictureFolder;
+    }
+
+    private string PictureFolder => _pictureFolder ?? CrosshairImageStore.Folder;
+
     public string SuggestedFileName()
     {
         return "GamerTool-Backup-" + DateTime.Now.ToString("yyyyMMdd-HHmm", System.Globalization.CultureInfo.InvariantCulture) + ".json";
     }
 
-    public void Export(AppSettings settings, string path)
+    /// <summary>
+    /// Writes the profile, and the crosshair pictures it refers to, to one file.
+    /// </summary>
+    /// <returns>How many pictures travelled with it, so the page can say.</returns>
+    public int Export(AppSettings settings, string path)
     {
         BackupFile file = new()
         {
@@ -187,6 +295,15 @@ public sealed class BackupService
             Version = FormatVersion,
             Settings = settings
         };
+
+        // Collected before the file is serialised and outside the profile's gate:
+        // reading a folder of pictures is a disk wait, and the gate exists to stop
+        // the backlight worker and the save racing, not to make a save slow.
+        List<BackupPicture> pictures = CollectPictures(settings);
+        if (pictures.Count > 0)
+        {
+            file.Pictures = pictures;
+        }
 
         string? folder = Path.GetDirectoryName(path);
         if (!string.IsNullOrWhiteSpace(folder))
@@ -221,6 +338,8 @@ public sealed class BackupService
         string temp = path + ".tmp";
         File.WriteAllText(temp, json);
         ProfileManager.AtomicSwap(temp, path);
+
+        return pictures.Count;
     }
 
     public AppSettings? Import(string path, out RestoreReport report, out string error)
@@ -236,8 +355,11 @@ public sealed class BackupService
                 return null;
             }
 
-            string json = BoundedRead.AllText(path);
-            AppSettings? settings = Read(json);
+            // The ceiling is the backup's own rather than the settings file's: a
+            // version 2 backup also carries the crosshair pictures, and an
+            // animation strip is the largest thing this app stores.
+            string json = BoundedRead.AllText(path, MaxFileBytes);
+            AppSettings? settings = Read(json, out List<BackupPicture> pictures);
             if (settings is null)
             {
                 error = "NOT A GAMER TOOL BACKUP";
@@ -245,10 +367,16 @@ public sealed class BackupService
             }
 
             // brandNew is false, and this is the reason the parameter exists. A backup is a
-        // profile somebody actually used, so an empty slot list in one is a decision
-        // they made and are getting back, not a first run that has yet to be given
-        // the shipped slots. Restoring an empty profile used to hand back six.
-        return ProfileManager.Normalize(settings, brandNew: false);
+            // profile somebody actually used, so an empty slot list in one is a decision
+            // they made and are getting back, not a first run that has yet to be given
+            // the shipped slots. Restoring an empty profile used to hand back six.
+            AppSettings normalised = ProfileManager.Normalize(settings, brandNew: false);
+
+            // After Normalize, so the pictures written are the ones the sanitised
+            // presets actually name - a file name Normalize refused is not one worth
+            // writing.
+            ApplyPictures(pictures, normalised, report);
+            return normalised;
         }
         catch (Exception ex)
         {
@@ -287,8 +415,12 @@ public sealed class BackupService
         "GammaLock", "ShowOsd", "StartHidden", "CloseToTray", "AntiClip", "BlueLightFilter"
     };
 
-    private static AppSettings? Read(string json)
+    private static AppSettings? Read(string json, out List<BackupPicture> pictures)
     {
+        // Emptied first as well as on the success path, because a file that turns
+        // out to be one of the bare settings files below carries none by definition.
+        pictures = new List<BackupPicture>();
+
         try
         {
             BackupFile? file = JsonSerializer.Deserialize<BackupFile>(json, Options);
@@ -299,6 +431,11 @@ public sealed class BackupService
                 && file.Settings is not null
                 && file.Settings.Slots is not null)
             {
+                if (file.Pictures is not null)
+                {
+                    pictures = file.Pictures;
+                }
+
                 return file.Settings;
             }
         }
@@ -719,6 +856,166 @@ public sealed class BackupService
         return null;
     }
 
+    /// <summary>
+    /// The stored pictures the settings refer to, read out of the crosshair
+    /// folder to travel inside the file.
+    /// <para>
+    /// Only the referenced ones. The folder is pruned against this same list every
+    /// time the profile is saved, so anything else in it is an import the user
+    /// abandoned, and carrying it would make every backup bigger for pictures no
+    /// preset can reach.
+    /// </para>
+    /// <para>
+    /// A preset whose picture has already gone contributes nothing here. That is
+    /// not a failure to report at export time: the picture is missing on this PC, and
+    /// the restore on the next one says so against the preset that wanted it.
+    /// </para>
+    /// </summary>
+    private List<BackupPicture> CollectPictures(AppSettings settings)
+    {
+        List<BackupPicture> pictures = new();
+        List<string> names;
+
+        // Copied under the profile's gate for the same reason the serialisation is,
+        // and read outside it: the gate is shared with a worker thread and has no
+        // business being held while this waits on a disk.
+        lock (settings.Gate)
+        {
+            names = settings.CustomCrosshairs
+                .Where(preset => CrosshairImageStore.IsSafeName(preset.CustomImage))
+                .Select(preset => preset.CustomImage)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        foreach (string name in names)
+        {
+            if (CrosshairImageStore.ReadForBackup(name, PictureFolder) is not { } stored)
+            {
+                TraceLog.Write("BACKUP PICTURE MISSING AT EXPORT " + name);
+                continue;
+            }
+
+            pictures.Add(new BackupPicture
+            {
+                Name = name,
+                Data = Convert.ToBase64String(stored.Png),
+                Timing = stored.Timing
+            });
+        }
+
+        return pictures;
+    }
+
+    /// <summary>
+    /// Writes the pictures a backup carried into the crosshair folder, and counts
+    /// what could not be accounted for.
+    /// <para>
+    /// Written here rather than when the restore is confirmed, because the report
+    /// the confirmation shows has to be about what actually happened, and
+    /// "3 pictures restored" printed before writing them would be a claim. A restore
+    /// the user then cancels leaves pictures nothing refers to, which is exactly
+    /// what <see cref="CrosshairImageStore.PruneUnused"/> already cleans up after an
+    /// abandoned import.
+    /// </para>
+    /// <para>
+    /// A picture the file does not carry is only reported when this PC does not
+    /// already have it. Restoring your own backup on the machine it came from must
+    /// not announce that every crosshair picture is missing.
+    /// </para>
+    /// </summary>
+    private void ApplyPictures(
+        IReadOnlyList<BackupPicture> pictures,
+        AppSettings settings,
+        RestoreReport report)
+    {
+        Dictionary<string, BackupPicture> carried = new(StringComparer.OrdinalIgnoreCase);
+        foreach (BackupPicture picture in pictures)
+        {
+            if (picture is not null && CrosshairImageStore.IsSafeName(picture.Name))
+            {
+                // Last one wins, so a file naming the same picture twice settles on
+                // one answer rather than writing both and calling it restored twice.
+                carried[picture.Name] = picture;
+            }
+        }
+
+        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string name in ReferencedPictures(settings))
+        {
+            if (!seen.Add(name))
+            {
+                continue;
+            }
+
+            if (carried.TryGetValue(name, out BackupPicture? picture))
+            {
+                // Four base64 characters carry three bytes, so the size a payload
+                // claims is known before decoding it. A file naming a hundred
+                // megabyte picture is refused here rather than after allocating it;
+                // the store refuses the same size again once it has bytes.
+                if (picture.Data is null
+                    || (long)picture.Data.Length / 4 * 3 > CrosshairImageStore.MaxBackupBytes)
+                {
+                    report.PicturesRejected++;
+                    TraceLog.Write("BACKUP PICTURE " + name + " <- larger than this app ever stores");
+                    continue;
+                }
+
+                byte[]? png = FromBase64(picture.Data);
+                string problem = "the data is not base64";
+
+                if (png is not null
+                    && CrosshairImageStore.WriteFromBackup(name, png, picture.Timing, PictureFolder, out problem))
+                {
+                    report.PicturesRestored++;
+                }
+                else
+                {
+                    report.PicturesRejected++;
+                    TraceLog.Write("BACKUP PICTURE " + name + " <- " + problem);
+                }
+
+                continue;
+            }
+
+            if (!File.Exists(Path.Combine(PictureFolder, name)))
+            {
+                report.PicturesMissing++;
+                TraceLog.Write("BACKUP PICTURE " + name + " <- not in the file and not on this PC");
+            }
+        }
+    }
+
+    private static IEnumerable<string> ReferencedPictures(AppSettings settings)
+    {
+        foreach (CrosshairPreset preset in settings.CustomCrosshairs)
+        {
+            if (CrosshairImageStore.IsSafeName(preset.CustomImage))
+            {
+                yield return preset.CustomImage;
+            }
+        }
+    }
+
+    private static byte[]? FromBase64(string? data)
+    {
+        if (string.IsNullOrWhiteSpace(data))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Convert.FromBase64String(data);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
     private static void BuildNotes(RestoreReport report)
     {
         if (report.SlotsCleared > 0)
@@ -769,6 +1066,16 @@ public sealed class BackupService
         if (report.FxSoundPathReset)
         {
             report.Notes.Add("The saved FxSound path was not one this PC would start, so the one found here is used instead.");
+        }
+
+        if (report.PicturesMissing > 0)
+        {
+            report.Notes.Add("A crosshair picture was not in the backup and is not on this PC, so that crosshair shows its shape instead. The preset is still there and can be pointed at another picture.");
+        }
+
+        if (report.PicturesRejected > 0)
+        {
+            report.Notes.Add("A crosshair picture in the backup was not one this app could use, so it was skipped. The log names it.");
         }
     }
 }

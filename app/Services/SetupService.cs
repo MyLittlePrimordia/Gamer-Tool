@@ -640,11 +640,29 @@ public sealed class SetupService
         }
     }
 
+    /// <summary>
+    /// Whether <see cref="IsInstalled"/> may go looking for the engine in the places
+    /// it is normally installed.
+    /// <para>
+    /// On in the app, where finding a custom install is the whole point. Off in the
+    /// headless window, because adoption happens after the path was set: a test that
+    /// says "this PC has no FxSound" would otherwise have the copy on the machine
+    /// running the suite adopted a moment later, and the next fader move would push a
+    /// tune into it.
+    /// </para>
+    /// </summary>
+    public bool DiscoversInstalledEngine { get; set; } = true;
+
     public bool IsInstalled(AudioService audio)
     {
         if (audio.IsInstalled)
         {
             return true;
+        }
+
+        if (!DiscoversInstalledEngine)
+        {
+            return false;
         }
 
         AdoptInstalledPath(audio);

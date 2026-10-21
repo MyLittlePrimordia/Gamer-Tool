@@ -18,17 +18,28 @@ namespace GamerTool.Services;
 /// picture that is simply sitting on the screen costs nothing, the same as a
 /// drawn shape.
 /// </para>
+/// <para>
+/// Size measures the picture's visible pixels, not its file. A picture is drawn
+/// from the rectangle its art occupies, so a small crosshair in a large canvas
+/// fills Size instead of sitting in the middle of it at a fraction of its size,
+/// and the shape of the art is kept rather than squared off.
+/// </para>
 /// <list type="bullet">
 /// <item><b>Colour</b> multiplies the picture by the chosen colour. A white
 /// picture, which is what the pack is made of, becomes exactly that colour; a
-/// coloured picture is tinted, and white leaves it as it came.</item>
+/// coloured picture is tinted, and white leaves it as it came. A picture set to
+/// keep its own colours skips the multiply entirely, so what was drawn is what
+/// is seen.</item>
 /// <item><b>Thickness</b> above 2 makes the lines of the picture bolder, by
 /// growing its shape outward. At 2 and below the picture is untouched, so a
 /// picture looks as drawn until the slider is moved.</item>
 /// <item><b>Gap</b> clears a disc at the middle of the picture, the way it opens
 /// the middle of a drawn cross.</item>
 /// <item><b>Outline</b> is a one pixel black edge round the whole shape.</item>
-/// <item><b>Glow</b> is a soft halo in the colour, made by blurring the shape.</item>
+/// <item><b>Glow</b> is a soft halo in the colour, made by blurring the shape.
+/// It stays in the colour even when the picture keeps its own: the halo is drawn
+/// round the picture rather than part of it, and a multi-coloured picture has no
+/// single colour to blur in its place.</item>
 /// </list>
 /// </summary>
 public static class CrosshairImageComposer
@@ -42,6 +53,24 @@ public static class CrosshairImageComposer
     /// pixels one crosshair pixel is.
     /// </summary>
     public static BitmapSource? Compose(BitmapSource source, CrosshairPreset preset, double scale, out double sideUnits)
+    {
+        return Compose(source, preset, scale, default, out sideUnits);
+    }
+
+    /// <summary>
+    /// The same, for a picture that knows which part of itself is drawn.
+    /// <paramref name="content"/> is that part, in source pixels, or empty for all of
+    /// it. Size then measures the crosshair rather than the transparent margin the
+    /// file keeps round it: an imported animation is usually the size of its canvas,
+    /// not of the art, and scaling the canvas made a small crosshair in a big file
+    /// impossible to make any bigger.
+    /// </summary>
+    public static BitmapSource? Compose(
+        BitmapSource source,
+        CrosshairPreset preset,
+        double scale,
+        Int32Rect content,
+        out double sideUnits)
     {
         sideUnits = 0;
 
@@ -60,8 +89,16 @@ public static class CrosshairImageComposer
                 width++;
             }
 
-            byte[] image = Render(source, side, width);
-            Tint(image, preset.Color);
+            (BitmapSource picture, int drawWidth, int drawHeight) = FitToSize(source, content, side);
+            byte[] image = Render(picture, drawWidth, drawHeight, width);
+
+            // Skipped rather than multiplied by white, because a picture rarely has
+            // pure white lines: multiplying a pale blue one by white is not the same
+            // as leaving it alone, and pale pixels are exactly where that shows.
+            if (!preset.KeepOwnColours)
+            {
+                Tint(image, preset.Color);
+            }
 
             if (grow > 0)
             {
@@ -134,15 +171,58 @@ public static class CrosshairImageComposer
         }
     }
 
+    /// <summary>
+    /// The part of the picture that is drawn, and the size to draw it at: the content
+    /// rectangle cropped out of the source, with its longest side made exactly
+    /// <paramref name="side"/> and the other side kept in proportion, so a wide
+    /// crosshair is not squashed into a square.
+    /// </summary>
+    private static (BitmapSource Picture, int Width, int Height) FitToSize(
+        BitmapSource source,
+        Int32Rect content,
+        int side)
+    {
+        BitmapSource picture = source;
+        int width = source.PixelWidth;
+        int height = source.PixelHeight;
+
+        if (content.Width > 0
+            && content.Height > 0
+            && content.X >= 0
+            && content.Y >= 0
+            && content.X + content.Width <= width
+            && content.Y + content.Height <= height
+            && (content.Width != width || content.Height != height))
+        {
+            var cropped = new CroppedBitmap(source, content);
+            cropped.Freeze();
+            picture = cropped;
+            width = content.Width;
+            height = content.Height;
+        }
+
+        if (width < 1 || height < 1)
+        {
+            return (picture, side, side);
+        }
+
+        return width >= height
+            ? (picture, side, Math.Max(1, (int)Math.Round((double)side * height / width)))
+            : (picture, Math.Max(1, (int)Math.Round((double)side * width / height)), side);
+    }
+
     /// <summary>Draw the picture, scaled, in the middle of a transparent square and read the pixels back.</summary>
-    private static byte[] Render(BitmapSource source, int side, int width)
+    private static byte[] Render(BitmapSource source, int drawWidth, int drawHeight, int width)
     {
         var visual = new DrawingVisual();
         RenderOptions.SetBitmapScalingMode(visual, BitmapScalingMode.HighQuality);
         using (DrawingContext dc = visual.RenderOpen())
         {
-            double offset = (width - side) / 2.0;
-            dc.DrawImage(source, new Rect(offset, offset, side, side));
+            dc.DrawImage(source, new Rect(
+                (width - drawWidth) / 2.0,
+                (width - drawHeight) / 2.0,
+                drawWidth,
+                drawHeight));
         }
 
         var target = new RenderTargetBitmap(width, width, 96, 96, PixelFormats.Pbgra32);

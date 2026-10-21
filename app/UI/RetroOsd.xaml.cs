@@ -2,8 +2,10 @@ using System;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
+using GamerTool.Services;
 namespace GamerTool.UI;
 
 public partial class RetroOsd : Window
@@ -17,7 +19,41 @@ public partial class RetroOsd : Window
     private const int WsExTopmost = 0x00000008;
 
     private const int WsExToolWindow = 0x00000080;
-public RetroOsd()
+
+    private const uint SwpNoSize = 0x0001;
+
+    private const uint SwpNoZOrder = 0x0004;
+
+    private const uint SwpNoActivate = 0x0010;
+
+    /// <summary>The window handle, once there is one. Zero before the first show.</summary>
+    private IntPtr _handle;
+
+    /// <summary>
+    /// The work area this toast was asked to use, or null for "whichever screen the
+    /// foreground window is on".
+    /// <para>
+    /// Asked for per toast rather than held, because the caller that knows better
+    /// than the foreground window is the one starting a game: Play knows the screen
+    /// the slot is keyed to, and at that moment the foreground window is still this
+    /// app or a launcher, not the game.
+    /// </para>
+    /// </summary>
+    private Rect? _requestedScreen;
+
+    /// <summary>The work area actually in use, in physical pixels.</summary>
+    private Rect _screen;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    public RetroOsd()
     {
         InitializeComponent();
 
@@ -48,16 +84,33 @@ public RetroOsd()
     public DispatcherTimer HideTimer { get; }
 
     /// <summary>
-    /// One short line, centred at the top of the screen. The message is trimmed to
+    /// One short line, centred at the top of a screen. The message is trimmed to
     /// a single line so a long one cannot push the plate wider than the screen.
     /// </summary>
-    public void ShowToast(string message, bool warn = false)
+    /// <param name="screen">
+    /// The work area, in physical pixels, to put it on. Null means the screen the
+    /// foreground window is on, which is the game whenever a hotkey or an automatic
+    /// slot load is what caused the toast.
+    /// </param>
+    public void ShowToast(string message, bool warn = false, Rect? screen = null)
     {
         HeadText.Text = string.IsNullOrWhiteSpace(message) ? "Gamer Tool" : message.Trim();
         Dot.Fill = new System.Windows.Media.SolidColorBrush(
             (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(warn ? "#F5A524" : "#2DD4BF"));
+
+        _requestedScreen = screen;
         Prepare();
+
         Show();
+
+        // Placed a second time now that the window exists and the plate has been
+        // measured: the first placement above runs before there is a handle to move
+        // on the very first toast, and before the text has been laid out on every
+        // one. This runs before Pulse makes the plate visible, so the approximate
+        // position is never painted.
+        UpdateLayout();
+        Place();
+
         Pulse();
     }
 
@@ -65,29 +118,78 @@ public RetroOsd()
     {
         UpdateLayout();
 
-        // Centred on whichever monitor the pointer area sits on, falling back to
-        // the primary screen, so a second display does not push it off screen.
-        Rect area = SystemParameters.WorkArea;
-        double width = ActualWidth > 0 ? ActualWidth : 320.0;
-        double height = ActualHeight > 0 ? ActualHeight : 44.0;
+        // Which screen, asked for again on every toast: a game taking over another
+        // monitor, a display being unplugged or a dock being connected all change
+        // the answer, and all of them can happen between two toasts.
+        _screen = _requestedScreen ?? MonitorWorkArea.ForForeground();
 
-        Left = area.Left + ((area.Width - width) / 2.0);
-        Top = area.Top + 10.0;
-
-        if (Left < area.Left)
-        {
-            Left = area.Left;
-        }
-
-        if (Top + height > area.Bottom)
-        {
-            Top = area.Bottom - height;
-        }
+        Place();
 
         // Opacity is not touched here. Pulse owns it, because Pulse is the only
         // thing that has to detach the previous animation before writing to it,
         // and an assignment made here would be underneath that animation and do
         // nothing.
+    }
+
+    /// <summary>
+    /// Moves the plate into its place on <see cref="_screen"/>, in physical pixels.
+    /// <para>
+    /// Straight to pixels with <c>SetWindowPos</c>, the same as the crosshair
+    /// overlay and for the same reason: <c>Left</c> and <c>Top</c> are device
+    /// independent units of whichever screen the window was last on, which is the
+    /// wrong ruler for putting a window on an exact pixel of a screen with a
+    /// different scale. The arithmetic itself is in <see cref="ToastPlacement"/>,
+    /// where it can be tested without a desktop.
+    /// </para>
+    /// <para>
+    /// The size is read back from the window rather than from
+    /// <c>ActualWidth</c>/<c>ActualHeight</c>, which are device independent units
+    /// and would put the plate off centre by the scale factor on any screen that is
+    /// not at 100%.
+    /// </para>
+    /// </summary>
+    private void Place()
+    {
+        if (_handle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        if (!GetWindowRect(_handle, out NativeRect rect))
+        {
+            return;
+        }
+
+        int width = rect.Right - rect.Left;
+        int height = rect.Bottom - rect.Top;
+        if (width <= 0 || height <= 0)
+        {
+            return;
+        }
+
+        DpiScale dpi = VisualTreeHelper.GetDpi(this);
+        (int x, int y) = ToastPlacement.TopLeft(
+            _screen,
+            width,
+            height,
+            ToastPlacement.TopMargin * dpi.DpiScaleY);
+
+        // Topmost is not re-asserted here: the window is created topmost and
+        // SWP_NOZORDER leaves the z-order alone, so it stays above the game.
+        SetWindowPos(_handle, IntPtr.Zero, x, y, 0, 0, SwpNoSize | SwpNoZOrder | SwpNoActivate);
+    }
+
+    /// <summary>
+    /// Windows resizes a window to keep it the same size in device independent
+    /// units when it crosses onto a screen with a different scale, so its pixel
+    /// width changes and the centring has to be done over.
+    /// </summary>
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+
+        // After the layout pass, so the size that gets measured is the new one.
+        Dispatcher.BeginInvoke(new Action(Place), DispatcherPriority.Loaded);
     }
 
     private void OnOsdLoaded(object sender, RoutedEventArgs e)
@@ -97,6 +199,8 @@ public RetroOsd()
         {
             return;
         }
+
+        _handle = handle;
 
         int style = GetWindowLongPtr(handle, GwlExStyle).ToInt32();
         style |= WsExTransparent | WsExNoActivate | WsExTopmost | WsExToolWindow;
@@ -111,7 +215,7 @@ public RetroOsd()
     /// </para>
     /// <para>
     /// The fade was attached to <c>Frame</c>, the border inside the window, while
-    /// <see cref="Prepare"/> set <c>Opacity</c> on the window. Those are two
+    /// the code that reset it wrote <c>Opacity</c> on the window. Those are two
     /// different elements, so the assignment the code relied on to bring the toast
     /// back was writing a property nothing was reading.
     /// </para>
@@ -175,6 +279,12 @@ public RetroOsd()
         HideTimer.Stop();
         Hide();
     }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rect);
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLong")]
     private static extern int GetWindowLong32(IntPtr hwnd, int index);

@@ -698,17 +698,30 @@
         </Setter>
     </Style>
 
-    <!-- Custom-colour swatch: same size as XhSwatch, but the fill disc has no
-         permanent light stroke. That ring is correct on solid colours and is the
-         thing that makes a centred + look off-centre against an always-on circle. -->
+    <!-- Custom-colour swatch: a rainbow wheel, because a + in a circle said
+         nothing about colour and read as "add" rather than "pick". The wheel has
+         no permanent light stroke round its fill; that ring belongs on a solid
+         colour, not on the wheel's own rim.
+
+         The dot in the middle is the colour picked, and only shows when this
+         swatch is the checked one, so a custom choice is still visible in the row
+         instead of living only in the ring. Its Fill is the button's Background,
+         which the tab sets to the chosen colour. -->
     <Style x:Key="XhSwatchCustom" TargetType="RadioButton" BasedOn="{StaticResource XhSwatch}">
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="RadioButton">
                     <Grid Background="Transparent">
                         <Ellipse x:Name="Ring" Stroke="Transparent" StrokeThickness="2" />
-                        <Ellipse Margin="5" Fill="{TemplateBinding Background}" />
-                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <Ellipse Margin="5">
+                            <Ellipse.Fill>
+                                <ImageBrush ImageSource="{x:Static ui:ColorWheel.Wheel}" Stretch="Fill" />
+                            </Ellipse.Fill>
+                        </Ellipse>
+                        <Ellipse x:Name="Picked" Width="10" Height="10"
+                                 Fill="{TemplateBinding Background}"
+                                 Stroke="#88000000" StrokeThickness="1"
+                                 Visibility="Collapsed" />
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
@@ -716,12 +729,52 @@
                         </Trigger>
                         <Trigger Property="IsChecked" Value="True">
                             <Setter TargetName="Ring" Property="Stroke" Value="{StaticResource TextHi}" />
+                            <Setter TargetName="Picked" Property="Visibility" Value="Visible" />
                         </Trigger>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
                             <Setter TargetName="Ring" Property="Stroke" Value="{StaticResource FocusRing}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="Ring" Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A current colour that opens a picker when pressed: the centre dot's own
+         colour, beside its switch. It carries the same rainbow wheel as the custom
+         swatch, because both open a picker and one of them looking like a plain chip
+         made the dot look as if it could only be one of the six colours above. The
+         dot in the middle is the colour in use. -->
+    <Style x:Key="XhColorChip" TargetType="Button">
+        <Setter Property="Width" Value="24" />
+        <Setter Property="Height" Value="24" />
+        <Setter Property="Margin" Value="10,0,0,0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Focusable" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid Background="Transparent">
+                        <Ellipse Margin="1">
+                            <Ellipse.Fill>
+                                <ImageBrush ImageSource="{x:Static ui:ColorWheel.Wheel}" Stretch="Fill" />
+                            </Ellipse.Fill>
+                        </Ellipse>
+                        <Ellipse x:Name="Ring" Stroke="Transparent" StrokeThickness="1" />
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Ring" Property="Stroke" Value="{StaticResource TextHi}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="Ring" Property="Stroke" Value="{StaticResource FocusRing}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.4" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -1554,6 +1607,10 @@
         <Setter Property="Foreground" Value="{StaticResource TextHi}" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Height" Value="28" />
+
+        <!-- What the dropdown is allowed to be tall. A long list still scrolls past
+             this; a short one shows every row without a scrollbar. -->
+        <Setter Property="MaxDropDownHeight" Value="300" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ComboBox">
@@ -1588,7 +1645,11 @@
                             <Border Background="#0A0A0A" BorderBrush="{StaticResource LineStrong}" BorderThickness="1"
                                     CornerRadius="{StaticResource RadiusControl}" Padding="4"
                                     MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}">
-                                <ScrollViewer MaxHeight="300" VerticalScrollBarVisibility="Auto">
+                                <!-- The cap is the combo's own MaxDropDownHeight rather than a
+                                     number written here, so a list whose rows are taller than
+                                     the ordinary text ones can ask for room to show them all
+                                     instead of arriving with a scrollbar and a half row. -->
+                                <ScrollViewer MaxHeight="{TemplateBinding MaxDropDownHeight}" VerticalScrollBarVisibility="Auto">
                                     <ItemsPresenter />
                                 </ScrollViewer>
                             </Border>

@@ -33,14 +33,12 @@ namespace GamerTool.Tests;
 /// type up, and apply the template to it, which is the exact step that threw.
 /// </para>
 /// <para>
-/// <b>What this does not cover:</b> XAML that lives outside the theme and is not a
-/// dictionary, which in practice means the markup in MainWindow.xaml. That file
-/// mostly consumes styles rather than defining templates, and loading it in a test
-/// would mean running its constructor, which builds the window, wires hotkeys and
-/// reaches for the displays. A guard that covered it would have to be a lint
-/// rather than a load, and a lint written against one crash tends to grow into a
-/// general XAML linter that cries wolf. This is deliberately the load, and it is
-/// deliberately the layer that actually broke.
+/// <b>What this does not cover:</b> the markup in MainWindow.xaml. That file mostly
+/// consumes styles rather than defining templates, and loading it through the
+/// shipping constructor would drag hotkeys, the tray and the displays into the
+/// suite. <see cref="WindowHarness"/> does load the whole file, through the window's
+/// headless constructor, so a template broken anywhere in it fails those tests too;
+/// what they exercise is one tab at a time, not every control on every page.
 /// </para>
 /// <para>
 /// No real hardware is touched. Every control constructed here is a stock WPF

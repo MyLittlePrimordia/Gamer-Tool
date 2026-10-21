@@ -26,7 +26,7 @@ namespace GamerTool;
 
 public partial class MainWindow : Window
 {
-    private readonly ProfileManager _profiles = new();
+    private readonly ProfileManager _profiles;
 
 
     private readonly BackupService _backups = new();
@@ -329,6 +329,7 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        _profiles = new ProfileManager();
         InitializeComponent();
 
         Icon = IconFactory.LoadWindowIcon();
@@ -493,17 +494,12 @@ public partial class MainWindow : Window
         // audio engine, which is slow, and doing that before Show() is what made
         // the window take seconds to appear. FinishStartupAsync does it once the
         // window is up. Nothing below this line depends on it.
-        LoadTune(_workDisplay, _workAudio);
-        RefreshPresetBoxes();
-        BuildSlots();
+        InitTunables(MainWindowTabs.All);
+        InitSlotBoard(MainWindowTabs.All);
         RegisterHotkeys();
         ApplyWatchState();
 
-        UpdatePreviewPills();
-        UpdateAudioPreviewState();
-        UpdateLiveLabels();
-        RenderDisplayPreview();
-        InitCrosshairTab();
+        InitTabSurfaces(MainWindowTabs.All, headless: false);
         _audioPreview.StateChanged += UpdateAudioPreviewState;
         // No "check the assets folder" any more. There is no assets folder: the
         // loops are read out of the executable, so the only thing that can make
@@ -522,6 +518,137 @@ public partial class MainWindow : Window
         if (StartHidden())
         {
             HideToTray();
+        }
+    }
+
+    /// <summary>
+    /// The window's markup and the tabs in <paramref name="tabs" />, and nothing
+    /// else.
+    /// <para>
+    /// The real constructor loads the user's profile, works out the displays, starts
+    /// the audio engine, registers global hotkeys and puts an icon in the tray. None
+    /// of that may happen in a test, and none of it is needed to drive one tab, so
+    /// this builds the controls, reads a profile from the folder it is given, and
+    /// brings up only the tabs asked for. Every other tab is present and inert, which
+    /// is also what makes a failure here about one tab rather than about the window.
+    /// </para>
+    /// <para>
+    /// For the test suite, through <c>WindowHarness</c>: switches, sliders and the
+    /// crosshair pack browser used to be checked by opening the app and looking at
+    /// them. Internal because no shipped code has a use for half a window, and
+    /// because the theme has to be merged into <see cref="Application.Resources" />
+    /// before this runs, which is the harness's job rather than the window's.
+    /// </para>
+    /// <para>
+    /// Not done here, and deliberately: the session state is left alone (it is read
+    /// by the emergency exit path, and pointing it at a test's services would be a
+    /// lie about what the process is doing), and no timer, tray icon, hotkey or
+    /// engine is started.
+    /// </para>
+    /// </summary>
+    internal MainWindow(ProfileManager profiles, MainWindowTabs tabs)
+    {
+        _profiles = profiles;
+        InitializeComponent();
+
+        _settings = _profiles.Load();
+
+        // The same line the shipping constructor has, and it is not cosmetic here.
+        // Where the engine is installed decides whether a tab gesture may talk to it
+        // at all: the harness points this at a path under its own temp folder that
+        // does not exist, which is what keeps an audio reset in a test a state
+        // change rather than three calls to a real FxSound.
+        _audio.ExePath = _settings.FxSoundPath;
+
+        // And no looking for one: the Audio tab asks the setup service whether the
+        // engine is on this PC on every banner refresh, and on the machine running the
+        // suite that answer would replace the path set above with a real install.
+        // From then on a fader move would push a tune into it, which is the one thing
+        // a headless window must never be able to do.
+        _setup.DiscoversInstalledEngine = false;
+
+        _workDisplay = (FindDisplay(_settings.ActiveDisplayPresetId) ?? DisplayPreset.Flat()).Copy();
+        _workAudio = (FindAudio(_settings.ActiveAudioPresetId) ?? AudioPreset.Flat()).Copy();
+        _activeDisplayId = _workDisplay.Id;
+        _activeAudioId = _workAudio.Id;
+
+        // Builds the band strip, the preset pickers and the dialogs. None of that
+        // talks to a display, a sound card or the registry.
+        PopulatePickers();
+
+        SyncControlsFromSettings(headless: true);
+
+        InitTunables(tabs);
+        InitSlotBoard(tabs);
+        InitTabSurfaces(tabs, headless: true);
+
+        // Last, and for the same reason the shipping constructor sets it last: every
+        // tab handler bails on a false, and the flag means "the window is built and a
+        // gesture can be acted on now". A test's click is a real gesture, so a tab
+        // that was built but still refusing input would be testing the flag rather
+        // than the tab. Nothing here fires by itself - no timer, tray or hotkey is
+        // started - so setting it now cannot run anything on its own.
+        _ready = true;
+    }
+
+    /// <summary>
+    /// Fill the tuning controls from the loaded presets.
+    /// <para>
+    /// One call for both tabs on purpose: a preset carries a screen tune and a sound
+    /// tune, and the two are always loaded together. Asking for either tab brings up
+    /// both sets of controls, and asking for neither brings up nothing.
+    /// </para>
+    /// </summary>
+    private void InitTunables(MainWindowTabs tabs)
+    {
+        if (!tabs.HasFlag(MainWindowTabs.Display) && !tabs.HasFlag(MainWindowTabs.Audio))
+        {
+            return;
+        }
+
+        LoadTune(_workDisplay, _workAudio);
+        RefreshPresetBoxes();
+    }
+
+    /// <summary>The slot board, which reads the profile and builds its cards.</summary>
+    private void InitSlotBoard(MainWindowTabs tabs)
+    {
+        if (tabs.HasFlag(MainWindowTabs.Slots))
+        {
+            BuildSlots();
+        }
+    }
+
+    /// <summary>
+    /// The per-tab surfaces: the scene preview and its pills, the audio transport and
+    /// live labels, and the crosshair tab.
+    /// <para>
+    /// Kept in the order the constructor used, where the two display calls bracket the
+    /// audio ones. Nothing here depends on that order, and it is not worth changing
+    /// the shipping startup sequence to make it tidier.
+    /// </para>
+    /// </summary>
+    private void InitTabSurfaces(MainWindowTabs tabs, bool headless)
+    {
+        if (tabs.HasFlag(MainWindowTabs.Display))
+        {
+            UpdatePreviewPills();
+        }
+
+        if (tabs.HasFlag(MainWindowTabs.Audio))
+        {
+            UpdateAudioPreviewState();
+            UpdateLiveLabels();
+        }
+
+        if (tabs.HasFlag(MainWindowTabs.Display))
+        {
+            RenderDisplayPreview();
+        }
+
+        if (tabs.HasFlag(MainWindowTabs.Crosshair))
+        {
+            InitCrosshairTab(headless);
         }
     }
 
@@ -1074,7 +1201,13 @@ private void HideToTray()
     /// want it.
     /// </para>
     /// </summary>
-    private void SyncControlsFromSettings()
+    /// <param name="headless">
+    /// True for the test harness. The switches are still set from the profile, but
+    /// the three statements that talk to the machine are skipped: the backlight
+    /// support check, the audio engine's flags and the gamma lock. Those are real
+    /// writes to hardware, and a tab test must not make any.
+    /// </param>
+    private void SyncControlsFromSettings(bool headless = false)
     {
         GammaLockBox.IsChecked = _settings.GammaLock;
         OsdBox.IsChecked = _settings.ShowOsd;
@@ -1107,7 +1240,10 @@ private void HideToTray()
         // and nothing to say about it, because the reason lives in the counter
         // rather than in settings. The note is empty in that case and stays
         // collapsed; the user turns the switch on and gets the two rounds again.
-        RefreshBacklightNote();
+        if (!headless)
+        {
+            RefreshBacklightNote();
+        }
 
         // Asked of the registry, and the registry is the only place it lives. The
         // switch used to be mirrored into the settings file as well, which made
@@ -1117,10 +1253,14 @@ private void HideToTray()
         BlueLightBox.SelectedItem = DisplayPreset.BlueLightNames[
             Math.Clamp(_settings.BlueLightFilter, 0, DisplayPreset.BlueLightNames.Length - 1)];
 
-        _audio.AntiClipEnabled = _settings.AntiClip;
-        _audio.EffectsEnabled = _settings.EffectsEnabled;
-        _audio.LoudGuardEnabled = _settings.LoudGuard;
-        _display.SetLock(_settings.GammaLock);
+        if (!headless)
+        {
+            _audio.AntiClipEnabled = _settings.AntiClip;
+            _audio.EffectsEnabled = _settings.EffectsEnabled;
+            _audio.LoudGuardEnabled = _settings.LoudGuard;
+            _display.SetLock(_settings.GammaLock);
+        }
+
         UpdateAntiClipReadout();
     }
 
@@ -2438,21 +2578,27 @@ private void HideToTray()
     /// shouted subline was two rows of text for something that only ever needed to
     /// say what just happened, so it is now a single trimmed sentence.
     /// </summary>
-    private void Flash(string message)
+    /// <param name="screen">
+    /// The work area to put the plate on, or null for the screen the foreground
+    /// window is on. Passed by the callers that know which screen the message is
+    /// about - a slot load is about the screen the slot is for, which is not always
+    /// the screen that has focus while its game is being started.
+    /// </param>
+    private void Flash(string message, Rect? screen = null)
     {
         if (_settings.ShowOsd)
         {
-            _osd.ShowToast(message);
+            _osd.ShowToast(message, false, screen);
         }
     }
 
 
     /// <summary>As <see cref="Flash"/>, but flagged amber for anything that failed.</summary>
-    private void Flash(string message, bool warn)
+    private void Flash(string message, bool warn, Rect? screen = null)
     {
         if (_settings.ShowOsd)
         {
-            _osd.ShowToast(message, warn);
+            _osd.ShowToast(message, warn, screen);
         }
 
         // A warning is the one case where the tooltip should stop describing the

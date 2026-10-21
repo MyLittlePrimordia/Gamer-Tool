@@ -325,6 +325,18 @@ public sealed class AppSettings
     public List<CrosshairPreset> CustomCrosshairs { get; set; } = new();
 
     /// <summary>
+    /// Whether a crosshair that is on the screen steps aside after a quarter of an hour
+    /// without keyboard or mouse input, and comes back on the next one.
+    /// <para>
+    /// Off by default. Most panels are not OLED, and for everyone else a crosshair that
+    /// disappeared while the mouse sat still would be a fault rather than a feature.
+    /// It is not per crosshair, either: it is a fact about the monitor, and the monitor
+    /// does not change when the crosshair does.
+    /// </para>
+    /// </summary>
+    public bool OledGuard { get; set; }
+
+    /// <summary>
     /// Bumped whenever a change has to be pushed into settings that already exist
     /// on disk. The property initialisers above only ever apply to a brand new
     /// profile, so anything that changes a default needs a matching step here or

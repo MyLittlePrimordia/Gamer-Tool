@@ -1108,6 +1108,18 @@ public sealed class AudioService
 
     public FxSoundState? ReadState(bool force = false)
     {
+        // Before the thread guard, not after it. What the guard protects against is the
+        // wait: Run(--status) starts a child process and then sleeps up to two seconds
+        // for its file, which on the UI thread is a frozen window. A machine with no
+        // engine has nothing to wait for and returns immediately, and answering that
+        // call is exactly what the Audio tab does when a preset is picked before
+        // FxSound has been installed - so the guard used to turn that path into a
+        // crash in every Debug build, which is the build the app is developed in.
+        if (!IsInstalled)
+        {
+            return null;
+        }
+
 #if DEBUG
         try
         {
@@ -1124,10 +1136,6 @@ public sealed class AudioService
         {
         }
 #endif
-        if (!IsInstalled)
-        {
-            return null;
-        }
 
         if (!force && _cached is not null && (DateTime.UtcNow - _cachedAt).TotalSeconds < 3.0)
         {

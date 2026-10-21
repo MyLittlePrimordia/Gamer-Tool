@@ -45,13 +45,17 @@ public partial class MainWindow : Window
 
         try
         {
-            _backups.Export(_settings, dialog.FileName);
+            int pictures = _backups.Export(_settings, dialog.FileName);
             string when = File.GetLastWriteTime(dialog.FileName).ToString("d MMM HH:mm", CultureInfo.InvariantCulture);
             ShowBackupDetail(
                 "Last backup " + when + " - " + Path.GetFileName(dialog.FileName),
                 "Saved settings, " + _settings.CustomDisplayPresets.Count.ToString(CultureInfo.InvariantCulture)
                     + " screen and " + _settings.CustomAudioPresets.Count.ToString(CultureInfo.InvariantCulture)
-                    + " sound presets, " + _settings.Slots.Count.ToString(CultureInfo.InvariantCulture) + " slots and their keys.");
+                    + " sound presets, " + _settings.Slots.Count.ToString(CultureInfo.InvariantCulture) + " slots and their keys"
+                    + (pictures > 0
+                        ? ", and " + pictures.ToString(CultureInfo.InvariantCulture)
+                            + (pictures == 1 ? " crosshair picture." : " crosshair pictures.")
+                        : "."));
             Flash("Backup saved");
         }
         catch (Exception ex)
@@ -192,11 +196,17 @@ public partial class MainWindow : Window
         // The hint is dropped rather than left standing: it names a file and a
         // time from the last time a backup was written, which after a restore is
         // history rather than news.
+        string pictures = report.PicturesRestored == 1
+            ? "1 crosshair picture"
+            : report.PicturesRestored.ToString(CultureInfo.InvariantCulture) + " crosshair pictures";
+
         ShowBackupDetail(
             string.Empty,
             report.AnythingToReport
                 ? "Restored with fixes: " + report.Summary.ToLowerInvariant() + "."
-                : "Restored clean. Everything in the file matched this PC.");
+                : report.PicturesRestored > 0
+                    ? "Restored clean. Everything in the file matched this PC, including " + pictures + "."
+                    : "Restored clean. Everything in the file matched this PC.");
 
         if (report.Notes.Count > 0)
         {

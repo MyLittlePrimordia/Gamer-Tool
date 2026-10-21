@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -71,22 +73,41 @@ public partial class MainWindow
     /// <summary>Saving to disk waits for the slider to stop moving.</summary>
     private readonly DispatcherTimer _xhSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
 
-    private void InitCrosshairTab()
+    /// <summary>
+    /// Build the tab and load the crosshair it opens on.
+    /// </summary>
+    /// <param name="headless">
+    /// True for the test harness, which stands the tab up with no tray, no hotkeys
+    /// and a profile in a temporary folder. Three things are skipped, and each of
+    /// them is a real side effect on the machine: unpacking the starter pictures into
+    /// the pack folder, pruning pictures the profile does not name out of the
+    /// user's own crosshair folder, and subscribing to the system's display-changed
+    /// event. None of them is needed for the tab to work, and all three would be
+    /// wrong to do from a test.
+    /// </param>
+    private void InitCrosshairTab(bool headless = false)
     {
         try
         {
             _settings.CustomCrosshairs ??= new List<CrosshairPreset>();
 
             BuildCrosshairTiles();
+            BuildEffectChoices();
 
-            // Unpack the starter pictures now, off the UI thread, so the folder is
-            // already there the first time anyone opens the browser or its folder.
-            _ = Task.Run(CrosshairPack.EnsureFolder);
+            if (!headless)
+            {
+                // Unpack the starter pictures now, off the UI thread, so the folder is
+                // already there the first time anyone opens the browser or its folder.
+                _ = Task.Run(CrosshairPack.EnsureFolder);
+            }
 
             _xhDayImage = LoadCrosshairScene("crosshair_day.png");
             _xhNightImage = LoadCrosshairScene("crosshair_night.png");
 
-            CrosshairImageStore.PruneUnused(_settings.CustomCrosshairs.Select(p => p.CustomImage));
+            if (!headless)
+            {
+                CrosshairImageStore.PruneUnused(_settings.CustomCrosshairs.Select(p => p.CustomImage));
+            }
 
             CrosshairPreset start = FindCrosshair(_settings.ActiveCrosshairId) ?? CrosshairPreset.Default();
             _workCrosshair = start.Copy().Sanitised();
@@ -100,12 +121,15 @@ public partial class MainWindow
 
             WireKeycap(CrosshairKeyBox, KeycapCapture.Crosshair);
             WireKeycap(CrosshairCycleKeyBox, KeycapCapture.CrosshairCycle);
-            Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnXhDisplaySettingsChanged;
+
+            if (!headless)
+            {
+                Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnXhDisplaySettingsChanged;
+            }
 
             _xhReady = true;
             RefreshCrosshairBox();
-            UpdateXhControls();
-            RenderCrosshairPreview();
+            UpdateXhControls();            RenderCrosshairPreview();
             UpdateXhStatus();
         }
         catch (Exception ex)
@@ -264,6 +288,33 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// One row of the effect dropdown: the value, the words on screen, and the little
+    /// moving crosshair drawn beside them.
+    /// <para>
+    /// ToString is what the closed box reads when it has no template of its own, and it
+    /// is what any code that is not looking at the fields will print, so it stays the
+    /// label rather than the type name and every field of it.
+    /// </para>
+    /// </summary>
+    private sealed record EffectChoice(CrosshairEffect Value, string Label, CrosshairPreset Preview)
+    {
+        public override string ToString() => Label;
+    }
+
+    /// <summary>
+    /// Fill the effect dropdown once, at start. The list is the enum's menu order, so a
+    /// new effect is added in one place and appears here, in the saved text and in the
+    /// animation without anything else being edited.
+    /// </summary>
+    private void BuildEffectChoices()
+    {
+        XhEffectBox.ItemsSource = CrosshairAnimation.Menu
+            .Select(effect => new EffectChoice(
+                effect, CrosshairAnimation.Label(effect), CrosshairAnimation.Thumbnail(effect)))
+            .ToList();
+    }
+
     private void RefreshCrosshairBox()
     {
         if (!_xhReady)
@@ -371,17 +422,13 @@ public partial class MainWindow
                 swatches[i].IsChecked = i == match;
             }
 
-            if (match < 0 && CrosshairPreset.TryParseColor(p.Color, out byte r, out byte g, out byte b))
+            // The swatch itself is the rainbow wheel, drawn by its style, so all this
+            // sets is the dot in the middle: the colour the swatch is holding.
+            if (CrosshairPreset.TryParseColor(p.Color, out byte r, out byte g, out byte b))
             {
                 var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
                 brush.Freeze();
                 XhSwatchCustom.Background = brush;
-                XhSwatchPlus.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                XhSwatchCustom.Background = (Brush)FindResource("WellBg");
-                XhSwatchPlus.Visibility = Visibility.Visible;
             }
 
             XhSwatchCustom.IsChecked = match < 0;
@@ -410,11 +457,16 @@ public partial class MainWindow
             XhGapSlider.Value = p.ShapeKind == CrosshairShape.Custom ? p.PictureGap : p.Gap;
             XhOpacitySlider.Value = p.Opacity;
             XhRotationSlider.Value = p.Rotation;
+            XhDotSizeSlider.Value = p.EffectiveCenterDotSize();
+            XhEffectSpeedSlider.Value = p.EffectSpeed;
+            XhEffectAmountSlider.Value = p.EffectAmount;
             UpdateXhValueLabels();
 
             XhOutlineBox.IsChecked = p.Outline;
             XhGlowBox.IsChecked = p.Glow;
             XhCenterDotBox.IsChecked = p.CenterDot;
+            XhOwnColoursBox.IsChecked = p.KeepOwnColours;
+            XhOledBox.IsChecked = _settings.OledGuard;
 
             foreach (KeyValuePair<CrosshairShape, RadioButton> tile in _xhTiles)
             {
@@ -422,6 +474,14 @@ public partial class MainWindow
             }
 
             UpdateXhColorUi();
+
+            // The effect dropdown, and the two sliders under it. The sliders are only
+            // there while an effect is chosen, because a speed slider for "nothing" is
+            // a control that does nothing; amount is dimmed for the one effect that has
+            // no amplitude, rather than hidden, so the row never changes height.
+            XhEffectBox.SelectedItem = XhEffectBox.Items.OfType<EffectChoice>()
+                .FirstOrDefault(c => c.Value == p.EffectKind);
+            UpdateXhEffectUi();
 
             // Only the controls that mean something for this shape are live. A dot
             // has no thickness and no turn, and a ring has no gap and looks the same
@@ -448,6 +508,12 @@ public partial class MainWindow
             XhRotationPanel.IsHitTestVisible = rotationOn;
 
             XhCenterDotBox.IsEnabled = kind != CrosshairShape.Dot;
+            UpdateXhDotUi();
+
+            // Only a picture has colours of its own to keep. Shapes are drawn in the
+            // chosen colour and nothing else, so the switch is not there to be
+            // wondered about rather than dimmed.
+            XhTintRow.Visibility = kind == CrosshairShape.Custom ? Visibility.Visible : Visibility.Collapsed;
 
             RefreshCustomTile();
         }
@@ -464,6 +530,37 @@ public partial class MainWindow
         XhGapValue.Text = ((int)XhGapSlider.Value).ToString(CultureInfo.InvariantCulture) + " px";
         XhOpacityValue.Text = ((int)XhOpacitySlider.Value).ToString(CultureInfo.InvariantCulture) + "%";
         XhRotationValue.Text = ((int)XhRotationSlider.Value).ToString(CultureInfo.InvariantCulture) + "\u00B0";
+
+        // "Auto" is the dot following the line's thickness. The number after it is
+        // what that comes to, so the slider is never showing a value the dot is not.
+        string dotSize = ((int)XhDotSizeSlider.Value).ToString(CultureInfo.InvariantCulture) + " px";
+        XhDotSizeValue.Text = _workCrosshair.HasOwnCenterDotSize ? dotSize : "Auto \u00B7 " + dotSize;
+
+        XhEffectSpeedValue.Text = ((int)XhEffectSpeedSlider.Value).ToString(CultureInfo.InvariantCulture);
+        XhEffectAmountValue.Text = ((int)XhEffectAmountSlider.Value).ToString(CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// What the effect controls look like for the effect that is chosen: whether there
+    /// is anything to tune, and which of the two sliders means anything.
+    /// </summary>
+    private void UpdateXhEffectUi()
+    {
+        CrosshairEffect effect = _workCrosshair.EffectKind;
+        bool wanted = effect != CrosshairEffect.None;
+        bool amountOn = CrosshairAnimation.UsesAmount(effect);
+
+        XhEffectTuningPanel.Visibility = wanted ? Visibility.Visible : Visibility.Collapsed;
+
+        // What the effect does, and when it cannot show on what it is on, a sentence
+        // saying so: an effect that quietly does nothing reads as a broken one.
+        string caveat = CrosshairAnimation.Caveat(effect, _workCrosshair.ShapeKind, _workCrosshair.KeepOwnColours);
+        string hint = CrosshairAnimation.Hint(effect);
+        XhEffectHint.Text = caveat.Length == 0 ? hint : hint + " " + caveat;
+
+        XhEffectAmountSlider.IsEnabled = amountOn;
+        XhEffectAmountPanel.Opacity = amountOn ? 1.0 : 0.4;
+        XhEffectAmountPanel.IsHitTestVisible = amountOn;
     }
 
     private void RefreshCustomTile()
@@ -619,6 +716,158 @@ public partial class MainWindow
         UpdateXhControls();
     }
 
+    // ------------------------------------------------------ center dot colour
+
+    /// <summary>
+    /// The chip beside the CENTER DOT switch: what the dot is painted, and whether
+    /// it can be opened at all.
+    /// <para>
+    /// With no colour of its own the dot follows the crosshair, and the chip shows
+    /// that colour - so an untouched preset reads as one colour rather than two,
+    /// and picking one is what splits them.
+    /// </para>
+    /// </summary>
+    /// <summary>
+    /// The dot's size, live only while there is a dot to size. Dimmed rather than
+    /// hidden, like the other controls that a shape puts out of use, so the row does
+    /// not jump when the switch is flipped and the value that comes back is readable.
+    /// </summary>
+    private void UpdateXhDotUi()
+    {
+        if (!_xhReady)
+        {
+            return;
+        }
+
+        // A dot shape is its own dot, so there is no second one to size.
+        bool live = _workCrosshair.CenterDot && _workCrosshair.ShapeKind != CrosshairShape.Dot;
+        XhDotSizeSlider.IsEnabled = live;
+        XhDotSizePanel.Opacity = live ? 1.0 : 0.4;
+        XhDotSizePanel.IsHitTestVisible = live;
+
+        UpdateXhCenterDotColorUi();
+    }
+
+    private void UpdateXhCenterDotColorUi()
+    {
+        if (!_xhReady)
+        {
+            return;
+        }
+
+        string hex = _workCrosshair.EffectiveCenterDotColor();
+        if (CrosshairPreset.TryParseColor(hex, out byte r, out byte g, out byte b))
+        {
+            var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
+            brush.Freeze();
+            XhDotColorChip.Fill = brush;
+        }
+
+        // A dot shape is its own dot, so there is nothing for this to paint. A dot
+        // that is switched off has nothing to paint either.
+        bool live = _workCrosshair.CenterDot && _workCrosshair.ShapeKind != CrosshairShape.Dot;
+        XhDotColorButton.IsEnabled = live;
+        XhDotColorButton.ToolTip = !live
+            ? "Turn the center dot on to give it its own color"
+            : _workCrosshair.HasOwnCenterDotColor
+                ? "Center dot color"
+                : "Center dot color, following the crosshair until you pick one";
+    }
+
+    private void OnXhDotColorClick(object sender, RoutedEventArgs e)
+    {
+        if (!_xhReady)
+        {
+            return;
+        }
+
+        if (CrosshairPreset.TryParseColor(_workCrosshair.EffectiveCenterDotColor(), out byte r, out byte g, out byte b))
+        {
+            XhDotHsv.SetColor(r, g, b);
+        }
+
+        SyncXhDotPickerReadout();
+        XhDotColorPopup.IsOpen = true;
+    }
+
+    /// <summary>The dot's picker moved: that is the new colour, live, nothing to confirm.</summary>
+    private void OnXhDotHsvChanged(object? sender, EventArgs e)
+    {
+        Color picked = XhDotHsv.Color;
+        SetXhCenterDotColor(CrosshairPreset.FormatColor(picked.R, picked.G, picked.B));
+    }
+
+    private void SetXhCenterDotColor(string hex)
+    {
+        if (!_xhReady)
+        {
+            return;
+        }
+
+        _workCrosshair.CenterDotColor = hex;
+        OnXhEdited();
+        UpdateXhCenterDotColorUi();
+        SyncXhDotPickerReadout();
+    }
+
+    private void SyncXhDotPickerReadout()
+    {
+        string hex = _workCrosshair.EffectiveCenterDotColor();
+        if (!XhDotPickHex.IsKeyboardFocused)
+        {
+            XhDotPickHex.Text = hex;
+        }
+
+        if (CrosshairPreset.TryParseColor(hex, out byte r, out byte g, out byte b))
+        {
+            var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
+            brush.Freeze();
+            XhDotPickPreview.Background = brush;
+        }
+    }
+
+    private void OnXhDotPickHexKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            CommitXhDotPickHex();
+            e.Handled = true;
+        }
+    }
+
+    private void OnXhDotPickHexCommit(object sender, RoutedEventArgs e)
+    {
+        CommitXhDotPickHex();
+    }
+
+    private void CommitXhDotPickHex()
+    {
+        if (!CrosshairPreset.TryParseColor(XhDotPickHex.Text, out byte r, out byte g, out byte b))
+        {
+            XhDotPickHex.Text = _workCrosshair.EffectiveCenterDotColor();
+            return;
+        }
+
+        string hex = CrosshairPreset.FormatColor(r, g, b);
+        XhDotHsv.SetColor(r, g, b);
+        if (!string.Equals(hex, _workCrosshair.EffectiveCenterDotColor(), StringComparison.OrdinalIgnoreCase))
+        {
+            SetXhCenterDotColor(hex);
+        }
+
+        XhDotPickHex.Text = hex;
+    }
+
+    private void OnXhDotColorDoneClick(object sender, RoutedEventArgs e)
+    {
+        XhDotColorPopup.IsOpen = false;
+    }
+
+    private void OnXhDotColorPopupClosed(object? sender, EventArgs e)
+    {
+        UpdateXhControls();
+    }
+
     private void OnXhSliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (_xhUpdating || !_xhReady)
@@ -642,13 +891,16 @@ public partial class MainWindow
 
         _workCrosshair.Opacity = (int)XhOpacitySlider.Value;
         _workCrosshair.Rotation = (int)XhRotationSlider.Value;
+
+        // Moving this is what turns "as thick as the line" into a size of its own,
+        // the same way picking a colour stops the dot following the crosshair's.
+        _workCrosshair.CenterDotSize = (int)XhDotSizeSlider.Value;
         UpdateXhValueLabels();
         OnXhEdited();
     }
 
     private void OnXhToggleChanged(object sender, RoutedEventArgs e)
-    {
-        if (_xhUpdating || !_xhReady)
+    {        if (_xhUpdating || !_xhReady)
         {
             return;
         }
@@ -656,6 +908,68 @@ public partial class MainWindow
         _workCrosshair.Outline = XhOutlineBox.IsChecked == true;
         _workCrosshair.Glow = XhGlowBox.IsChecked == true;
         _workCrosshair.CenterDot = XhCenterDotBox.IsChecked == true;
+        _workCrosshair.KeepOwnColours = XhOwnColoursBox.IsChecked == true;
+        OnXhEdited();
+
+        // The dot's colour and size are only worth offering while there is a dot.
+        UpdateXhDotUi();
+        UpdateXhEffectUi();
+    }
+
+    private void OnXhEffectChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_xhUpdating || !_xhReady)
+        {
+            return;
+        }
+
+        if (XhEffectBox.SelectedItem is not EffectChoice choice)
+        {
+            return;
+        }
+
+        _workCrosshair.EffectKind = choice.Value;
+
+        if (choice.Value != CrosshairEffect.None)
+        {
+            // Each effect starts at the rate and reach it is meant to be seen at,
+            // rather than both sliders sitting at fifty and the user having to guess
+            // which way to drag them. A value this puts here is the user's from the
+            // moment they touch a slider, and a saved crosshair opens on its own
+            // numbers because this handler does not run while the controls are being
+            // filled in.
+            (int speed, int amount) = CrosshairAnimation.Defaults(choice.Value);
+            _workCrosshair.EffectSpeed = speed;
+            _workCrosshair.EffectAmount = amount;
+
+            _xhUpdating = true;
+            try
+            {
+                XhEffectSpeedSlider.Value = speed;
+                XhEffectAmountSlider.Value = amount;
+            }
+            finally
+            {
+                _xhUpdating = false;
+            }
+
+            UpdateXhValueLabels();
+        }
+
+        UpdateXhEffectUi();
+        OnXhEdited();
+    }
+
+    private void OnXhEffectSliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_xhUpdating || !_xhReady)
+        {
+            return;
+        }
+
+        _workCrosshair.EffectSpeed = (int)XhEffectSpeedSlider.Value;
+        _workCrosshair.EffectAmount = (int)XhEffectAmountSlider.Value;
+        UpdateXhValueLabels();
         OnXhEdited();
     }
 
@@ -789,6 +1103,16 @@ public partial class MainWindow
             Flash("Could not show crosshair — use borderless or windowed mode", true);
         }
 
+        if (_xhVisible)
+        {
+            // Whatever put it up - the button, the key, a slot, or the guard giving it
+            // back - this is the moment it appeared, and the reading on the tab counts
+            // from here.
+            _xhGuarded = false;
+            _xhShownAt = DateTime.UtcNow;
+        }
+
+        SyncOledWatch();
         UpdateXhStatus();
     }
 
@@ -805,6 +1129,11 @@ public partial class MainWindow
 
         _xhVisible = false;
         _xhBySlot = false;
+        _xhShownAt = null;
+
+        // Stopped for a crosshair the user took down, kept for one the guard took: the
+        // guard has to stay awake to notice them come back.
+        SyncOledWatch();
         UpdateXhStatus();
     }
 
@@ -887,7 +1216,23 @@ public partial class MainWindow
         }
 
         XhShowButton.Content = _xhVisible ? "Hide crosshair" : "Show on screen";
-        XhStatusText.Text = _xhVisible ? "On screen" : "Hidden";
+
+        // How long it has been up. The point of the number is to make an afternoon on
+        // the screen visible as a fact rather than as something to remember, because
+        // that is the part of OLED wear no setting can undo.
+        if (_xhVisible)
+        {
+            XhStatusText.Text = "On screen \u00B7 " + OledGuard.OnScreenFor(_xhShownAt, DateTime.UtcNow);
+        }
+        else if (_xhGuarded)
+        {
+            XhStatusText.Text = "Hidden while idle";
+        }
+        else
+        {
+            XhStatusText.Text = "Hidden";
+        }
+
         XhLiveDot.Fill = (Brush)FindResource(_xhVisible ? "Green" : "TextLow");
 
         // Built-ins that have been edited become "Tuned" (empty id). Rename and
@@ -904,6 +1249,7 @@ public partial class MainWindow
         try
         {
             Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnXhDisplaySettingsChanged;
+            StopOledWatch();
             _xhSaveTimer.Stop();
             _xhOverlay?.Close();
             _xhOverlay = null;
@@ -949,6 +1295,87 @@ public partial class MainWindow
             BuildSlots();
             Flash(name + " saved");
         });
+    }
+
+    /// <summary>
+    /// The crosshair on the tab as a new preset, in one press.
+    /// <para>
+    /// Save copies it and asks what to call it first; this is the other thing people
+    /// do with a crosshair they like, which is keep it and carry on working. What is
+    /// copied is the tab's own state rather than what is stored, so an edited
+    /// built-in or a preset with an unsaved change comes over as it looks now. It is
+    /// also the only way to keep an edited built-in: those cannot be overwritten, so
+    /// a copy is where that edit has to live.
+    /// </para>
+    /// <para>
+    /// The picture file is not copied, deliberately. Both presets name the same one, which
+    /// is what Delete already expects - it removes the file only once no preset is
+    /// left naming it - so a duplicate cannot take the picture from under the
+    /// original, and a pack with a dozen copies in it stays one file on disk.
+    /// </para>
+    /// </summary>
+    private void OnXhDuplicateClick(object sender, RoutedEventArgs e)
+    {
+        CrosshairPreset copy = _workCrosshair.Copy();
+        copy.Id = AppProfileTools.NewId("xh");
+        copy.Name = FreeCrosshairName(copy.Name);
+
+        _settings.CustomCrosshairs.Add(copy);
+        _workCrosshair = copy.Copy();
+        _xhPresetId = copy.Id;
+        _settings.ActiveCrosshairId = copy.Id;
+        Commit();
+        RefreshCrosshairBox();
+
+        // The copy is the user's own preset, so Rename and Delete become usable now
+        // where they were greyed out on the built-in it came from.
+        UpdateXhStatus();
+        BuildSlots();
+        Flash(copy.Name + " created");
+    }
+
+    /// <summary>
+    /// A name no other crosshair already has. Duplicate is one press, so it cannot
+    /// stop to ask what to call the copy, and two entries reading the same words in
+    /// the dropdown are indistinguishable from each other - the second one comes out
+    /// as "GREEN copy 2".
+    /// <para>
+    /// A suffix already on the name is dropped first, so copying a copy gives
+    /// "GREEN copy 3" rather than "GREEN copy copy 2": the suffix says which number
+    /// this one is, it is not part of the name being copied. "Tuned" is the tab's
+    /// name for an unsaved state rather than a name anyone chose, so a copy of that
+    /// starts from "Crosshair" instead of reading "Tuned copy".
+    /// </para>
+    /// </summary>
+    private string FreeCrosshairName(string name)
+    {
+        string root = string.IsNullOrWhiteSpace(name) ? string.Empty : name.Trim();
+
+        int suffix = root.LastIndexOf(" copy", StringComparison.OrdinalIgnoreCase);
+        if (suffix > 0)
+        {
+            string tail = root[(suffix + 5)..].Trim();
+            if (tail.Length == 0 || int.TryParse(tail, out _))
+            {
+                root = root[..suffix].Trim();
+            }
+        }
+
+        if (root.Length == 0 || string.Equals(root, "Tuned", StringComparison.OrdinalIgnoreCase))
+        {
+            root = "Crosshair";
+        }
+
+        List<CrosshairPreset> taken = AllCrosshairs().ToList();
+        bool InUse(string candidate) => taken.Any(p => string.Equals(p.Name, candidate, StringComparison.OrdinalIgnoreCase));
+
+        string copyOf = root + " copy";
+        for (int n = 2; InUse(copyOf); n++)
+        {
+            copyOf = root + " copy " + n;
+        }
+
+        return copyOf;
     }
 
     private void OnXhRenameClick(object sender, RoutedEventArgs e)
@@ -1052,30 +1479,30 @@ public partial class MainWindow
             "CROSSHAIR PICTURE",
             async () =>
             {
-                (string? name, string problem) = await Task.Run(() =>
+                (CrosshairImageStore.StoredPicture? stored, string problem) = await Task.Run(() =>
                 {
-                    string? stored = CrosshairImageStore.Import(path, out string reason);
-                    return (stored, reason);
+                    CrosshairImageStore.StoredPicture? picture = CrosshairImageStore.Import(path, out string reason);
+                    return (picture, reason);
                 });
 
-                if (name is null)
+                if (stored is null)
                 {
                     Flash(problem, true);
                     return;
                 }
 
+                string name = stored.Name;
                 string previous = _workCrosshair.CustomImage;
                 _workCrosshair.CustomImage = name;
                 _workCrosshair.ShapeKind = CrosshairShape.Custom;
 
-                // A photograph or bitmap has no transparency and is no use as a
-                // white mask. Multiplied by the default red it would come out red,
-                // so it starts white, which leaves it as it came. The colour is
-                // still one click away for anyone who wants it tinted.
-                if (CrosshairFileKinds.FromPath(path) is PictureKind.Jpeg or PictureKind.Bmp)
-                {
-                    _workCrosshair.Color = CrosshairPreset.Palette[^1];
-                }
+                // A picture that brought colours of its own is shown as it came, so a
+                // multi-coloured animation arrives multi-coloured instead of in
+                // whatever colour the tab happened to be showing. A photograph used to
+                // get the same result by being forced to white; the difference now is
+                // that the colour is left where the user put it, for the glow. A white
+                // or grey picture is a mask and goes on answering to the swatches.
+                _workCrosshair.KeepOwnColours = stored.OwnColours;
 
                 OnXhEdited();
                 UpdateXhControls();
@@ -1096,6 +1523,33 @@ public partial class MainWindow
 
     /// <summary>Counts up each time the browser fills, so a fill that was interrupted knows to stop.</summary>
     private int _xhPackLoad;
+
+    /// <summary>
+    /// Side of a tile's animation frame, in pixels. Larger than the tile itself so a
+    /// 150 percent scaled window still shows it sharp.
+    /// </summary>
+    private const int PackPreviewSide = 64;
+
+    /// <summary>
+    /// Most tiles allowed to play at once. A folder full of animations would otherwise
+    /// hold every decoded frame of every picture in memory for a grid that is mostly
+    /// scrolled out of sight; past this the rest stay on their first frame.
+    /// </summary>
+    private const int MaxAnimatedPackTiles = 48;
+
+    /// <summary>How often the browser's clock steps its tiles, in milliseconds.</summary>
+    private const int PackPreviewTickMs = 40;
+
+    /// <summary>Tiles that are playing, with the frame each is on.</summary>
+    private readonly List<PackPreviewPlayer> _xhPackPlayers = new();
+
+    /// <summary>Two decodes at a time: enough to fill in quickly, few enough to leave the UI responsive.</summary>
+    private readonly SemaphoreSlim _xhPackPreviewSlots = new(2);
+
+    private DispatcherTimer? _xhPackClock;
+
+    /// <summary>Tiles whose preview has been started but not attached yet, so the cap counts them.</summary>
+    private int _xhPackPreviewsPending;
 
     /// <summary>
     /// The folder listing taken when the browser opened. Typing in the filter box
@@ -1139,6 +1593,7 @@ public partial class MainWindow
         // Let go of every thumbnail. They are rebuilt from the folder next time.
         _xhPackLoad++;
         _xhPackFiles = null;
+        ClearPackPreviews();
         XhPackPanel.Children.Clear();
         if (XhPackFilter is not null)
         {
@@ -1185,6 +1640,7 @@ public partial class MainWindow
     private void FillXhPack()
     {
         int generation = ++_xhPackLoad;
+        ClearPackPreviews();
         XhPackPanel.Children.Clear();
 
         List<string> files = _xhPackFiles is null ? new List<string>() : new List<string>(_xhPackFiles);
@@ -1210,8 +1666,9 @@ public partial class MainWindow
             XhPackEmpty.Text = "No pictures yet. Add PNG, GIF or JPG files with Open folder, then reopen.";
         }
 
-        // Shown in the colour the crosshair is set to, so the grid previews what
-        // choosing one will look like.
+        // Masks are shown in the colour the crosshair is set to, so the grid previews
+        // what choosing one will look like. Pictures with colours of their own are
+        // shown as they are when BuildPackTile builds their tile, for the same reason.
         Color colour = CrosshairPreset.TryParseColor(_workCrosshair.Color, out byte r, out byte g, out byte b)
             ? Color.FromRgb(r, g, b)
             : Colors.White;
@@ -1230,7 +1687,7 @@ public partial class MainWindow
             int end = Math.Min(files.Count, next + 24);
             for (; next < end; next++)
             {
-                Button? tile = BuildPackTile(files[next], tint);
+                Button? tile = BuildPackTile(files[next], tint, colour, generation);
                 if (tile is not null)
                 {
                     XhPackPanel.Children.Add(tile);
@@ -1246,7 +1703,7 @@ public partial class MainWindow
         Batch();
     }
 
-    private Button? BuildPackTile(string path, Brush tint)
+    private Button? BuildPackTile(string path, Brush tint, Color colour, int generation)
     {
         try
         {
@@ -1259,12 +1716,13 @@ public partial class MainWindow
             thumb.EndInit();
             thumb.Freeze();
 
-            // The picture's own shape filled with the chosen colour. That is what
-            // the multiply tint does to a white picture, which is what the pack is.
-            // A photograph or bitmap has no shape to fill, only a rectangle, and it
-            // is imported white, so it is shown as it is.
+            // The picture's own shape filled with the chosen colour, which is what
+            // the multiply tint does to a white mask - and what the pack largely is.
+            // A picture that will arrive in its own colours is shown as it came, so
+            // the grid cannot promise a colour the import is not going to apply.
+            bool ownColours = KeepsOwnColours(path, thumb);
             FrameworkElement face;
-            if (CrosshairFileKinds.FromPath(path) is PictureKind.Jpeg or PictureKind.Bmp)
+            if (ownColours)
             {
                 face = new System.Windows.Controls.Image { Width = 46, Height = 46, Source = thumb, Stretch = Stretch.Uniform };
             }
@@ -1289,6 +1747,15 @@ public partial class MainWindow
 
             AutomationProperties.SetName(tile, "Use crosshair " + Path.GetFileNameWithoutExtension(path));
             tile.Click += OnXhPackTileClick;
+
+            // A GIF is asked for its frames in the background. Until they arrive the
+            // tile shows its first frame, which is exactly what it used to show all
+            // the time, so a slow one costs nothing but a moment of stillness.
+            if (CrosshairFileKinds.FromPath(path) == PictureKind.Gif)
+            {
+                StartPackPreview(tile, path, colour, ownColours, generation);
+            }
+
             return tile;
         }
         catch (Exception ex)
@@ -1296,6 +1763,191 @@ public partial class MainWindow
             // One unreadable file is skipped, not allowed to empty the browser.
             AppLog.Error("CROSSHAIR PACK TILE", ex);
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Begin decoding a tile's animation, unless the grid is already playing as many
+    /// as it will. Decoding happens a couple at a time on worker threads, because a
+    /// GIF is dozens of frames to compose and the grid is filled while the window has
+    /// to stay responsive.
+    /// </summary>
+    private void StartPackPreview(Button tile, string path, Color colour, bool ownColours, int generation)
+    {
+        if (_xhPackPlayers.Count + _xhPackPreviewsPending >= MaxAnimatedPackTiles)
+        {
+            return;
+        }
+
+        _xhPackPreviewsPending++;
+        _ = AttachPackPreviewAsync(tile, path, colour, ownColours, generation);
+    }
+
+    private async Task AttachPackPreviewAsync(
+        Button tile,
+        string path,
+        Color colour,
+        bool ownColours,
+        int generation)
+    {
+        CrosshairPackPreview? preview = null;
+
+        await _xhPackPreviewSlots.WaitAsync();
+        try
+        {
+            // Rechecked inside the slot: the browser may have been closed or refilled
+            // while this one was queued, and decoding then is pure waste.
+            if (generation == _xhPackLoad)
+            {
+                preview = await Task.Run(() => CrosshairPackPreview.Build(
+                    path, PackPreviewSide, ownColours ? null : colour));
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("CROSSHAIR PACK PREVIEW", ex);
+        }
+        finally
+        {
+            _xhPackPreviewSlots.Release();
+            _xhPackPreviewsPending--;
+        }
+
+        // The generation is the browser's own answer to "is this still wanted":
+        // it moves on both when the grid refills and when the popup closes, and the
+        // close handler clears the players. That is why there is no second check on
+        // the popup being open here - two guards for one fact is how the two come to
+        // disagree, and it is what made this attach untestable without a real popup.
+        if (preview is null || generation != _xhPackLoad)
+        {
+            return;
+        }
+
+        // The frames carry the tint already, so the tile becomes a plain image. A
+        // rectangle with an opacity mask cannot follow a picture that changes frame.
+        var image = new System.Windows.Controls.Image
+        {
+            Width = 46,
+            Height = 46,
+            Source = preview.Frames[0],
+            Stretch = Stretch.Uniform
+        };
+
+        tile.Content = image;
+        _xhPackPlayers.Add(new PackPreviewPlayer(image, preview.Frames, preview.DelaysMs));
+        StartPackClock();
+    }
+
+    /// <summary>
+    /// The one clock the whole grid shares. A timer per tile would wake the window
+    /// dozens of times a frame for the same animation; this wakes it once and steps
+    /// them all.
+    /// </summary>
+    private void StartPackClock()
+    {
+        if (_xhPackClock is null)
+        {
+            _xhPackClock = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromMilliseconds(PackPreviewTickMs)
+            };
+
+            _xhPackClock.Tick += OnPackClockTick;
+        }
+
+        _xhPackClock.Start();
+    }
+
+    private void OnPackClockTick(object? sender, EventArgs e)
+    {
+        foreach (PackPreviewPlayer player in _xhPackPlayers)
+        {
+            player.Advance(PackPreviewTickMs);
+        }
+    }
+
+    /// <summary>
+    /// Stop the clock and let go of every decoded frame. Called when the browser
+    /// closes or refills: the frames are rebuilt from the folder next time, and a
+    /// closed popup holding a few hundred images is memory nobody asked for.
+    /// </summary>
+    private void ClearPackPreviews()
+    {
+        _xhPackClock?.Stop();
+        _xhPackPlayers.Clear();
+    }
+
+    /// <summary>
+    /// One tile playing its animation: which frame it is on, and how long it has been
+    /// holding it. Advanced from the shared clock with the time that has passed since
+    /// the last tick, so the loop plays at the speed the GIF asked for rather than at
+    /// the speed of the timer.
+    /// </summary>
+    private sealed class PackPreviewPlayer
+    {
+        private readonly System.Windows.Controls.Image _target;
+        private readonly IReadOnlyList<BitmapSource> _frames;
+        private readonly IReadOnlyList<int> _delaysMs;
+        private int _index;
+        private int _elapsedMs;
+
+        public PackPreviewPlayer(
+            System.Windows.Controls.Image target,
+            IReadOnlyList<BitmapSource> frames,
+            IReadOnlyList<int> delaysMs)
+        {
+            _target = target;
+            _frames = frames;
+            _delaysMs = delaysMs;
+        }
+
+        public void Advance(int milliseconds)
+        {
+            _elapsedMs += milliseconds;
+            int start = _index;
+
+            // A delay is never below 20 ms, so this always ends.
+            while (_elapsedMs >= _delaysMs[_index])
+            {
+                _elapsedMs -= _delaysMs[_index];
+                _index = (_index + 1) % _frames.Count;
+            }
+
+            if (_index != start)
+            {
+                _target.Source = _frames[_index];
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether a pack picture will arrive in its own colours, by the same rule the
+    /// import uses: a photograph or bitmap always does, a PNG or GIF only if it
+    /// carries colour. Read off the thumbnail the tile is already showing rather
+    /// than off the file again, so the preview and the import cannot disagree about
+    /// anything but the resize.
+    /// </summary>
+    private static bool KeepsOwnColours(string path, BitmapSource thumb)
+    {
+        PictureKind kind = CrosshairFileKinds.FromPath(path);
+        if (kind is PictureKind.Jpeg or PictureKind.Bmp)
+        {
+            return true;
+        }
+
+        try
+        {
+            var converted = new FormatConvertedBitmap(thumb, PixelFormats.Pbgra32, null, 0);
+            byte[] pixels = new byte[converted.PixelWidth * converted.PixelHeight * 4];
+            converted.CopyPixels(pixels, converted.PixelWidth * 4, 0);
+            return CrosshairImageStore.HasOwnColours(pixels);
+        }
+        catch (Exception ex)
+        {
+            // An odd palette or format that will not convert: show it as a mask, the
+            // way a picture that cannot be read would be shown.
+            AppLog.Error("CROSSHAIR PACK TINT", ex);
+            return false;
         }
     }
 
@@ -1358,6 +2010,16 @@ public partial class MainWindow
             // real pixel and assuming a 96 dpi screen, so the file is the true
             // size and identical whatever monitor it was exported from.
             CrosshairPreset effective = EffectiveCrosshair(_workCrosshair, out CrosshairPicture? picture);
+
+            // A PNG holds one frame, and a frame caught at an arbitrary point in a
+            // moving crosshair is a worse picture of it than the crosshair itself. An
+            // exported file is always the still one, whatever the tab is doing.
+            if (effective.Animated)
+            {
+                effective = effective.Copy();
+                effective.EffectKind = CrosshairEffect.None;
+            }
+
             int side = CrosshairGeometry.WindowSide(effective);
 
             // A PNG holds one picture, so an animation is exported as its first
@@ -1400,6 +2062,38 @@ public partial class MainWindow
             AppLog.Error("CROSSHAIR EXPORT", ex);
             Flash("Could not export the crosshair", true);
         }
+    }
+
+    /// <summary>
+    /// Put the crosshair back to how a new one starts: default colour, size,
+    /// thickness, gap, opacity, rotation, outline, glow and center dot. The shape,
+    /// the picture and the name stay.
+    /// <para>
+    /// A picture that has colours of its own goes back to them, which is the way out
+    /// of a colour picked over a multi-coloured animation. That is read off the stored
+    /// picture rather than remembered from the import, because the file may have been
+    /// restored from a backup or imported before this setting existed.
+    /// </para>
+    /// </summary>
+    private void OnXhResetClick(object sender, RoutedEventArgs e)
+    {
+        if (!_xhReady)
+        {
+            return;
+        }
+
+        ShowConfirmModal(
+            "Reset crosshair?",
+            "The color, size, thickness, gap, opacity, rotation, outline, glow and center dot go back to their defaults. The shape and the picture stay.",
+            "Reset",
+            () =>
+            {
+                _workCrosshair.ResetTuning();
+                _workCrosshair.KeepOwnColours = CrosshairImageStore.PictureHasOwnColours(_workCrosshair.CustomImage);
+                OnXhEdited();
+                UpdateXhControls();
+                Flash("Crosshair reset");
+            });
     }
 
     // ------------------------------------------------------------------ cycle

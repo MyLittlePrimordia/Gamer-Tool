@@ -2146,7 +2146,9 @@ public partial class MainWindow : Window
 
         RailStatus.Text = "PLAYING " + slot.Name.ToUpperInvariant();
 
-        Flash(message, warn);
+        // The screen the game will open on, rather than the one this window is on:
+        // at this moment the game has only just been asked to start.
+        Flash(message, warn, ScreenForSlot(slot));
 
         TraceLog.Write("PLAY " + slot.Name + " <- " + (via == LaunchVia.None ? exePath : launchUri)
             + (via == LaunchVia.None ? string.Empty : " (" + LaunchUriPolicy.Describe(via) + ")")
@@ -2414,6 +2416,29 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>
+    /// The screen a slot is keyed to, as a work area, or null when it is keyed to
+    /// none.
+    /// <para>
+    /// What a slot says belongs on the screen the slot is for, because that is the
+    /// screen it just changed. The foreground window is a good proxy while a game is
+    /// running and a poor one while Play is starting it: at that moment the
+    /// foreground window is this app or a launcher, and the plate would land on the
+    /// screen the game is not about to open on.
+    /// </para>
+    /// <para>
+    /// Null - a slot that applies to every screen, or one whose screen has been
+    /// unplugged since it was written - sends the toast back to the foreground
+    /// window, which is the screen the user is looking at.
+    /// </para>
+    /// </summary>
+    private Rect? ScreenForSlot(HotkeySlot slot)
+    {
+        string device = _display.ResolveDevice(slot.MonitorKey, slot.MonitorDevice);
+        return MonitorWorkArea.ForDevice(device);
+    }
+
+
     /// <param name="screenOnly">
     /// Push the screen only and leave the sound alone. Used when the screen is being
     /// restored from a focus pause: the sound was never taken down, so pushing it
@@ -2459,7 +2484,7 @@ public partial class MainWindow : Window
             // was never applied, and left the key looking bound to something when
             // it was bound to nothing at all.
             RailStatus.Text = "NOTHING SET";
-            Flash("Nothing set on " + slot.Name, true);
+            Flash("Nothing set on " + slot.Name, true, ScreenForSlot(slot));
             return;
         }
 
@@ -2504,7 +2529,7 @@ public partial class MainWindow : Window
         RailStatus.Text = slot.Name.ToUpperInvariant();
         if (announce)
         {
-            Flash(slot.Name + " loaded");
+            Flash(slot.Name + " loaded", ScreenForSlot(slot));
         }
 
         // The crosshair goes up whether or not the screen took its preset, and on a
@@ -2521,7 +2546,7 @@ public partial class MainWindow : Window
 
             if (announce && _lastWindowsAudioWarnings.Count > 0)
             {
-                Flash(string.Join(", ", _lastWindowsAudioWarnings), true);
+                Flash(string.Join(", ", _lastWindowsAudioWarnings), true, ScreenForSlot(slot));
             }
         }
         else
@@ -2546,7 +2571,7 @@ public partial class MainWindow : Window
 
             if (announce)
             {
-                Flash(slot.Name + " loaded, screen did not take it", true);
+                Flash(slot.Name + " loaded, screen did not take it", true, ScreenForSlot(slot));
             }
         }
     }
@@ -2602,7 +2627,7 @@ public partial class MainWindow : Window
         {
             if (announce && _lastHdrWarnings.Count > 0)
             {
-                Flash(string.Join(", ", _lastHdrWarnings), true);
+                Flash(string.Join(", ", _lastHdrWarnings), true, MonitorWorkArea.ForDevice(device));
             }
 
             return;
@@ -2616,7 +2641,7 @@ public partial class MainWindow : Window
 
         if (announce && _lastHdrWarnings.Count > 0)
         {
-            Flash(string.Join(", ", _lastHdrWarnings), true);
+            Flash(string.Join(", ", _lastHdrWarnings), true, MonitorWorkArea.ForDevice(device));
         }
     }
 
@@ -3815,7 +3840,7 @@ public partial class MainWindow : Window
         if (!slot.HasWork)
         {
             RailStatus.Text = "NOTHING SET";
-            Flash("Nothing set on " + slot.Name, true);
+            Flash("Nothing set on " + slot.Name, true, ScreenForSlot(slot));
             return;
         }
 

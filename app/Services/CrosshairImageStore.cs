@@ -49,12 +49,60 @@ public static class CrosshairImageStore
     /// <summary>The largest picture taken in either direction, before decoding it in full.</summary>
     public const int MaxPixels = 4096;
 
+    /// <summary>
+    /// Largest stored file a backup may carry, in bytes.
+    /// <para>
+    /// The stored copy is already shrunk - 256 pixels for a still, 128 a frame for
+    /// an animation - so this is far above anything this app writes and far below
+    /// anything that would make a backup unreasonable to open. It is a ceiling on
+    /// what a file is allowed to claim, not a size anything real reaches.
+    /// </para>
+    /// </summary>
+    public const int MaxBackupBytes = 2 * 1024 * 1024;
+
+    /// <summary>
+    /// Widest a stored picture can be: every frame of the longest animation the
+    /// importer keeps, side by side.
+    /// </summary>
+    public const int MaxStoredWidth = AnimatedSide * AnimationPlan.MaxFrames;
+
+    /// <summary>Tallest a stored picture can be: the side of a still's square.</summary>
+    public const int MaxStoredHeight = StoredSide;
+
     /// <summary>Ends the name of the timing file beside an animation's strip.</summary>
     private const string TimingSuffix = ".anim.json";
 
     private static readonly Dictionary<string, CrosshairPicture> Cache = new(StringComparer.OrdinalIgnoreCase);
 
-    public static string Folder => Path.Combine(ProfileManager.AppDataFolder, "crosshairs");
+    private static string? _redirectedFolder;
+
+    /// <summary>Where stored pictures live: the profile's folder, or wherever a test sent them.</summary>
+    public static string Folder => _redirectedFolder ?? Path.Combine(ProfileManager.AppDataFolder, "crosshairs");
+
+    /// <summary>
+    /// Send the store somewhere else, and forget everything read from the old place.
+    /// Used by the test suite, the way <see cref="AppLog.RedirectTo" /> is: the
+    /// Crosshair tab reads pictures from this folder by name, so a test that stands
+    /// the tab up would otherwise draw from - and prune - the user's own crosshairs.
+    /// Null, the normal case, means the profile's folder.
+    /// </summary>
+    internal static void RedirectTo(string? folder)
+    {
+        lock (Cache)
+        {
+            Cache.Clear();
+        }
+
+        _redirectedFolder = string.IsNullOrWhiteSpace(folder) ? null : folder;
+    }
+
+    /// <summary>
+    /// A picture that made it into the folder, and whether it brought colours of its
+    /// own. The second half is what lets an import arrive looking like the thing that
+    /// was imported: a multi-coloured animation is not a mask, and multiplying it by
+    /// one colour on the way in is how it used to come out single-coloured.
+    /// </summary>
+    public sealed record StoredPicture(string Name, bool OwnColours);
 
     /// <summary>A problem worded for the user, thrown inside an import and turned into the message.</summary>
     private sealed class ImportProblem : Exception
@@ -66,11 +114,21 @@ public static class CrosshairImageStore
     }
 
     /// <summary>
-    /// Import one picture. Returns the stored file name, or null with the reason
-    /// in <paramref name="problem"/> worded for the user. Safe to call off the UI
-    /// thread: it uses decoders and raw pixels and never draws.
+    /// Import one picture. Returns the stored name and whether it kept colours of its
+    /// own, or null with the reason in <paramref name="problem"/> worded for the user.
+    /// Safe to call off the UI thread: it uses decoders and raw pixels and never draws.
     /// </summary>
-    public static string? Import(string sourcePath, out string problem)
+    public static StoredPicture? Import(string sourcePath, out string problem)
+    {
+        return Import(sourcePath, Folder, out problem);
+    }
+
+    /// <summary>
+    /// The same import into a given folder. <paramref name="folder"/> exists so a test
+    /// can take a picture in somewhere disposable, the way <see cref="ProfileManager"/> and
+    /// <see cref="BackupService"/> take one, instead of into the user's own crosshairs.
+    /// </summary>
+    internal static StoredPicture? Import(string sourcePath, string folder, out string problem)
     {
         problem = string.Empty;
 
@@ -100,13 +158,12 @@ public static class CrosshairImageStore
             using var stream = new MemoryStream(File.ReadAllBytes(sourcePath));
             BitmapDecoder decoder = OpenDecoder(stream, kind);
 
-            Directory.CreateDirectory(Folder);
+            Directory.CreateDirectory(folder);
             string name = "custom-" + Guid.NewGuid().ToString("N")[..8] + ".png";
 
             if (decoder is GifBitmapDecoder gif && gif.Frames.Count > 1)
             {
-                StoreAnimation(gif, name);
-                return name;
+                return StoreAnimation(gif, name, folder);
             }
 
             BitmapSource still = decoder.Frames[0];
@@ -122,8 +179,9 @@ public static class CrosshairImageStore
                 return null;
             }
 
-            File.WriteAllBytes(Path.Combine(Folder, name), Normalise(still));
-            return name;
+            bool ownColours = Normalise(still, kind, out byte[] square);
+            File.WriteAllBytes(Path.Combine(folder, name), square);
+            return new StoredPicture(name, ownColours);
         }
         catch (ImportProblem ex)
         {
@@ -154,21 +212,67 @@ public static class CrosshairImageStore
             }
         }
 
+        CrosshairPicture? picture = ReadPicture(fileName!, Folder);
+        if (picture is not null)
+        {
+            lock (Cache)
+            {
+                Cache[fileName!] = picture;
+            }
+        }
+
+        return picture;
+    }
+
+    /// <summary>
+    /// The same, out of the given folder and never from the cache. The folder is a
+    /// parameter so a test can read a picture it imported into a temp folder, the
+    /// way the rest of this store takes one; the cache is keyed by name alone and a
+    /// temp folder must not seed it.
+    /// </summary>
+    internal static CrosshairPicture? LoadPicture(string? fileName, string folder)
+    {
+        return IsSafeName(fileName) ? ReadPicture(fileName!, folder) : null;
+    }
+
+    /// <summary>
+    /// Whether a stored picture has colours of its own, judged by its pixels. Used
+    /// when the tab puts a picture back to its defaults, which has no import result
+    /// left to consult: by then the picture is this app's own PNG, whatever it was
+    /// imported from.
+    /// </summary>
+    public static bool PictureHasOwnColours(string? fileName) => PictureHasOwnColours(fileName, Folder);
+
+    internal static bool PictureHasOwnColours(string? fileName, string folder)
+    {
+        CrosshairPicture? picture = LoadPicture(fileName, folder);
+        if (picture is null)
+        {
+            return false;
+        }
+
+        foreach (BitmapSource frame in picture.Frames)
+        {
+            if (HasOwnColours(ToPixels(frame, out _, out _)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static CrosshairPicture? ReadPicture(string fileName, string folder)
+    {
         try
         {
-            string path = Path.Combine(Folder, fileName!);
+            string path = Path.Combine(folder, fileName);
             if (!File.Exists(path))
             {
                 return null;
             }
 
-            CrosshairPicture picture = BuildPicture(Decode(File.ReadAllBytes(path)), TimingPathFor(path));
-            lock (Cache)
-            {
-                Cache[fileName!] = picture;
-            }
-
-            return picture;
+            return BuildPicture(Decode(File.ReadAllBytes(path)), TimingPathFor(path));
         }
         catch (Exception ex)
         {
@@ -256,6 +360,199 @@ public static class CrosshairImageStore
     }
 
     /// <summary>
+    /// A stored picture and its timing file, for a backup to carry. Null when there
+    /// is no file by that name, or when the name is not one this app would have
+    /// written.
+    /// <para>
+    /// The folder is a parameter rather than <see cref="Folder"/> so a backup taken
+    /// by a test can read somewhere disposable, the same reason
+    /// <see cref="ProfileManager"/> takes one.
+    /// </para>
+    /// </summary>
+    internal static (byte[] Png, string? Timing)? ReadForBackup(string? fileName, string folder)
+    {
+        if (!IsSafeName(fileName))
+        {
+            return null;
+        }
+
+        try
+        {
+            string path = Path.Combine(folder, fileName!);
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            string timingPath = TimingPathFor(path);
+            string? timing = File.Exists(timingPath) ? BoundedRead.AllText(timingPath) : null;
+            return (File.ReadAllBytes(path), timing);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("CROSSHAIR BACKUP READ", ex);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Put a picture out of a backup into <paramref name="folder"/>, replacing any
+    /// file of the same name. False, with a reason worded for the log, when the
+    /// bytes are not a picture this app could have written.
+    /// <para>
+    /// A backup is a file from somewhere else, so nothing in it is trusted: the
+    /// name has to be one this app writes, the size and the dimensions have to be
+    /// ones it produces, the pixels have to decode, and a timing file has to agree
+    /// with the strip it claims to describe. Anything that fails is refused whole,
+    /// because half a picture - or a strip with a timing file that does not match it
+    /// - is a crosshair that silently refuses to load.
+    /// </para>
+    /// </summary>
+    internal static bool WriteFromBackup(
+        string? fileName,
+        byte[]? png,
+        string? timing,
+        string folder,
+        out string problem)
+    {
+        problem = string.Empty;
+
+        if (!IsSafeName(fileName))
+        {
+            problem = "the name is not one this app writes";
+            return false;
+        }
+
+        if (png is null || png.Length == 0)
+        {
+            problem = "there is no picture data";
+            return false;
+        }
+
+        if (png.Length > MaxBackupBytes)
+        {
+            problem = "the picture is larger than this app ever stores";
+            return false;
+        }
+
+        int width;
+        int height;
+        try
+        {
+            (width, height) = MeasureAndDecode(png);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("CROSSHAIR BACKUP WRITE", ex);
+            problem = "the picture is not a PNG this app could read";
+            return false;
+        }
+
+        if (width < 4 || height < 4 || width > MaxStoredWidth || height > MaxStoredHeight)
+        {
+            problem = "the picture is not a size this app stores";
+            return false;
+        }
+
+        // A still is square, and a strip is a whole number of square frames. A file
+        // that is neither is one this app could not have written, and drawing it as
+        // a still would show a whole animation as one very wide smear.
+        string? accepted = null;
+        if (!string.IsNullOrWhiteSpace(timing))
+        {
+            if (!AnimationInfo.TryParse(timing, out AnimationInfo info)
+                || info.Side != height
+                || info.Side * info.Frames != width)
+            {
+                problem = "the animation's timings do not match its picture";
+                return false;
+            }
+
+            // Re-serialised from the parsed value rather than copied, so anything
+            // else the file happened to carry is dropped.
+            accepted = info.ToJson();
+        }
+        else if (width != height)
+        {
+            problem = "the picture is wider than it is tall but carries no timings";
+            return false;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(folder);
+            string path = Path.Combine(folder, fileName!);
+            string timingPath = TimingPathFor(path);
+
+            // Timings first and picture second, the same order StoreAnimation
+            // writes them in and for the same reason: a crash between the two
+            // leaves an orphan timing file, which is pruned, rather than a strip
+            // with no timings. A still clears any timing file of that name, or the
+            // old animation's timings would be glued to a new still.
+            if (accepted is null)
+            {
+                if (File.Exists(timingPath))
+                {
+                    File.Delete(timingPath);
+                }
+            }
+            else
+            {
+                File.WriteAllText(timingPath, accepted);
+            }
+
+            File.WriteAllBytes(path, png);
+
+            // Whatever was cached under this name is the picture it replaced.
+            lock (Cache)
+            {
+                Cache.Remove(fileName!);
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("CROSSHAIR BACKUP WRITE", ex);
+            problem = "the picture could not be written";
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The stored size of a PNG, and a full decode to prove the pixels are there.
+    /// <para>
+    /// The size is read from the header with a delayed decoder, so a file claiming
+    /// enormous dimensions is refused before anything allocates for it; the decode
+    /// afterwards is what catches a header that survived a truncated file.
+    /// </para>
+    /// </summary>
+    private static (int Width, int Height) MeasureAndDecode(byte[] png)
+    {
+        int width;
+        int height;
+
+        using (var header = new MemoryStream(png))
+        {
+            var decoder = new PngBitmapDecoder(
+                header,
+                BitmapCreateOptions.DelayCreation,
+                BitmapCacheOption.None);
+
+            if (decoder.Frames.Count == 0)
+            {
+                throw new InvalidDataException("The file has no picture in it.");
+            }
+
+            width = decoder.Frames[0].PixelWidth;
+            height = decoder.Frames[0].PixelHeight;
+        }
+
+        Decode(png);
+        return (width, height);
+    }
+
+    /// <summary>
     /// A plain file name ending in .png, with no folder in it. Anything else is
     /// refused rather than resolved, which is what stops a profile from naming
     /// a file outside the crosshair folder. Every stored picture, animated or not,
@@ -304,7 +601,19 @@ public static class CrosshairImageStore
         return decoder;
     }
 
-    /// <summary>A stored still is always a PNG this app wrote, so only the PNG decoder is needed to read it back.</summary>
+    /// <summary>
+    /// A stored still is always a PNG this app wrote, so only the PNG decoder is
+    /// needed to read it back.
+    /// <para>
+    /// The pixels are copied into a bitmap of their own rather than the frame being
+    /// handed on. A decoded frame keeps a reference to the decoder that made it, and
+    /// a decoder belongs to the thread that opened it - even after the frame is
+    /// frozen, cropping it on another thread throws and the drawing code, which is
+    /// not allowed to fail loudly on a redraw, quietly draws nothing. A copy has
+    /// nothing left to ask, so a picture can be loaded by one thread and drawn by
+    /// another.
+    /// </para>
+    /// </summary>
     private static BitmapSource Decode(byte[] bytes)
     {
         using var stream = new MemoryStream(bytes);
@@ -313,9 +622,17 @@ public static class CrosshairImageStore
             BitmapCreateOptions.PreservePixelFormat,
             BitmapCacheOption.OnLoad);
 
-        BitmapFrame frame = decoder.Frames[0];
-        frame.Freeze();
-        return frame;
+        return Detached(decoder.Frames[0]);
+    }
+
+    /// <summary>Premultiplied BGRA pixels of any picture in a fresh, frozen bitmap of their own.</summary>
+    private static BitmapSource Detached(BitmapSource source)
+    {
+        byte[] pixels = ToPixels(source, out int width, out int height);
+        BitmapSource detached = BitmapSource.Create(
+            width, height, 96, 96, PixelFormats.Pbgra32, null, pixels, width * 4);
+        detached.Freeze();
+        return detached;
     }
 
     /// <summary>
@@ -327,7 +644,8 @@ public static class CrosshairImageStore
     {
         if (!File.Exists(timingPath))
         {
-            return new CrosshairPicture(new[] { strip }, new[] { 0 });
+            BitmapSource[] still = { strip };
+            return new CrosshairPicture(still, new[] { 0 }, ContentBounds(still));
         }
 
         if (!AnimationInfo.TryParse(BoundedRead.AllText(timingPath), out AnimationInfo timing)
@@ -345,7 +663,67 @@ public static class CrosshairImageStore
             frames.Add(frame);
         }
 
-        return new CrosshairPicture(frames, timing.DelaysMs);
+        return new CrosshairPicture(frames, timing.DelaysMs, ContentBounds(frames));
+    }
+
+    /// <summary>
+    /// The rectangle every frame has something drawn in, or empty when nothing is
+    /// drawn at all. Read once when the picture is loaded, because scanning a whole
+    /// animation is cheap there and would not be on every redraw.
+    /// <para>
+    /// Pixels below four levels of alpha are ignored. A stored picture is re-encoded
+    /// by this app and the edge of its art carries a fringe of almost invisible
+    /// pixels; counting those would make the rectangle as big as the frame and
+    /// defeat the point, which is that Size measures the crosshair and not the empty
+    /// space the file happens to keep round it.
+    /// </para>
+    /// </summary>
+    private static Int32Rect ContentBounds(IReadOnlyList<BitmapSource> frames)
+    {
+        int left = int.MaxValue;
+        int top = int.MaxValue;
+        int right = -1;
+        int bottom = -1;
+
+        foreach (BitmapSource frame in frames)
+        {
+            byte[] pixels = ToPixels(frame, out int width, out int height);
+            for (int y = 0; y < height; y++)
+            {
+                int row = y * width * 4;
+                for (int x = 0; x < width; x++)
+                {
+                    if (pixels[row + (x * 4) + 3] < 4)
+                    {
+                        continue;
+                    }
+
+                    if (x < left)
+                    {
+                        left = x;
+                    }
+
+                    if (x > right)
+                    {
+                        right = x;
+                    }
+
+                    if (y < top)
+                    {
+                        top = y;
+                    }
+
+                    if (y > bottom)
+                    {
+                        bottom = y;
+                    }
+                }
+            }
+        }
+
+        return right < left || bottom < top
+            ? default
+            : new Int32Rect(left, top, right - left + 1, bottom - top + 1);
     }
 
     /// <summary>Premultiplied BGRA pixels of any picture, whatever format it was stored in.</summary>
@@ -375,13 +753,76 @@ public static class CrosshairImageStore
     /// <summary>
     /// Fit a still inside a transparent square and encode it as a new PNG. Square,
     /// so Size on the tab means the same thing for every picture and a wide image
-    /// is centred rather than stretched.
+    /// is centred rather than stretched. Also says whether the picture brought
+    /// colours of its own, which is decided on the pixels as imported rather than on
+    /// the shrunk copy, so a picture that is coloured in one corner cannot lose its
+    /// colour to the resize before it is looked at.
     /// </summary>
-    private static byte[] Normalise(BitmapSource source)
+    private static bool Normalise(BitmapSource source, PictureKind kind, out byte[] png)
     {
         byte[] pixels = ToPixels(source, out int width, out int height);
+        bool ownColours = KeepOwnColours(kind, pixels);
         byte[] square = PixelResize.FitSquare(pixels, width, height, StoredSide, out int side);
-        return EncodePng(square, side, side);
+        png = EncodePng(square, side, side);
+        return ownColours;
+    }
+
+    /// <summary>
+    /// Whether a picture should be drawn in its own colours rather than tinted.
+    /// <para>
+    /// A JPEG or a BMP is a photograph or a drawn bitmap, never a white mask, so it
+    /// is always shown as it came - which is what the old rule did in the clumsy way,
+    /// by forcing the colour to white on import. A PNG or GIF is white line art more
+    /// often than not, so it keeps answering to the colour swatches unless it actually
+    /// carries colour.
+    /// </para>
+    /// </summary>
+    internal static bool KeepOwnColours(PictureKind kind, byte[] rgba)
+    {
+        return kind is PictureKind.Jpeg or PictureKind.Bmp || HasOwnColours(rgba);
+    }
+
+    /// <summary>
+    /// How far apart the strongest and weakest of red, green and blue have to be for
+    /// a pixel to count as coloured rather than grey. Well above the few levels that
+    /// antialiasing and GIF palettes add to a white line, and well below anything that
+    /// was meant as a colour.
+    /// </summary>
+    internal const int OwnColourChroma = 24;
+
+    /// <summary>
+    /// How many coloured pixels make a picture coloured. Not one, because a stray
+    /// pixel in a corner of a white mask would then switch the whole colour row off
+    /// for it; not a large fraction either, because a crosshair of a few coloured
+    /// pixels is exactly the thing this is for.
+    /// </summary>
+    internal const int OwnColourPixels = 16;
+
+    /// <summary>
+    /// Whether the pixels hold colour of their own: at least a handful of visible
+    /// ones that are not grey. Premultiplied BGRA, which is what this store handles
+    /// throughout; the alpha floor ignores the near-invisible fringe round a shape,
+    /// where the colour that survives is an artefact of the edge rather than a choice.
+    /// </summary>
+    internal static bool HasOwnColours(byte[] rgba)
+    {
+        int found = 0;
+        for (int p = 0; p + 3 < rgba.Length; p += 4)
+        {
+            if (rgba[p + 3] < 96)
+            {
+                continue;
+            }
+
+            int high = Math.Max(rgba[p], Math.Max(rgba[p + 1], rgba[p + 2]));
+            int low = Math.Min(rgba[p], Math.Min(rgba[p + 1], rgba[p + 2]));
+            if (high - low >= OwnColourChroma && ++found >= OwnColourPixels)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // ------------------------------------------------------------ animation
@@ -391,7 +832,7 @@ public static class CrosshairImageStore
     /// animation to the frame limit if it is longer, and write the frames side by
     /// side as one PNG with the timings in a file beside it.
     /// </summary>
-    private static void StoreAnimation(GifBitmapDecoder decoder, string name)
+    private static StoredPicture StoreAnimation(GifBitmapDecoder decoder, string name, string folder)
     {
         int count = decoder.Frames.Count;
         (int canvasWidth, int canvasHeight) = LogicalScreen(decoder);
@@ -450,13 +891,36 @@ public static class CrosshairImageStore
             }
         }
 
-        string stripPath = Path.Combine(Folder, name);
+        // The strip is the whole animation in the form it will be drawn from, so it
+        // is what decides whether this one has colours worth keeping. Deciding on the
+        // frames before they are shrunk would count pixels that never reach the screen.
+        bool ownColours = HasOwnColours(strip);
+
+        string stripPath = Path.Combine(folder, name);
 
         // Timing first and picture second: a crash between the two leaves a timing
         // file with no picture, which is pruned, rather than a strip with no timing,
         // which would show as one very wide still.
         File.WriteAllText(TimingPathFor(stripPath), new AnimationInfo(side, kept.Select(f => f.DelayMs).ToArray()).ToJson());
         File.WriteAllBytes(stripPath, EncodePng(strip, stripWidth, side));
+
+        return new StoredPicture(name, ownColours);
+    }
+
+    /// <summary>
+    /// The GIF's canvas size, for a reader outside this store. The pack browser plays
+    /// the same file this importer would take, and reading it two different ways is
+    /// how two views of one picture come to disagree.
+    /// </summary>
+    internal static (int Width, int Height) GifCanvas(GifBitmapDecoder decoder) => LogicalScreen(decoder);
+
+    /// <summary>One stored GIF frame as the compositor wants it.</summary>
+    internal static GifRawFrame GifFrame(BitmapFrame frame) => ReadFrame(frame);
+
+    /// <summary>How long a GIF frame stays up, in milliseconds, by the importer's own rule.</summary>
+    internal static int GifFrameDelay(BitmapFrame frame)
+    {
+        return AnimationPlan.DelayMs(Query(frame.Metadata as BitmapMetadata, "/grctlext/Delay", 0));
     }
 
     private static GifRawFrame ReadFrame(BitmapFrame frame)
