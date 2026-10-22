@@ -80,24 +80,33 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Asks for a file and restores it. Split out so a rejected file can offer
-    /// another go without sending the user back to Settings first.
+    /// Asks for a file and restores it, or restores one already chosen. Split out so
+    /// a rejected file can offer another go without sending the user back to
+    /// Settings first, and so a backup file gets the same import, repair and
+    /// confirmation however it was reached.
     /// </summary>
-    private async Task PickAndRestoreAsync()
+    private async Task PickAndRestoreAsync(string? chosenPath = null)
     {
-        Microsoft.Win32.OpenFileDialog dialog = new()
-        {
-            Title = "PICK A BACKUP FILE",
-            Filter = "Gamer Tool backup|*.json|All files|*.*",
-            CheckFileExists = true
-        };
+        string path = chosenPath ?? string.Empty;
 
-        if (dialog.ShowDialog(this) != true)
+        if (chosenPath is null)
         {
-            return;
+            Microsoft.Win32.OpenFileDialog dialog = new()
+            {
+                Title = "PICK A BACKUP FILE",
+                Filter = "Gamer Tool backup|*.json|All files|*.*",
+                CheckFileExists = true
+            };
+
+            if (dialog.ShowDialog(this) != true)
+            {
+                return;
+            }
+
+            path = dialog.FileName;
         }
 
-        AppSettings? incoming = _backups.Import(dialog.FileName, out RestoreReport report, out string error);
+        AppSettings? incoming = _backups.Import(path, out RestoreReport report, out string error);
         if (incoming is null)
         {
             TraceLog.Write("BACKUP IMPORT " + error);
@@ -153,7 +162,99 @@ public partial class MainWindow : Window
     }
 
 
+    /// <summary>
+    /// Back to what the app ships with.
+    /// <para>
+    /// The one action in the app that costs the user their work in bulk, so it is
+    /// asked about in full and the profile it replaces is written to a file beside
+    /// the profile first. That file is an ordinary backup, so "Restore" is the way
+    /// back, and the wording says so rather than promising an undo button that does
+    /// not exist.
+    /// </para>
+    /// </summary>
+    private void OnFactoryResetClick(object sender, RoutedEventArgs e)
+    {
+        if (_modalLayer.Visibility == Visibility.Visible)
+        {
+            Flash("Close the open dialog first", true);
+            return;
+        }
+
+        ShowConfirmModal(
+            "RESET EVERYTHING?",
+            "Every preset, slot, hotkey, crosshair and screen setting goes back to what Gamer Tool ships with. "
+                + "The settings they replace are saved as a backup file in your profile folder first, so Restore can bring them back.",
+            "Reset everything",
+            ApplyFactoryReset,
+            "Cancel");
+    }
+
+    private void ApplyFactoryReset()
+    {
+        try
+        {
+            // Written before anything is replaced. If the copy cannot be made, the
+            // reset does not happen: the whole point of offering this is that it can
+            // be taken back, and a reset without its rescue is one that cannot.
+            string folder = Path.GetDirectoryName(_profiles.SettingsPath) ?? string.Empty;
+            string rescue = FactoryReset.RescuePath(folder, DateTime.Now);
+            _backups.Export(_settings, rescue);
+
+            TraceLog.Write("SETTINGS reset; the settings it replaced are in " + rescue);
+
+            ApplyProfile(_profiles.Defaults());
+
+            ShowBackupDetail(
+                string.Empty,
+                "Settings reset. What they were is in " + Path.GetFileName(rescue) + ", beside your settings file.");
+            Flash("Everything reset to defaults");
+        }
+        catch (Exception ex)
+        {
+            TraceLog.Write("SETTINGS reset", ex);
+            Flash("The reset did not finish. Details are in the log.", true);
+        }
+    }
+
     private void ApplyRestored(AppSettings incoming, RestoreReport report)
+    {
+        ApplyProfile(incoming);
+
+        // The hint is dropped rather than left standing: it names a file and a
+        // time from the last time a backup was written, which after a restore is
+        // history rather than news.
+        string pictures = report.PicturesRestored == 1
+            ? "1 crosshair picture"
+            : report.PicturesRestored.ToString(CultureInfo.InvariantCulture) + " crosshair pictures";
+
+        ShowBackupDetail(
+            string.Empty,
+            report.AnythingToReport
+                ? "Restored with fixes: " + report.Summary.ToLowerInvariant() + "."
+                : report.PicturesRestored > 0
+                    ? "Restored clean. Everything in the file matched this PC, including " + pictures + "."
+                    : "Restored clean. Everything in the file matched this PC.");
+
+        if (report.Notes.Count > 0)
+        {
+            MessageBox.Show(
+                this,
+                string.Join(Environment.NewLine + Environment.NewLine, report.Notes),
+                "Restored with a few changes",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+
+        Flash("Backup restored");
+    }
+
+    /// <summary>
+    /// Swaps the profile the window is running on and brings every surface in line.
+    /// Shared by a restore and a reset, because both replace the whole profile and a
+    /// second copy of this list is how one of them ends up leaving a control showing
+    /// the profile that is no longer loaded.
+    /// </summary>
+    private void ApplyProfile(AppSettings incoming)
     {
         _settings = incoming;
         _audio.ExePath = _settings.FxSoundPath;
@@ -192,33 +293,6 @@ public partial class MainWindow : Window
         RefreshBacklightRows();
         _ = RefreshFxStateAsync(true);
         Commit();
-
-        // The hint is dropped rather than left standing: it names a file and a
-        // time from the last time a backup was written, which after a restore is
-        // history rather than news.
-        string pictures = report.PicturesRestored == 1
-            ? "1 crosshair picture"
-            : report.PicturesRestored.ToString(CultureInfo.InvariantCulture) + " crosshair pictures";
-
-        ShowBackupDetail(
-            string.Empty,
-            report.AnythingToReport
-                ? "Restored with fixes: " + report.Summary.ToLowerInvariant() + "."
-                : report.PicturesRestored > 0
-                    ? "Restored clean. Everything in the file matched this PC, including " + pictures + "."
-                    : "Restored clean. Everything in the file matched this PC.");
-
-        if (report.Notes.Count > 0)
-        {
-            MessageBox.Show(
-                this,
-                string.Join(Environment.NewLine + Environment.NewLine, report.Notes),
-                "Restored with a few changes",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
-        }
-
-        Flash("Backup restored");
     }
 
 

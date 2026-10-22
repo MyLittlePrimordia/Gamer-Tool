@@ -468,10 +468,17 @@
                                         </Grid>
 
                                         <StackPanel Grid.Column="2" VerticalAlignment="Top">
-                                            <TextBlock Style="{StaticResource Label}" Text="Blue light filter" Margin="0,0,0,10" />
+                                            <!-- Says out loud that it is global. Saving a preset stores the
+                                                 sliders but not this level, while the preview and Apply
+                                                 both fold it in - so a preset tuned on a warm evening and
+                                                 loaded on a neutral one looks different, and nothing used
+                                                 to say why. Naming the scope on the control is the honest
+                                                 half of that; the other half would be a field in every
+                                                 preset, which is a design decision rather than a fix. -->
+                                            <TextBlock Style="{StaticResource Label}" Text="Blue light filter · all presets" Margin="0,0,0,10" />
                                             <ComboBox x:Name="BlueLightBox" Style="{StaticResource ModernCombo}"
                                                       ItemContainerStyle="{StaticResource ModernComboItem}" SelectionChanged="OnBlueLightChanged"
-                                                      ToolTip="Blue Light" />
+                                                      ToolTip="Every preset is drawn through this filter. It is saved in settings, not in a preset." />
                                         </StackPanel>
                                     </Grid>
 
@@ -510,13 +517,24 @@
                                          sits in the trailing star row, below the
                                          controls, so it only takes space when it
                                          has something to say. -->
-                                    <TextBlock x:Name="ScreenHdrNote" Grid.Row="3"
-                                               Style="{StaticResource CardSub}"
-                                               Foreground="{StaticResource Amber}"
-                                               TextWrapping="Wrap"
-                                               VerticalAlignment="Top"
-                                               Margin="0,16,0,0"
-                                               Visibility="Collapsed" />
+                                    <!-- The note and the way out of it, in one place. It used to
+                                         explain that HDR discards the gamma ramp and stop there, so
+                                         the only control that could fix it lived in a slot's
+                                         right-click menu two tabs away. An explanation of a problem
+                                         with no action beside it is a dead end. -->
+                                    <StackPanel x:Name="ScreenHdrRow" Grid.Row="3" Margin="0,16,0,0"
+                                                VerticalAlignment="Top" Visibility="Collapsed">
+                                        <TextBlock x:Name="ScreenHdrNote"
+                                                   Style="{StaticResource CardSub}"
+                                                   Foreground="{StaticResource Amber}"
+                                                   TextWrapping="Wrap" />
+                                        <Button x:Name="ScreenHdrFix" Content="Turn HDR off"
+                                                Style="{StaticResource GhostButton}"
+                                                HorizontalAlignment="Left" Margin="0,8,0,0"
+                                                Click="OnTurnHdrOffClick"
+                                                ToolTip="HDR discards the gamma ramp, so this preset cannot reach the screen while it is on."
+                                                AutomationProperties.Name="Turn HDR off on this screen" />
+                                    </StackPanel>
                                 </Grid>
                             </Grid>
 
@@ -530,6 +548,18 @@
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
+                                <!-- The scope, because Apply used to mean every screen while
+                                     the page spoke about one. It sits beside Apply rather than
+                                     in the header, because it is a property of the action rather
+                                     than of the preset: a slot still loads onto its own screen. -->
+                                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Style="{StaticResource Label}" Text="Screens" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <ComboBox x:Name="DisplayScopeBox" Style="{StaticResource ModernCombo}"
+                                              ItemContainerStyle="{StaticResource ModernComboItem}"
+                                              Width="176" SelectionChanged="OnDisplayScopeChanged"
+                                              ToolTip="Which screen Apply changes. A preset loaded by a slot uses that slot's screen instead. Hardware brightness goes to the scoped screen, or to the first panel that answers when this is set to all screens."
+                                              AutomationProperties.Name="Screen scope for Apply" />
+                                </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                     <Button Content="Apply" Style="{StaticResource PrimaryButton}" MinWidth="116"
                                             Click="OnApplyScreenClick" ToolTip="Apply" AutomationProperties.Name="Apply the screen preset" />
@@ -666,9 +696,17 @@
                                                      mirroring the day and night control on the
                                                      display preview, so the two boxes read the
                                                      same way. -->
-                                                <ui:IconButton x:Name="AudioPreviewButton" Grid.Column="1" Style="{StaticResource IconButton}"
-                                                              IconSize="15" Click="OnAudioPreviewClick" ToolTip="Play"
-                                                              AutomationProperties.Name="Play or pause the audio preview" />
+                                                <!-- The transport says what it is playing, not just that
+                                                     something is. The loop's name was only in a tooltip on
+                                                     the button that switches it, so a paused tab gave no clue
+                                                     which of the three samples was loaded. -->
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <ui:IconButton x:Name="AudioPreviewButton" Style="{StaticResource IconButton}"
+                                                                  IconSize="15" Click="OnAudioPreviewClick" ToolTip="Play"
+                                                                  AutomationProperties.Name="Play or pause the audio preview" />
+                                                    <TextBlock x:Name="PreviewTrackText" Style="{StaticResource SectionHeader}" Text="GAME"
+                                                               Margin="8,0,0,0" VerticalAlignment="Center" />
+                                                </StackPanel>
                                                 <Button x:Name="PreviewTrackButton" Grid.Column="2" Style="{StaticResource PillTab}"
                                                         HorizontalAlignment="Right" Margin="0"
                                                         AutomationProperties.Name="Change the preview track"
@@ -677,7 +715,19 @@
                                                 </Button>
                                             </Grid>
                                             <Border Grid.Row="1" CornerRadius="10" ClipToBounds="True" Background="#000000" Padding="5,4,0,0">
-                                                <Grid x:Name="SpectrumHost" />
+                                                <Grid>
+                                                    <Grid x:Name="SpectrumHost" />
+                                                    <!-- Where the loop is, drawn on the floor of the
+                                                         spectrum rather than as another control. It only
+                                                         exists while something is playing, so a still
+                                                         spectrum is not decorated by a bar that never
+                                                         moves. -->
+                                                    <Grid x:Name="PreviewProgressTrack" Height="3" VerticalAlignment="Bottom"
+                                                          Background="#22FFFFFF" ClipToBounds="True" Visibility="Collapsed">
+                                                        <Border x:Name="PreviewProgressFill" HorizontalAlignment="Left"
+                                                                Background="{StaticResource AccentAudio}" Width="0" />
+                                                    </Grid>
+                                                </Grid>
                                             </Border>
                                         </Grid>
                                     </Border>
@@ -1783,6 +1833,8 @@
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="8" />
                                                 <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="8" />
+                                                <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                             <Button Grid.Column="0" Style="{StaticResource PrimaryButton}" MinWidth="118" Click="OnBackupClick"
                                                     ToolTip="Write a backup file">
@@ -1803,6 +1855,19 @@
                                                     </Viewbox>
                                                     <TextBlock Text="Restore" Margin="8,0,0,0" VerticalAlignment="Center" />
                                                 </StackPanel>
+                                            </Button>
+                                            <!-- Start over, at the end of the row because it is
+                                                 the one action here that costs work in bulk. Its
+                                                 dialog names the copy it keeps, and Restore is
+                                                 what reads that copy back.
+
+                                                 Three buttons, not four: the daily copies the
+                                                 app keeps are still written and still the last
+                                                 resort in the loader, but a fourth button here
+                                                 squeezed the row until its own label was clipped. -->
+                                            <Button x:Name="FactoryResetButton" Grid.Column="4" Style="{StaticResource GhostButton}" MinWidth="96" Click="OnFactoryResetClick"
+                                                    ToolTip="Put every setting back to what Gamer Tool ships with">
+                                                <TextBlock Text="Reset all" VerticalAlignment="Center" />
                                             </Button>
                                         </Grid>
                                     </Grid>
@@ -2314,6 +2379,12 @@
                                              Width="112" MinWidth="112" Height="26"
                                              ToolTip="Key for next crosshair"
                                              AutomationProperties.Name="Crosshair cycle key" />
+                                    <!-- What that key will pick, because the cycle runs through
+                                         built ins and then your own in list order and there
+                                         was nothing anywhere that said so. -->
+                                    <TextBlock x:Name="XhCycleNextText" Style="{StaticResource CardSub}"
+                                               VerticalAlignment="Center" Margin="10,0,0,0"
+                                               MaxWidth="130" TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
                             </Grid>
                         </Grid>
@@ -2332,7 +2403,12 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Ellipse Width="6" Height="6" Fill="{StaticResource Green}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <!-- Named, because it used to be a hardcoded green dot beside a
+                         line that could read SCAN FAILED. A lamp that is green in
+                         every state is not a lamp; it is decoration that says the
+                         opposite of the words next to it. Every status writer goes
+                         through SetRail so the two cannot disagree. -->
+                    <Ellipse x:Name="RailDot" Width="6" Height="6" Fill="{StaticResource Green}" VerticalAlignment="Center" Margin="0,0,8,0" />
                     <TextBlock x:Name="RailStatus" Text="READY" FontSize="10.5" Foreground="{StaticResource TextMid}" VerticalAlignment="Center" />
                 </StackPanel>
 

@@ -129,11 +129,14 @@ public partial class MainWindow : Window
             {
                 _settings.CustomDisplayPresets.RemoveAll(p => p.Id == mine.Id);
                 _activeDisplayId = string.Empty;
-                Commit();
+                bool saved = Commit();
                 RefreshPresetBoxes();
                 LoadTune(DisplayPreset.Flat(), _workAudio);
                 BuildSlots();
-                Flash(removed + " deleted");
+                if (saved)
+                {
+                    Flash(removed + " deleted");
+                }
             });
     }
 
@@ -148,10 +151,13 @@ public partial class MainWindow : Window
             preset.Tag = "Mine";
             _settings.CustomDisplayPresets.Add(preset);
             _activeDisplayId = preset.Id;
-            Commit();
+            bool saved = Commit();
             RefreshPresetBoxes();
             BuildSlots();
-            Flash(name + " saved");
+            if (saved)
+            {
+                Flash(name + " saved");
+            }
         });
     }
 
@@ -400,7 +406,80 @@ public partial class MainWindow : Window
 
     private void ApplyDisplay(DisplayPreset preset, bool announce)
     {
-        ApplyDisplay(preset, string.Empty, announce);
+        ApplyDisplay(preset, ScopeDevice(), announce);
+    }
+
+
+    /// <summary>Guards the scope picker while its list is being filled.</summary>
+    private bool _displayScopeUpdating;
+
+
+    /// <summary>
+    /// The screen the Display tab's Apply should change, or empty for all of them.
+    /// <para>
+    /// Checked against the screens that are attached now rather than trusted. A
+    /// scope is a device name, and <c>\\.\DISPLAY2</c> is exactly the kind of name
+    /// Windows hands to different hardware after a cable moves - so a saved scope
+    /// that is no longer here falls back to all screens instead of making Apply
+    /// fail with NO SUCH SCREEN.
+    /// </para>
+    /// </summary>
+    private string ScopeDevice()
+    {
+        return DisplayScope.Resolve(
+            _settings.DisplayScope,
+            _display.MonitorChoices.Select(c => c.Device).Where(d => d.Length > 0));
+    }
+
+
+    /// <summary>
+    /// Fills the scope picker, keeping the saved choice when that screen is still
+    /// attached and falling back to all screens when it is not.
+    /// </summary>
+    private void BuildDisplayScopeList()
+    {
+        if (DisplayScopeBox is null)
+        {
+            return;
+        }
+
+        _displayScopeUpdating = true;
+        try
+        {
+            IReadOnlyList<MonitorChoice> choices = _display.MonitorChoices;
+            string wanted = _settings.DisplayScope;
+
+            DisplayScopeBox.ItemsSource = choices;
+            DisplayScopeBox.SelectedItem =
+                choices.FirstOrDefault(c => string.Equals(c.Device, wanted, StringComparison.OrdinalIgnoreCase))
+                ?? choices[0];
+        }
+        finally
+        {
+            _displayScopeUpdating = false;
+        }
+    }
+
+
+    /// <summary>
+    /// Remembers which screen Apply changes. It does not re-apply anything: the
+    /// whole Display tab is a preview until Apply is pressed, and a scope is a
+    /// property of the action rather than a preset change.
+    /// </summary>
+    private void OnDisplayScopeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_displayScopeUpdating || !_ready || DisplayScopeBox.SelectedItem is not MonitorChoice choice)
+        {
+            return;
+        }
+
+        if (string.Equals(_settings.DisplayScope, choice.Device, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _settings.DisplayScope = choice.Device;
+        Commit();
     }
 
 
@@ -596,7 +675,7 @@ public partial class MainWindow : Window
         // a game launch replays a stored value; pressing Apply on a hand-tuned screen
         // is a statement about the panel as it is right now.
         CaptureBacklightIntoWorking();
-        ApplyDisplay(_workDisplay.Copy(), true);
+        ApplyDisplay(_workDisplay.Copy(), ScopeDevice(), true);
     }
 
 
@@ -624,7 +703,7 @@ public partial class MainWindow : Window
         }
 
         TraceLog.Write("STARTUP display restore " + presetId);
-        ApplyDisplay(_workDisplay.Copy(), announce: false);
+        ApplyDisplay(_workDisplay.Copy(), ScopeDevice(), announce: false);
     }
 
 
@@ -653,6 +732,19 @@ public partial class MainWindow : Window
         if (usable.Length == 0)
         {
             _workDisplay.Backlight = null;
+            return;
+        }
+
+        // The scoped screen wins, because the user has just said which panel this
+        // preset is for. It is the difference between "the brightness" being
+        // ambiguous on a two monitor desk and it being named.
+        string scope = ScopeDevice();
+        if (scope.Length > 0)
+        {
+            MonitorProbe? scoped = usable.FirstOrDefault(m =>
+                string.Equals(m.DeviceName, scope, StringComparison.OrdinalIgnoreCase));
+
+            _workDisplay.Backlight = scoped?.Brightness?.Current;
             return;
         }
 
@@ -843,6 +935,7 @@ public partial class MainWindow : Window
         }
 
         string note = string.Empty;
+        bool canTurnOff = false;
 
         if (_appliedMonitor.Length > 0)
         {
@@ -851,6 +944,7 @@ public partial class MainWindow : Window
             if (reading.Known && reading.Active)
             {
                 note = HdrNotes.HdrOn;
+                canTurnOff = true;
             }
             else if (!reading.Known)
             {
@@ -876,6 +970,45 @@ public partial class MainWindow : Window
 
         ScreenHdrNote.Text = note;
         ScreenHdrNote.Visibility = note.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        ScreenHdrRow.Visibility = note.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        ScreenHdrFix.Visibility = canTurnOff ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+
+    /// <summary>
+    /// Turns HDR off on the screen the preset was applied to, because that is what
+    /// the note above this button is complaining about.
+    /// <para>
+    /// Windows discards a gamma ramp when the display mode changes, so the ramp is
+    /// pushed again afterwards rather than waiting out the gamma lock's own tick.
+    /// The change is journaled by <see cref="HdrControl"/>, so quitting puts the
+    /// screen back the way the user had it, exactly as a slot's HDR does.
+    /// </para>
+    /// </summary>
+    private void OnTurnHdrOffClick(object sender, RoutedEventArgs e)
+    {
+        string device = _appliedMonitor;
+        if (device.Length == 0)
+        {
+            return;
+        }
+
+        HdrApplyResult result = _hdr.Apply(device, DisplayService.MonitorKeyFor(device), SlotHdrMode.Off);
+
+        if (result.Applied)
+        {
+            if (_display.ShouldDefend)
+            {
+                _display.Push();
+            }
+
+            UpdateScreenHdrNote();
+            Flash("HDR off on " + device.ToUpperInvariant());
+            return;
+        }
+
+        UpdateScreenHdrNote();
+        Flash(result.Warning.Length > 0 ? result.Warning : "HDR was left as it was", true);
     }
 
 
@@ -1187,9 +1320,25 @@ public partial class MainWindow : Window
         // the same path the schedule itself uses. Called before the Commit below so
         // the write at the end of this method describes what is actually on screen;
         // ApplyDisplay commits too, so the profile is written twice on this path.
-        if (ShouldReassertNightAfterStandDown(_nightApplied, _nightSuppressed, emergency))
+        // A level picked by hand is the same kind of live state as the schedule's,
+        // and it was the one case this did not put back. With the schedule off -
+        // which is the ordinary configuration - resetting wrote the monitor's own
+        // ramp and left the dropdown still reading WARM, so the app was asserting a
+        // filter the screen was not wearing until the next Apply. Only the schedule
+        // path re-asserted anything, and only while it was running.
+        //
+        // The two are mutually exclusive: the schedule's level is folded in through
+        // ActiveBlueLightLevel, and _nightApplied false means the number in the
+        // profile is the one in force.
+        bool reassertNight = ShouldReassertNightAfterStandDown(_nightApplied, _nightSuppressed, emergency);
+        bool reassertFilter = ShouldReassertFilterAfterStandDown(
+            _nightApplied, _nightSuppressed, emergency, _settings.BlueLightFilter);
+
+        if (reassertFilter)
         {
-            TraceLog.Write("NIGHT re-asserting the filter after a stand-down");
+            TraceLog.Write(reassertNight
+                ? "NIGHT re-asserting the filter after a stand-down"
+                : "BLUE LIGHT re-asserting the hand-picked filter after a stand-down");
             ApplyDisplay(DisplayPreset.Flat(), string.Empty, false);
         }
 
@@ -1250,6 +1399,7 @@ public partial class MainWindow : Window
             // snapshot taken when the row was built. Without this the dropdown
             // keeps offering a screen that was unplugged an hour ago, which is
             // how someone ends up scoped to a display that is not there.
+            BuildDisplayScopeList();
             RefreshPresetBoxes();
             BuildSlots();
             RestoreSlotFocus(focused);

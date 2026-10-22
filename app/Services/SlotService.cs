@@ -129,6 +129,31 @@ new HotkeySlot
     /// and should be renameable and deletable like one.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Moves one slot one place up or down, and says whether it moved.
+    /// <para>
+    /// Order is not cosmetic here: the tray menu, the cycle key and the slot board
+    /// all read this list in order, and until this existed there was no way to
+    /// change it short of hand editing settings.json. A slot added first stayed
+    /// first for the life of the profile.
+    /// </para>
+    /// </summary>
+    public static bool Move(System.Collections.Generic.IList<HotkeySlot> slots, HotkeySlot slot, int delta)
+    {
+        int at = slots.IndexOf(slot);
+        int to = at + delta;
+
+        if (at < 0 || delta == 0 || to < 0 || to >= slots.Count)
+        {
+            return false;
+        }
+
+        slots.RemoveAt(at);
+        slots.Insert(to, slot);
+        return true;
+    }
+
+
     public static HotkeySlot Duplicate(HotkeySlot source, int index)
     {
         HotkeySlot copy = NewSlot(index);

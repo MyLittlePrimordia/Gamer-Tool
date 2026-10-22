@@ -74,6 +74,13 @@ public partial class MainWindow
     private readonly DispatcherTimer _xhSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
 
     /// <summary>
+    /// True while the working crosshair is an edited built-in, which has no preset of
+    /// its own behind it. Nothing is written to disk in that state, so the next preset
+    /// picked would drop the work without a word - the switching paths ask first.
+    /// </summary>
+    private bool _xhTuned;
+
+    /// <summary>
     /// Build the tab and load the crosshair it opens on.
     /// </summary>
     /// <param name="headless">
@@ -374,9 +381,75 @@ public partial class MainWindow
             return;
         }
 
+        if (!_xhTuned)
+        {
+            SwitchToCrosshair(preset);
+            return;
+        }
+
+        AskToKeepTuning(() => SwitchToCrosshair(preset));
+
+        // The box is already showing the preset that was clicked, and the switch it
+        // shows is the one being questioned. Put it back on the tuning.
+        RefreshCrosshairBox();
+    }
+
+    /// <summary>Pick a preset from the dropdown: load it, make it the active one and save.</summary>
+    private void SwitchToCrosshair(CrosshairPreset preset)
+    {
         LoadCrosshair(preset);
         _settings.ActiveCrosshairId = preset.Id;
         Commit();
+    }
+
+    /// <summary>
+    /// Ask before a switch throws away tuning, and save it as the user's own preset
+    /// if that is what they choose.
+    /// <para>
+    /// Cancel deliberately means "keep working": it closes the question and leaves
+    /// the tuned crosshair on the tab, rather than switching to the preset and
+    /// losing it. Saving here is the same one-press copy Duplicate makes, because an
+    /// edited built-in cannot be written back to itself - a copy is the only place
+    /// that edit can live.
+    /// </para>
+    /// </summary>
+    private void AskToKeepTuning(Action proceed)
+    {
+        StackPanel content = new() { Margin = new Thickness(4, 0, 4, 0) };
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = "The crosshair on this tab has changes that are not saved yet. Built in crosshairs cannot be written back to, so picking another one would drop them.",
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 18,
+        });
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = "Save and keep puts them in a new crosshair of your own, then switches. Cancel stays here with them.",
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 18,
+            Foreground = (Brush)FindResource("TextMid"),
+            Margin = new Thickness(0, 8, 0, 0),
+        });
+
+        ShowCustomModal("KEEP YOUR TUNING?", content, "SAVE AND KEEP", () =>
+        {
+            SaveTunedAsPreset();
+            proceed();
+        });
+    }
+
+    /// <summary>The tab's crosshair as a new preset of the user's own, name and all.</summary>
+    private CrosshairPreset SaveTunedAsPreset()
+    {
+        CrosshairPreset copy = _workCrosshair.Copy();
+        copy.Id = AppProfileTools.NewId("xh");
+        copy.Name = FreeCrosshairName(copy.Name);
+
+        _settings.CustomCrosshairs.Add(copy);
+        _xhTuned = false;
+        return copy;
     }
 
     /// <summary>Make a preset the working crosshair and bring the whole tab, and the screen, in line.</summary>
@@ -384,6 +457,7 @@ public partial class MainWindow
     {
         _workCrosshair = preset.Copy().Sanitised();
         _xhPresetId = preset.Id;
+        _xhTuned = false;
         RefreshCrosshairBox();
         UpdateXhControls();
         UpdateXhStatus();
@@ -521,6 +595,8 @@ public partial class MainWindow
         {
             _xhUpdating = false;
         }
+
+        UpdateCycleNextLabel();
     }
 
     private void UpdateXhValueLabels()
@@ -997,6 +1073,7 @@ public partial class MainWindow
         }
         else if (_xhPresetId.Length > 0)
         {
+            _xhTuned = true;
             _xhPresetId = string.Empty;
             _workCrosshair.Id = string.Empty;
             _workCrosshair.Name = "Tuned";
@@ -1289,11 +1366,15 @@ public partial class MainWindow
 
             _workCrosshair = preset.Copy();
             _xhPresetId = preset.Id;
+            _xhTuned = false;
             _settings.ActiveCrosshairId = preset.Id;
-            Commit();
+            bool saved = Commit();
             RefreshCrosshairBox();
             BuildSlots();
-            Flash(name + " saved");
+            if (saved)
+            {
+                Flash(name + " saved");
+            }
         });
     }
 
@@ -1323,6 +1404,7 @@ public partial class MainWindow
         _settings.CustomCrosshairs.Add(copy);
         _workCrosshair = copy.Copy();
         _xhPresetId = copy.Id;
+        _xhTuned = false;
         _settings.ActiveCrosshairId = copy.Id;
         Commit();
         RefreshCrosshairBox();
@@ -1435,10 +1517,13 @@ public partial class MainWindow
 
                 CrosshairPreset fallback = CrosshairPreset.Default();
                 _settings.ActiveCrosshairId = fallback.Id;
-                Commit();
+                bool saved = Commit();
                 LoadCrosshair(fallback);
                 BuildSlots();
-                Flash(removed + " deleted");
+                if (saved)
+                {
+                    Flash(removed + " deleted");
+                }
             });
     }
 
@@ -2147,16 +2232,19 @@ public partial class MainWindow
     /// </summary>
     private void CycleCrosshairFromKey()
     {
-        List<CrosshairPreset> all = AllCrosshairs().ToList();
-        if (all.Count == 0)
+        // A key press cannot stop to ask, and stepping on would drop tuning that has
+        // no preset behind it. Keep it and say so; the tab is one click away.
+        if (_xhTuned)
         {
+            Flash("Unsaved tuning kept \u00B7 save it in Crosshair to cycle", true);
             return;
         }
 
-        int at = _xhPresetId.Length == 0
-            ? -1
-            : all.FindIndex(p => string.Equals(p.Id, _xhPresetId, StringComparison.OrdinalIgnoreCase));
-        CrosshairPreset next = all[(at + 1) % all.Count];
+        CrosshairPreset? next = NextCrosshair();
+        if (next is null)
+        {
+            return;
+        }
 
         LoadCrosshair(next);
         _settings.ActiveCrosshairId = next.Id;
@@ -2169,6 +2257,48 @@ public partial class MainWindow
         }
 
         Flash(next.Name);
+    }
+
+
+    /// <summary>
+    /// What the cycle key would pick from where the tab is now, or null when there
+    /// is nothing to pick.
+    /// <para>
+    /// One method rather than the expression written twice, because the label beside
+    /// the key has to name the same entry the key will actually load. Two copies of
+    /// "next in the list" would eventually disagree, and the one that was wrong
+    /// would be the one the user was reading before pressing the key.
+    /// </para>
+    /// </summary>
+    private CrosshairPreset? NextCrosshair()
+    {
+        List<CrosshairPreset> all = AllCrosshairs().ToList();
+        if (all.Count == 0)
+        {
+            return null;
+        }
+
+        int at = _xhPresetId.Length == 0
+            ? -1
+            : all.FindIndex(p => string.Equals(p.Id, _xhPresetId, StringComparison.OrdinalIgnoreCase));
+
+        return all[(at + 1) % all.Count];
+    }
+
+
+    /// <summary>Names the next crosshair on the cycling key, or clears the label.</summary>
+    private void UpdateCycleNextLabel()
+    {
+        if (XhCycleNextText is null)
+        {
+            return;
+        }
+
+        CrosshairPreset? next = NextCrosshair();
+        XhCycleNextText.Text = next is null ? string.Empty : "NEXT " + next.Name.ToUpperInvariant();
+        CrosshairCycleKeyBox.ToolTip = next is null
+            ? "Key for next crosshair"
+            : "Key for next crosshair - next: " + next.Name;
     }
 
     // ------------------------------------------------------------ tray menu

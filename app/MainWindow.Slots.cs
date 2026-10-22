@@ -118,12 +118,15 @@ public partial class MainWindow : Window
         _settings.Slots.Add(slot);
         ReleaseAutoClaims(slot);
 
-        Commit();
+        bool saved = Commit();
         BuildSlots();
         RegisterHotkeys();
         ApplyWatchState();
 
-        Flash(game.Name + " added");
+        if (saved)
+        {
+            Flash(game.Name + " added");
+        }
         RefreshAddPlayingState();
     }
 
@@ -644,6 +647,12 @@ public partial class MainWindow : Window
         MenuItem hdr = new() { Header = "HDR on this screen..." };
         hdr.Click += (s, e) => ShowHdrDialog(slot);
         menu.Items.Add(hdr);
+
+        // The arguments a game is started with are the same kind of thing: per slot,
+        // rarely touched, and worth a field rather than a column of its own.
+        MenuItem launch = new() { Header = "Launch options..." };
+        launch.Click += (s, e) => ShowLaunchOptionsDialog(slot);
+        menu.Items.Add(launch);
         menu.Items.Add(new Separator());
 
         MenuItem route = new() { Header = "Windows audio routing..." };
@@ -657,6 +666,26 @@ public partial class MainWindow : Window
         MenuItem shortcut = new() { Header = "Create Play shortcut" };
         shortcut.Click += (s, e) => CreatePlayShortcut(slot);
         menu.Items.Add(shortcut);
+
+        // Order, because the tray list and the cycle key read this list top to
+        // bottom. Disabled at the ends rather than allowed and ignored, so the menu
+        // says which direction is available instead of doing nothing on a click.
+        int position = _settings.Slots.IndexOf(slot);
+
+        menu.Items.Add(new Separator());
+
+        MenuItem up = new() { Header = "Move up", IsEnabled = position > 0 };
+        up.Click += (s, e) => MoveSlot(slot, -1);
+        menu.Items.Add(up);
+
+        MenuItem down = new()
+        {
+            Header = "Move down",
+            IsEnabled = position >= 0 && position < _settings.Slots.Count - 1,
+        };
+        down.Click += (s, e) => MoveSlot(slot, 1);
+        menu.Items.Add(down);
+
         card.ContextMenu = menu;
 
         return card;
@@ -759,6 +788,99 @@ public partial class MainWindow : Window
     /// related rather than the new one appearing at the bottom of a list the user
     /// is looking at the top of.
     /// </summary>
+    /// <summary>
+    /// Reorders a slot, and tells everything that reads the list in order.
+    /// <para>
+    /// The hotkeys are registered again rather than left alone: their ids are
+    /// positions in this list, so a swap without a re-register would leave a key
+    /// firing the slot that used to be beside it.
+    /// </para>
+    /// </summary>
+    private void MoveSlot(HotkeySlot slot, int delta)
+    {
+        if (!SlotService.Move(_settings.Slots, slot, delta))
+        {
+            return;
+        }
+
+        bool saved = Commit();
+        BuildSlots();
+        RegisterHotkeys();
+        ApplyWatchState();
+        RefreshTraySlots();
+
+        if (saved)
+        {
+            Flash(slot.Name + (delta < 0 ? " moved up" : " moved down"));
+        }
+    }
+
+
+    /// <summary>
+    /// The extra words Play hands to this slot's game.
+    /// <para>
+    /// A dialog rather than a column, for the reason the row already gives about HDR:
+    /// it is measured to the pixel, and most slots never need this. A slot that
+    /// starts through a launcher is told so here, in the field's own caption, because
+    /// the launcher owns the command line of the game it starts and a field that took
+    /// the text and silently dropped it would be worse than no field.
+    /// </para>
+    /// </summary>
+    private void ShowLaunchOptionsDialog(HotkeySlot slot)
+    {
+        StackPanel content = new();
+
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = "Anything the game takes on its command line, as you would type it after the exe: -dx12 -skipintro. Leave it empty for none.",
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 18,
+            Width = 420,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        });
+
+        TextBox field = new()
+        {
+            Style = (Style)FindResource("ModernTextBox"),
+            Text = slot.LaunchArguments,
+            MaxLength = LaunchArguments.Limit,
+            Margin = new Thickness(0, 12, 0, 0),
+            Height = 34,
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(field, "Launch arguments for " + slot.Name);
+        content.Children.Add(field);
+
+        bool viaLauncher = PlayPreflight.ViaFor(slot, out _) != LaunchVia.None;
+
+        content.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("CardSub"),
+            Text = viaLauncher
+                ? "This slot starts through its launcher, which owns the command line. These are read only when Play starts the executable itself."
+                : "Used by Play, and only when it starts this game itself.",
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 18,
+            Width = 420,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Foreground = (Brush)FindResource(viaLauncher ? "Amber" : "TextMid"),
+            Margin = new Thickness(0, 10, 0, 0),
+        });
+
+        ShowCustomModal("LAUNCH OPTIONS FOR " + slot.Name.ToUpperInvariant(), content, "SAVE", () =>
+        {
+            slot.LaunchArguments = LaunchArguments.Normalise(field.Text);
+            Commit();
+            BuildSlots();
+
+            Flash(slot.LaunchArguments.Length == 0
+                ? "No launch arguments for " + slot.Name
+                : "Launch arguments saved for " + slot.Name);
+        }, initialFocus: field);
+    }
+
+
     private void DuplicateSlot(HotkeySlot source)
     {
         int at = _settings.Slots.FindIndex(x => x.Id == source.Id);
@@ -770,14 +892,17 @@ public partial class MainWindow : Window
         HotkeySlot copy = SlotService.Duplicate(source, _settings.Slots.Count + 1);
         _settings.Slots.Insert(at + 1, copy);
 
-        Commit();
+        bool saved = Commit();
         BuildSlots();
         RegisterHotkeys();
         ApplyWatchState();
 
         // No announce: the copy has no key and does nothing, so claiming it was
         // applied would be a lie, and the toast is the only thing saying so.
-        Flash(copy.Name + " added");
+        if (saved)
+        {
+            Flash(copy.Name + " added");
+        }
     }
 
 
@@ -1704,19 +1829,19 @@ public partial class MainWindow : Window
         // was one line of caption text. The flag above stops the duplicate work;
         // this stops the button looking available while it is happening.
         ScanGamesButton.IsEnabled = false;
-        RailStatus.Text = "SCANNING FOR GAMES";
+        SetRail("SCANNING FOR GAMES", RailTone.Busy);
 
         try
         {
             await EnsureAppList(force: true);
             BuildSlots();
-            RailStatus.Text = "READY";
+            SetRail("READY");
             Flash(_appList.Count.ToString(CultureInfo.InvariantCulture) + " games found");
         }
         catch (Exception ex)
         {
             TraceLog.Write("SCAN GAMES", ex);
-            RailStatus.Text = "SCAN FAILED";
+            SetRail("SCAN FAILED", RailTone.Failed);
             Flash("Could not scan for games", true);
         }
         finally
@@ -1884,7 +2009,7 @@ public partial class MainWindow : Window
             // A shortcut outlives the slot it names when a profile is edited.
             // Bring the window up rather than leaving the click with no visible
             // result at all.
-            RailStatus.Text = "SLOT NOT FOUND";
+            SetRail("SLOT NOT FOUND", RailTone.Failed);
             Flash("That Play shortcut points at a slot that is gone", true);
             ShowFromSecondLaunch();
             return;
@@ -1914,7 +2039,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             TraceLog.Write("PLAY", ex);
-            RailStatus.Text = "PLAY FAILED";
+            SetRail("PLAY FAILED", RailTone.Failed);
             Flash("Could not start that slot. Details are in the log.", true);
         }
         finally
@@ -2017,7 +2142,7 @@ public partial class MainWindow : Window
 
         if (!preflight.CanLaunch)
         {
-            RailStatus.Text = "PLAY BLOCKED";
+            SetRail("PLAY BLOCKED", RailTone.Failed);
             Flash(preflight.BlockedReason, true);
             TraceLog.Write("PLAY BLOCKED " + slot.Name + " <- " + preflight.BlockedReason);
             return;
@@ -2066,7 +2191,7 @@ public partial class MainWindow : Window
         if (!alreadyRunning)
         {
             bool started = via == LaunchVia.None
-                ? TryStartGame(exePath, out string failure)
+                ? TryStartGame(exePath, LaunchArguments.Normalise(slot.LaunchArguments), out string failure)
                 : TryStartLauncher(launchUri, out failure);
 
             if (!started)
@@ -2144,7 +2269,7 @@ public partial class MainWindow : Window
             || _lastHdrWarnings.Count > 0
             || !_lastPlayScreenTookIt;
 
-        RailStatus.Text = "PLAYING " + slot.Name.ToUpperInvariant();
+        SetRail("PLAYING " + slot.Name.ToUpperInvariant());
 
         // The screen the game will open on, rather than the one this window is on:
         // at this moment the game has only just been asked to start.
@@ -2217,7 +2342,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private static bool TryStartGame(string exePath, out string error)
+    private static bool TryStartGame(string exePath, string arguments, out string error)
     {
         error = string.Empty;
 
@@ -2227,6 +2352,10 @@ public partial class MainWindow : Window
             {
                 FileName = exePath,
                 WorkingDirectory = Path.GetDirectoryName(exePath) ?? string.Empty,
+
+                // Empty for a slot that wants none, which is what the field is for
+                // and what every slot made before it existed carries.
+                Arguments = arguments,
                 UseShellExecute = true
             };
 
@@ -2271,7 +2400,7 @@ public partial class MainWindow : Window
             _ = GoSoundNeutralAsync();
         }
 
-        RailStatus.Text = "PLAY FAILED";
+        SetRail("PLAY FAILED", RailTone.Failed);
 
         string message = PlayLaunchWatch.GiveUpMessage(slot.Name);
 
@@ -2411,7 +2540,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        RailStatus.Text = "SHORTCUT CREATED";
+        SetRail("SHORTCUT CREATED");
         Flash("Play shortcut created: " + Path.GetFileName(path));
     }
 
@@ -2483,7 +2612,7 @@ public partial class MainWindow : Window
             // otherwise left the status bar and the toast claiming a preset that
             // was never applied, and left the key looking bound to something when
             // it was bound to nothing at all.
-            RailStatus.Text = "NOTHING SET";
+            SetRail("NOTHING SET", RailTone.Warn);
             Flash("Nothing set on " + slot.Name, true, ScreenForSlot(slot));
             return;
         }
@@ -2526,7 +2655,7 @@ public partial class MainWindow : Window
         // because there is no way to unsay the first one, and an amber plate
         // arriving a moment after a grey one says "that did not work" in a way the
         // user is already used to reading.
-        RailStatus.Text = slot.Name.ToUpperInvariant();
+        SetRail(slot.Name.ToUpperInvariant());
         if (announce)
         {
             Flash(slot.Name + " loaded", ScreenForSlot(slot));
@@ -2567,7 +2696,7 @@ public partial class MainWindow : Window
         // than reporting a clean load for something half of which is missing.
         if (!screenTookIt)
         {
-            RailStatus.Text = "SCREEN BLOCKED";
+            SetRail("SCREEN BLOCKED", RailTone.Failed);
 
             if (announce)
             {
@@ -2801,7 +2930,7 @@ public partial class MainWindow : Window
         // lines and both dropdowns, which are rebuilt from the ids just changed.
         RefreshActivePreset();
 
-        RailStatus.Text = "UNDONE";
+        SetRail("UNDONE");
         Flash("Back to what was loaded before");
     }
 
@@ -3657,8 +3786,10 @@ public partial class MainWindow : Window
             // other program, rather than free up a duplicate in here.
             bool refusedByOs = refusedKeys.Count > 0;
 
-            RailStatus.Text = (refusedByOs ? "KEY HELD BY ANOTHER PROGRAM ON " : "DUP KEY SKIPPED ON ")
-                + names.ToUpperInvariant();
+            SetRail(
+                (refusedByOs ? "KEY HELD BY ANOTHER PROGRAM ON " : "DUP KEY SKIPPED ON ")
+                    + names.ToUpperInvariant(),
+                RailTone.Failed);
 
             Flash(
                 refusedByOs
@@ -3749,7 +3880,7 @@ public partial class MainWindow : Window
                 GoScreenNeutral(emergency: true);
                 SuppressNightUntilNextWindow();
                 await GoSoundNeutralAsync();
-                RailStatus.Text = "PANIC RESET";
+                SetRail("PANIC RESET");
                 Flash(_nightSuppressed && _settings.NightBlueLight
                     ? "Screen and sound reset, night filter paused"
                     : "Screen and sound reset");
@@ -3839,7 +3970,7 @@ public partial class MainWindow : Window
     {
         if (!slot.HasWork)
         {
-            RailStatus.Text = "NOTHING SET";
+            SetRail("NOTHING SET", RailTone.Warn);
             Flash("Nothing set on " + slot.Name, true, ScreenForSlot(slot));
             return;
         }
@@ -4262,7 +4393,7 @@ public partial class MainWindow : Window
 
     private void OnHotkeyFailed(string text)
     {
-        RailStatus.Text = "KEY BUSY " + text;
+        SetRail("KEY BUSY " + text, RailTone.Failed);
     }
 
 

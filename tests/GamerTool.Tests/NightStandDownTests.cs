@@ -23,6 +23,9 @@ public class NightStandDownTests
     private static bool Reassert(bool nightApplied, bool suppressed, bool emergency) =>
         MainWindow.ShouldReassertNightAfterStandDown(nightApplied, suppressed, emergency);
 
+    private static bool ReassertFilter(bool nightApplied, bool suppressed, bool emergency, int manualLevel) =>
+        MainWindow.ShouldReassertFilterAfterStandDown(nightApplied, suppressed, emergency, manualLevel);
+
     [Fact]
     public void TheFilterComesBackAfterAnOrdinaryStandDown()
     {
@@ -58,6 +61,37 @@ public class NightStandDownTests
         // said what they wanted instead.
         Assert.False(Reassert(nightApplied: true, suppressed: true, emergency: false));
         Assert.False(Reassert(nightApplied: true, suppressed: true, emergency: true));
+    }
+
+    [Fact]
+    public void A_hand_picked_filter_is_put_back_after_a_reset()
+    {
+        // The case that was missing: the schedule is off, the user chose WARM on
+        // the Display tab, and Reset restored the monitor's own ramp. The dropdown
+        // kept reading WARM, so the app asserted a filter the screen was not
+        // wearing until the next Apply.
+        Assert.True(ReassertFilter(nightApplied: false, suppressed: false, emergency: false, manualLevel: 1));
+        Assert.True(ReassertFilter(nightApplied: false, suppressed: false, emergency: true, manualLevel: 2));
+    }
+
+    [Fact]
+    public void Nothing_is_put_back_when_the_filter_is_off()
+    {
+        // Otherwise every reset would write a flat ramp over a screen the user had
+        // already put right themselves, which is the failure the original guard
+        // existed for.
+        Assert.False(ReassertFilter(nightApplied: false, suppressed: false, emergency: false, manualLevel: 0));
+        Assert.False(ReassertFilter(nightApplied: false, suppressed: false, emergency: true, manualLevel: 0));
+    }
+
+    [Fact]
+    public void The_schedule_still_wins_over_the_hand_picked_level()
+    {
+        // While the schedule holds the filter, ActiveBlueLightLevel is the
+        // schedule's number, so the manual level must not add a second reason to
+        // push - and the panic key must still cancel the schedule's warmth.
+        Assert.True(ReassertFilter(nightApplied: true, suppressed: false, emergency: false, manualLevel: 1));
+        Assert.False(ReassertFilter(nightApplied: true, suppressed: false, emergency: true, manualLevel: 2));
     }
 
     [Fact]

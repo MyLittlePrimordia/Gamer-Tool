@@ -160,14 +160,23 @@ public class PlayLaunchTests
     {
         // UseShellExecute false makes a manifest that asks for administrator fail
         // with 740 instead of showing the UAC prompt, and no working directory
-        // breaks the games that load files relative to their own folder. No
-        // arguments at all: Play launches the program the user bound, nothing else.
+        // breaks the games that load files relative to their own folder. The one
+        // string that may be passed as arguments is the slot's own, normalised by
+        // its owner before it gets here - nothing on this path builds a command
+        // line out of a profile of its own.
         string slots = AppSource("MainWindow.Slots.cs");
-        string body = Body(slots, "private static bool TryStartGame(string exePath, out string error)");
+        string body = Body(slots, "private static bool TryStartGame(string exePath, string arguments, out string error)");
 
         Assert.Contains("UseShellExecute = true", body, StringComparison.Ordinal);
         Assert.Contains("WorkingDirectory = Path.GetDirectoryName(exePath)", body, StringComparison.Ordinal);
-        Assert.DoesNotContain("Arguments", body, StringComparison.Ordinal);
+        Assert.Contains("Arguments = arguments", body, StringComparison.Ordinal);
+
+        // The launcher path still takes none: it starts a URI, and the launcher owns
+        // the command line of the game it starts.
+        Assert.DoesNotContain(
+            "Arguments",
+            Body(slots, "private static bool TryStartLauncher(string uri, out string error)"),
+            StringComparison.Ordinal);
     }
 
     // ---------- the untrusted path ----------

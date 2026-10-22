@@ -1614,11 +1614,14 @@ public partial class MainWindow : Window
             {
                 _settings.CustomAudioPresets.RemoveAll(p => p.Id == mine.Id);
                 _activeAudioId = string.Empty;
-                Commit();
+                bool saved = Commit();
                 RefreshPresetBoxes();
                 LoadTune(_workDisplay, AudioPreset.Flat());
                 BuildSlots();
-                Flash(removed + " deleted");
+                if (saved)
+                {
+                    Flash(removed + " deleted");
+                }
             });
     }
 
@@ -1633,10 +1636,13 @@ public partial class MainWindow : Window
             preset.Tag = "Mine";
             _settings.CustomAudioPresets.Add(preset);
             _activeAudioId = preset.Id;
-            Commit();
+            bool saved = Commit();
             RefreshPresetBoxes();
             BuildSlots();
-            Flash(name + " saved");
+            if (saved)
+            {
+                Flash(name + " saved");
+            }
         });
     }
 
@@ -1652,6 +1658,28 @@ public partial class MainWindow : Window
         {
             _audioPreview.Play();
         }
+    }
+
+
+    /// <summary>
+    /// Says why a preview would not play, in the words the failure deserves.
+    /// <para>
+    /// It used to append "the app may be damaged" to every message, including the
+    /// two that mean the machine has no usable output device - which is the most
+    /// ordinary thing that can happen and not a sign of anything wrong with the
+    /// app. The player classifies the failure now; this decides whether that is
+    /// news the user can act on.
+    /// </para>
+    /// </summary>
+    private void OnAudioPreviewFailed(AudioPreviewPlayer.PreviewFailure kind, string message)
+    {
+        TraceLog.Write("AUDIO PREVIEW " + kind + ": " + message);
+        Flash(message, true);
+
+        // The transport has to stop claiming to play something that is not
+        // playing. The player clears its own flag before raising this, so the
+        // icon is the only surface left to put right.
+        UpdatePreviewTrackButton();
     }
 
 
@@ -1686,6 +1714,8 @@ public partial class MainWindow : Window
         PreviewTrackButton.Background = _audioPreview.Track == AudioPreviewPlayer.PreviewTrack.Game
             ? (Brush)FindResource("Elevated")
             : (Brush)FindResource("AccentAudioGlow");
+
+        PreviewTrackText.Text = tip.ToUpperInvariant();
     }
 
 
@@ -1699,7 +1729,84 @@ public partial class MainWindow : Window
         bool playing = _audioPreview.IsPlaying;
         AudioPreviewButton.Icon = playing ? Icons.Pause : Icons.Play;
         AudioPreviewButton.ToolTip = playing ? "Pause" : "Play";
+
+        PreviewTrackText.Text = _audioPreview.Track switch
+        {
+            AudioPreviewPlayer.PreviewTrack.Music => "MUSIC",
+            AudioPreviewPlayer.PreviewTrack.Footsteps => "FOOTSTEPS",
+            _ => "GAME",
+        };
+
+        // The playhead is only meaningful while the sound is moving. Left up, it
+        // would sit at a position from the last session and read as a stalled
+        // player; hidden, the spectrum card says exactly what it is - a meter.
+        PreviewProgressTrack.Visibility = playing ? Visibility.Visible : Visibility.Collapsed;
+
+        if (playing)
+        {
+            StartPreviewProgress();
+        }
+        else
+        {
+            StopPreviewProgress();
+            PreviewProgressFill.Width = 0;
+        }
     }
+
+
+    /// <summary>
+    /// Where the preview loop has got to, drawn on the floor of the spectrum.
+    /// <para>
+    /// Driven by <see cref="AudioPreviewPlayer.Position"/>, which counts the
+    /// samples the device has actually consumed rather than the reader's cursor.
+    /// That distinction is the whole reason the figure is worth showing: the
+    /// reader runs ahead of the sound, so its own position would draw a playhead
+    /// that is always slightly ahead of what the user is hearing.
+    /// </para>
+    /// </summary>
+    private void UpdatePreviewProgress()
+    {
+        if (!_audioPreview.IsPlaying)
+        {
+            StopPreviewProgress();
+            PreviewProgressTrack.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        double total = _audioPreview.Duration.TotalSeconds;
+        if (total <= 0.0)
+        {
+            return;
+        }
+
+        // The loop restarts its sample chain, so Position is per pass; the modulo
+        // keeps the bar honest if a pass ever finishes between two ticks.
+        double fraction = (_audioPreview.Position.TotalSeconds % total) / total;
+        PreviewProgressFill.Width = Math.Max(0.0, PreviewProgressTrack.ActualWidth * fraction);
+    }
+
+
+    private System.Windows.Threading.DispatcherTimer? _previewProgressTimer;
+
+    private void StartPreviewProgress()
+    {
+        if (_previewProgressTimer is null)
+        {
+            _previewProgressTimer = new System.Windows.Threading.DispatcherTimer(
+                System.Windows.Threading.DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromMilliseconds(200),
+            };
+
+            _previewProgressTimer.Tick += (_, _) => UpdatePreviewProgress();
+        }
+
+        UpdatePreviewProgress();
+        _previewProgressTimer.Start();
+    }
+
+
+    private void StopPreviewProgress() => _previewProgressTimer?.Stop();
 
 
     private void ApplyAudio(AudioPreset preset, bool announce) =>

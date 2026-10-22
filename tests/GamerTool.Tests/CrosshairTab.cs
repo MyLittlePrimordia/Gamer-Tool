@@ -61,6 +61,9 @@ internal sealed class CrosshairTab
     /// <summary>The preset the dropdown is showing, which is what the user reads.</summary>
     public string ShownPresetId => WindowHarness.SelectedPresetId(Window.XhPresetBox);
 
+    /// <summary>A private field of the window, for the state with no control behind it.</summary>
+    public T Read<T>(string name) => _harness.Read<T>(name);
+
     public bool ModalOpen => _harness.Read<Border>("_modalLayer").Visibility == Visibility.Visible;
 
     public string ModalTitle => _harness.Read<TextBlock>("_modalTitle").Text;

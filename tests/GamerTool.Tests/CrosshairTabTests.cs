@@ -606,4 +606,65 @@ public sealed class CrosshairTabTests
             Assert.Equal(0, h.PackTiles);
         });
     }
+
+    [Fact]
+    public void Switching_away_from_an_edited_built_in_asks_before_dropping_it()
+    {
+        CrosshairTab.Run(h =>
+        {
+            // A built-in cannot be written back to, so editing one leaves the tab on
+            // "Tuned", which has no preset behind it and nothing on disk.
+            h.LayOut();
+            SelectPreset(h, CrosshairPreset.BuiltIns[0].Id);
+            Assert.Equal(CrosshairPreset.BuiltIns[0].Id, h.ShownPresetId);
+            Assert.Equal(CrosshairPreset.BuiltIns[0].Id, h.PresetId);
+
+            h.Window.XhSizeSlider.Value = 60;
+            Assert.Equal(string.Empty, h.PresetId);
+            Assert.Equal(60, h.Work.Size);
+
+            // Picking another preset is where the tuning would have gone, so it is
+            // asked about first, and the dropdown goes back to what is on the tab.
+            SelectPreset(h, "xh-test");
+
+            Assert.True(h.ModalOpen);
+            Assert.Equal("KEEP YOUR TUNING?", h.ModalTitle);
+            Assert.Equal(string.Empty, h.PresetId);
+            Assert.Equal(string.Empty, h.ShownPresetId);
+            Assert.Equal(60, h.Work.Size);
+
+            // Saving puts it in a crosshair of its own, with the tuning in it, and
+            // then does the switch that was asked for.
+            h.ConfirmModal();
+
+            Assert.False(h.ModalOpen);
+            Assert.Equal("xh-test", h.PresetId);
+            Assert.Equal(60, h.Saved.Last().Size);
+            Assert.Equal(2, h.Saved.Count);
+        });
+    }
+
+    [Fact]
+    public void Cancelling_the_question_keeps_the_tuning_on_the_tab()
+    {
+        CrosshairTab.Run(h =>
+        {
+            SelectPreset(h, CrosshairPreset.BuiltIns[0].Id);
+            h.Window.XhSizeSlider.Value = 60;
+
+            SelectPreset(h, "xh-test");
+            h.CancelModal();
+
+            Assert.False(h.ModalOpen);
+
+            // Cancel is the safe half: the switch did not happen, and the edited
+            // crosshair is still the one on the tab, one Save away from being kept.
+            Assert.Equal(string.Empty, h.PresetId);
+            Assert.Equal(60, h.Work.Size);
+            Assert.Single(h.Saved);
+        });
+    }
+
+    /// <summary>Pick a preset from the dropdown, which is what brings its handler in.</summary>
+    private static void SelectPreset(CrosshairTab h, string id) => WindowHarness.PickPreset(h.Window.XhPresetBox, id);
 }

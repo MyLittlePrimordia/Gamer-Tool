@@ -128,6 +128,28 @@ public sealed class ProfileManager
 
     public string SettingsPath => Path.Combine(_folder, SettingsFileName);
 
+    /// <summary>
+    /// The settings the app ships with, normalised exactly as a brand new profile is.
+    /// <para>
+    /// A factory reset has to land on the same thing a first launch does, so it goes
+    /// through the same Normalize step rather than handing out a bare
+    /// <see cref="AppSettings"/> that the app has never been asked to trust.
+    /// </para>
+    /// </summary>
+    public AppSettings Defaults() => Normalize(new AppSettings(), brandNew: true);
+
+    /// <summary>
+    /// The daily copies this profile has, newest first.
+    /// <para>
+    /// Written every day before the first save of that day, and read by the loader
+    /// when settings.json and the copy beside it are both unusable. The Settings page
+    /// used to offer them as a restore too; that button is gone, so the only reader
+    /// is the loader - which is the case they were written for.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> SnapshotPaths() =>
+        SettingsSnapshots.Newest(SafeList(_folder, SettingsSnapshots.Pattern)).ToList();
+
     /// <summary>The last known good copy, which the atomic swap leaves behind.</summary>
     private string BackupPath => SettingsPath + ".bak";
 
@@ -457,12 +479,23 @@ public sealed class ProfileManager
     }
 
 
-    public void Save(AppSettings settings)
+    /// <summary>
+    /// Writes the profile, and says whether it landed.
+    /// <para>
+    /// It used to return nothing, which meant a full disk, a read-only portable
+    /// folder or a file some other program was holding open produced the same
+    /// silent log line as a success. Every caller treats a save as done, and the
+    /// ones that toast say "saved" - so the one thing the user was told was the
+    /// one thing that had not happened. The answer is returned now and the window
+    /// is the place that decides how to say it.
+    /// </para>
+    /// </summary>
+    public bool Save(AppSettings settings)
     {
         if (_unreadable && !SetAsideUnreadableSettings())
         {
             AppLog.Warn("SETTINGS SAVE skipped: settings.json could not be read at launch and still cannot be read");
-            return;
+            return false;
         }
 
         try
@@ -504,12 +537,14 @@ public sealed class ProfileManager
 
             SnapshotDaily();
             AtomicSwap(temp, SettingsPath);
+            return true;
         }
         catch (Exception ex)
         {
             // Same reasoning as the load path, and kept under its own tag so a
             // failed save is distinguishable from a failed read in the log.
             AppLog.Error("SETTINGS SAVE", ex);
+            return false;
         }
     }
 

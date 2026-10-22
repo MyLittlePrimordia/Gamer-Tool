@@ -149,7 +149,11 @@ public class DisplayColumnLayoutTests
         // Label, and a slider group is not a section.
         string xaml = Xaml();
 
-        foreach (string caption in new[] { "Colour trim", "Blue light filter" })
+        // The blue light caption gained "· all presets" when the scope became a
+        // thing the control had to admit: saving a preset does not save the filter,
+        // and the row sits among controls that are saved. Same type style, longer
+        // caption, and this test is about the style.
+        foreach (string caption in new[] { "Colour trim", "Blue light filter · all presets" })
         {
             // Anchored on the attribute, not the bare words. Both phrases appear in
             // the comments explaining why they moved, and a search for the words

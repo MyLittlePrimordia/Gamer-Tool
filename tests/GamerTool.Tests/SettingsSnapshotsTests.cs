@@ -33,4 +33,18 @@ public class SettingsSnapshotsTests
     [Fact]
     public void Nothing_is_pruned_at_or_under_the_limit()
         => Assert.Empty(SettingsSnapshots.Surplus(new[] { "a", "b", "c" }));
+
+    [Fact]
+    public void A_days_copy_knows_which_day_it_is()
+        => Assert.Equal(
+            new DateTime(2026, 10, 19),
+            SettingsSnapshots.DayOf(@"C:\x\settings.json.day-20261019.bak"));
+
+    [Fact]
+    public void A_file_that_is_not_a_daily_copy_has_no_day()
+    {
+        Assert.Null(SettingsSnapshots.DayOf(@"C:\x\settings.json"));
+        Assert.Null(SettingsSnapshots.DayOf(@"C:\x\settings.json.bak"));
+        Assert.Null(SettingsSnapshots.DayOf(@"C:\x\settings.json.day-nope.bak"));
+    }
 }

@@ -207,6 +207,17 @@ public partial class MainWindow : Window
     private bool _quitting;
 
 
+    /// <summary>
+    /// Whether the user has already been told that the profile cannot be written.
+    /// <para>
+    /// Once per session, because Commit runs on nearly every interaction and a
+    /// toast on all of them would bury the window. The first failure is news; the
+    /// rest are the same news, and the log carries every one of them.
+    /// </para>
+    /// </summary>
+    private bool _settingsSaveFailureShown;
+
+
     private string _activeDisplayId = string.Empty;
 
 
@@ -504,7 +515,7 @@ public partial class MainWindow : Window
         // No "check the assets folder" any more. There is no assets folder: the
         // loops are read out of the executable, so the only thing that can make
         // one fail is a damaged build.
-        _audioPreview.Failed += text => Flash(text + " failed, the app may be damaged", true);
+        _audioPreview.Failed += OnAudioPreviewFailed;
         _audioPreview.Prepare();
         UpdatePreviewTrackButton();
 
@@ -1371,24 +1382,59 @@ private void HideToTray()
     /// control comes through here instead.
     /// </para>
     /// </summary>
-    private void SetRailStatus(string text)
+    /// <summary>What the status line is saying, so the lamp beside it can agree.</summary>
+    internal enum RailTone
+    {
+        /// <summary>Nothing to report: the last thing asked for worked.</summary>
+        Ready,
+
+        /// <summary>Work in progress. The text names it.</summary>
+        Busy,
+
+        /// <summary>Something was applied with a caveat, or a warning that is not a failure.</summary>
+        Warn,
+
+        /// <summary>Something did not happen, and the text says what.</summary>
+        Failed,
+    }
+
+    /// <summary>
+    /// The one way the status line is written, text and lamp together.
+    /// <para>
+    /// The lamp was a literal green ellipse and the text was assigned directly
+    /// from twenty-odd places, so "SCAN FAILED" and "NOT SAVED" both appeared
+    /// beside a green light. Two things that describe the same state have to be
+    /// written by the same call, or they will eventually disagree - and the one
+    /// that was wrong was the one nobody reads twice.
+    /// </para>
+    /// </summary>
+    private void SetRail(string text, RailTone tone = RailTone.Ready)
     {
         if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
         {
             return;
         }
 
-        if (Dispatcher.CheckAccess())
+        if (!Dispatcher.CheckAccess())
         {
-            RailStatus.Text = text;
+            // Not called inline: a raise that happens during teardown would otherwise
+            // fault, and an unhandled fault on the dispatcher is a dialog nobody asked
+            // for. Losing the last status line is not worth that.
+            _ = Dispatcher.BeginInvoke(new Action(() => SetRail(text, tone)));
             return;
         }
 
-        // Not called inline: a raise that happens during teardown would otherwise
-        // fault, and an unhandled fault on the dispatcher is a dialog nobody asked
-        // for. Losing the last status line is not worth that.
-        _ = Dispatcher.BeginInvoke(new Action(() => RailStatus.Text = text));
+        RailStatus.Text = text;
+        RailDot.Fill = (Brush)FindResource(tone switch
+        {
+            RailTone.Failed => "Red",
+            RailTone.Busy or RailTone.Warn => "Amber",
+            _ => "Green",
+        });
     }
+
+
+    private void SetRailStatus(string text) => SetRail(text, RailTone.Busy);
 
 
     private async System.Threading.Tasks.Task WarmAppList()
@@ -1673,6 +1719,9 @@ private void HideToTray()
                 // so without this the dropdown keeps offering a screen that was just
                 // unplugged. BuildSlots is already the whole answer - it is what every
                 // other change to the slot list calls.
+                // The scope picker is a list of screens too, and it is the one that
+                // decides where Apply lands, so it has to follow the same rescan.
+                BuildDisplayScopeList();
                 RefreshPresetBoxes();
                 BuildSlots();
                 RestoreSlotFocus(focused);
@@ -1698,6 +1747,11 @@ private void HideToTray()
     private void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
         _display.Rescan();
+
+        // After the scan, because the picker names screens that only exist in that
+        // list, and before the startup restore, which now applies to the remembered
+        // scope.
+        BuildDisplayScopeList();
 
         // After the scan, because the restore has to know which screens are here
         // now, and before the lock, so the lock does not start defending a ramp
@@ -1803,7 +1857,7 @@ private void HideToTray()
         // to the file.
         if (!string.IsNullOrEmpty(_settingsRescue))
         {
-            RailStatus.Text = _settingsRescue;
+            SetRail(_settingsRescue, RailTone.Busy);
             RailStatus.Foreground = (Brush)FindResource(_profiles.Quarantined ? "Amber" : "TextMid");
 
             if (_settings.ShowOsd)
@@ -1828,7 +1882,7 @@ private void HideToTray()
             // no new profile field to migrate and nothing that can go stale. A
             // standard install's slots are materialised into the profile by the
             // engine, so this stops after the first save either way.
-            RailStatus.Text = "PANIC KEY " + _settings.EmergencyHotkey + " PUTS EVERYTHING BACK";
+            SetRail("PANIC KEY " + _settings.EmergencyHotkey + " PUTS EVERYTHING BACK");
 
             if (_settings.ShowOsd)
             {
@@ -2520,9 +2574,37 @@ private void HideToTray()
     }
 
 
-    private void Commit()
+    /// <summary>
+    /// Writes the profile, and is the one place that says when it did not.
+    /// <para>
+    /// Every caller used to assume this worked, and the ones that toast said
+    /// "saved" straight afterwards - so a read-only portable folder or a full disk
+    /// produced a confident confirmation and no file. The answer is returned so a
+    /// caller that is about to claim something can check it first, and the first
+    /// failure in a session is reported here rather than at forty call sites.
+    /// </para>
+    /// </summary>
+    private bool Commit()
     {
-        _profiles.Save(_settings);
+        bool saved = _profiles.Save(_settings);
+        if (saved || _settingsSaveFailureShown)
+        {
+            return saved;
+        }
+
+        _settingsSaveFailureShown = true;
+        TraceLog.Write("SETTINGS the profile could not be written; changes are not on disk");
+
+        // Only once the window is up. The startup path commits before there is a
+        // tray or a status line to put this on, and an OSD over the splash would
+        // say less than the log line does.
+        if (_ready)
+        {
+            SetRail("NOT SAVED", RailTone.Failed);
+            Flash("Settings could not be saved. Check the settings folder.", true);
+        }
+
+        return false;
     }
 
 
@@ -2650,7 +2732,7 @@ private void HideToTray()
                 break;
         }
 
-        RailStatus.Text = text;
+        SetRail(text, warn ? RailTone.Warn : RailTone.Ready);
         RailStatus.Foreground = warn
             ? (Brush)FindResource("Amber")
             : (Brush)FindResource("TextMid");

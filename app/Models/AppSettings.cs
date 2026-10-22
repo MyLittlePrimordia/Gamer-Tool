@@ -41,6 +41,19 @@ public sealed class AppSettings
     /// </summary>
     public string ActiveDisplayPresetId { get; set; } = "flat";
 
+    /// <summary>
+    /// The screen the Display tab's Apply changes, by device name, or empty for all
+    /// of them.
+    /// <para>
+    /// Empty is the default and the old behaviour, so a profile written before the
+    /// picker existed keeps applying everywhere. It is deliberately not a property
+    /// of the preset: a slot already carries its own screen, and a preset that
+    /// pinned itself to a monitor would follow the monitor rather than the user's
+    /// intention when the desk changes.
+    /// </para>
+    /// </summary>
+    public string DisplayScope { get; set; } = string.Empty;
+
     public string ActiveAudioPresetId { get; set; } = "flat";
 
     public string OutputDeviceId { get; set; } = string.Empty;
@@ -397,6 +410,7 @@ public sealed class AppSettings
 
         return Schema == fresh.Schema
             && ActiveDisplayPresetId == fresh.ActiveDisplayPresetId
+            && DisplayScope == fresh.DisplayScope
             && ActiveAudioPresetId == fresh.ActiveAudioPresetId
             && OutputDeviceId == fresh.OutputDeviceId
             && OutputDeviceName == fresh.OutputDeviceName

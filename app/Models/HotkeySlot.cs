@@ -53,6 +53,17 @@ public sealed class HotkeySlot
     public string? AppExePath { get; set; }
 
     /// <summary>
+    /// Extra words passed to the game when Play starts it, or empty.
+    /// <para>
+    /// Only the direct start uses them. A launch through Steam or Epic asks the
+    /// launcher, which owns the command line of the game it starts, so a slot with a
+    /// launch link says so in its options dialog rather than pretending the field
+    /// does something there.
+    /// </para>
+    /// </summary>
+    public string LaunchArguments { get; set; } = string.Empty;
+
+    /// <summary>
     /// Bind this slot to anything running out of this folder, or empty.
     /// <para>
     /// The third way to say what a slot is for, after an exact exe path and a
@@ -370,6 +381,7 @@ public sealed class HotkeySlot
             CrosshairPresetId = CrosshairPresetId,
             Hotkey = Hotkey,
             AppExePath = AppExePath,
+            LaunchArguments = LaunchArguments,
             AppName = AppName,
             LaunchUri = LaunchUri,
             TargetFolder = TargetFolder,

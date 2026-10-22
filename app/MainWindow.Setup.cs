@@ -275,7 +275,7 @@ public partial class MainWindow : Window
             VerifySetupButton.IsEnabled = false;
         }
 
-        RailStatus.Text = "CHECKING...";
+        SetRail("CHECKING...", RailTone.Busy);
 
         try
         {
@@ -288,13 +288,15 @@ public partial class MainWindow : Window
 
             ShowSetupReport(report);
 
-            RailStatus.Text = report.HasFailure ? "CHECK FAILED" : "CHECKED";
+            SetRail(
+                report.HasFailure ? "CHECK FAILED" : "CHECKED",
+                report.HasFailure ? RailTone.Failed : RailTone.Ready);
             Flash(report.Summary, report.HasFailure);
         }
         catch (Exception ex)
         {
             TraceLog.Write("SETUP CHECK failed", ex);
-            RailStatus.Text = "CHECK FAILED";
+            SetRail("CHECK FAILED", RailTone.Failed);
             Flash("The check did not finish. Details are in the log.", true);
         }
         finally
@@ -334,12 +336,44 @@ public partial class MainWindow : Window
         {
             Style = (Style)FindResource("CardSub"),
             Text = report.HasFailure
-                ? "The failed line above is the feature that will not work. The log has the same list, which is what to paste with a bug report."
-                : "Everything this app needs from your hardware answered. The same list is in the log.",
+                ? "The failed line above is the feature that will not work. Copy puts this list on the clipboard, ready to paste with a bug report."
+                : "Everything this app needs from your hardware answered. Copy puts the list on the clipboard for a bug report.",
             TextWrapping = TextWrapping.Wrap,
             Foreground = (Brush)FindResource("TextMid"),
             Margin = new Thickness(0, 14, 0, 0),
         });
+
+        // The report is the thing a support thread asks for, and reading four lines
+        // off a dialog and retyping them is where a report turns into a paraphrase.
+        Button copy = new()
+        {
+            Content = "COPY",
+            Style = (Style)FindResource("GhostButton"),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 12, 0, 0),
+            Padding = new Thickness(14, 6, 14, 6),
+            ToolTip = "Copy this list to the clipboard",
+        };
+
+        System.Windows.Automation.AutomationProperties.SetName(copy, "Copy the setup check result");
+
+        copy.Click += (s, e) =>
+        {
+            try
+            {
+                Clipboard.SetText(report.Summary + Environment.NewLine + report.BodyText);
+                copy.Content = "COPIED";
+            }
+            catch (Exception ex)
+            {
+                // The clipboard is shared with everything else on the machine and can
+                // be locked by another app, so failing here is ordinary, not fatal.
+                AppLog.Error("COPY SETUP REPORT", ex);
+                copy.Content = "COULD NOT COPY";
+            }
+        };
+
+        content.Children.Add(copy);
 
         ShowCustomModal(report.Summary, content, "CLOSE", () => { });
 
@@ -731,12 +765,12 @@ public partial class MainWindow : Window
         // page greyed out for the rest of the session with no way back.
         _installBusy = true;
         Pages.IsEnabled = false;
-        RailStatus.Text = useWinget ? "INSTALLING FXSOUND" : "DOWNLOADING FXSOUND";
+        SetRail(useWinget ? "INSTALLING FXSOUND" : "DOWNLOADING FXSOUND", RailTone.Busy);
         ShowProgressModal("INSTALLING FXSOUND", showCaution: true);
 
         System.Progress<SetupStage> progress = new(stage =>
         {
-            RailStatus.Text = "FXSOUND " + stage.Text;
+            SetRail("FXSOUND " + stage.Text, RailTone.Busy);
             SetModalProgress(stage);
         });
 
@@ -909,13 +943,13 @@ public partial class MainWindow : Window
 
         _installBusy = true;
         Pages.IsEnabled = false;
-        RailStatus.Text = "UPDATING FXSOUND";
+        SetRail("UPDATING FXSOUND", RailTone.Busy);
         FxUpgradeButton.IsEnabled = false;
         ShowProgressModal("UPDATING FXSOUND", showCaution: true);
 
         System.Progress<SetupStage> progress = new(stage =>
         {
-            RailStatus.Text = "FXSOUND " + stage.Text;
+            SetRail("FXSOUND " + stage.Text, RailTone.Busy);
             SetModalProgress(stage);
         });
 

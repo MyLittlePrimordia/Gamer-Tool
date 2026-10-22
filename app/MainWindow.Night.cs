@@ -91,6 +91,26 @@ public partial class MainWindow
         nightApplied && !suppressed && !emergency;
 
     /// <summary>
+    /// Whether any warm trim has to be put back after the screen is stood down.
+    /// <para>
+    /// The schedule's level and a hand-picked one are the same kind of live state:
+    /// both are folded into every apply, and both are taken off the screen by
+    /// <c>Reset</c>, which writes the monitor's original ramp. The schedule case was
+    /// handled and the hand-picked one was not, so with the schedule off - the
+    /// ordinary configuration - a reset left the dropdown reading WARM over a neutral
+    /// screen. This is the one rule both cases go through.
+    /// </para>
+    /// </summary>
+    /// <param name="nightApplied">Whether the schedule believes the filter is on.</param>
+    /// <param name="suppressed">Whether the user has overridden it for this window.</param>
+    /// <param name="emergency">Whether this stand-down came from the panic key.</param>
+    /// <param name="manualLevel">The level in the profile, which is only in force when the schedule is not.</param>
+    internal static bool ShouldReassertFilterAfterStandDown(
+        bool nightApplied, bool suppressed, bool emergency, int manualLevel) =>
+        ShouldReassertNightAfterStandDown(nightApplied, suppressed, emergency)
+        || (!nightApplied && manualLevel > 0);
+
+    /// <summary>
     /// Stands the night filter down for good, until the schedule's window next
     /// changes state.
     /// <para>

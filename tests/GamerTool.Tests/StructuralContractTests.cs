@@ -111,7 +111,7 @@ public class StructuralContractTests
     /// without someone seeing this list first.
     /// </remarks>
     [Theory]
-    [InlineData("MainWindow.xaml.cs", "private void Commit()")]
+    [InlineData("MainWindow.xaml.cs", "private bool Commit()")]
     [InlineData("MainWindow.xaml.cs", "private void RefreshPresetBoxes()")]
     [InlineData("MainWindow.xaml.cs", "private void UpdatePresetChrome()")]
     [InlineData("MainWindow.xaml.cs", "private void UpdateLiveLabels()")]

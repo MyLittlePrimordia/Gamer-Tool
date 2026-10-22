@@ -109,6 +109,27 @@ public sealed class UnreadableSettingsTests : IDisposable
     }
 
     [Fact]
+    public void A_refused_save_says_so_rather_than_reporting_success()
+    {
+        File.WriteAllText(SettingsPath, "{\"Schema\":2,\"BlueLightFilter\":7}");
+
+        ProfileManager profiles = new(_folder);
+
+        bool whileHeld;
+        using (FileStream held = new(SettingsPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            profiles.Load();
+            whileHeld = profiles.Save(new AppSettings { BlueLightFilter = 1 });
+        }
+
+        // The answer is the whole point: the window says "saved" only when this is
+        // true, so a held file must not come back as a success.
+        Assert.False(whileHeld);
+
+        Assert.True(profiles.Save(new AppSettings { BlueLightFilter = 3 }));
+    }
+
+    [Fact]
     public void The_file_it_could_not_read_is_kept_rather_than_destroyed()
     {
         File.WriteAllText(SettingsPath, "{\"Schema\":2,\"BlueLightFilter\":7}");

@@ -34,6 +34,29 @@ namespace GamerTool.Services;
 /// </summary>
 public sealed class AudioPreviewPlayer : IDisposable
 {
+    /// <summary>
+    /// Why a preview would not play, because the three answers want three
+    /// different sentences.
+    /// <para>
+    /// They were one string, and the window appended "the app may be damaged" to
+    /// all of them. The overwhelmingly common failure is environmental - no output
+    /// device, a device held in exclusive mode, the audio service restarting - so
+    /// the app was accusing itself of the one thing it could not have caused, on
+    /// the most ordinary thing that goes wrong on a desktop.
+    /// </para>
+    /// </summary>
+    public enum PreviewFailure
+    {
+        /// <summary>The embedded recording is not in this build. This one is us.</summary>
+        MissingAsset,
+
+        /// <summary>No endpoint to play through, or it refused to open.</summary>
+        Device,
+
+        /// <summary>It opened and then stopped answering.</summary>
+        Playback,
+    }
+
     private readonly object _gate = new();
 
     private Mp3FileReader? _reader;
@@ -48,11 +71,17 @@ public sealed class AudioPreviewPlayer : IDisposable
 
     public bool IsPlaying => _playing;
 
+    /// <summary>
+    /// How long the loaded loop is, so the transport can show where in it the
+    /// sound currently is. Zero until a track decodes.
+    /// </summary>
+    public TimeSpan Duration { get; private set; }
+
     public bool Ready { get; private set; }
 
     public event Action? StateChanged;
 
-    public event Action<string>? Failed;
+    public event Action<PreviewFailure, string>? Failed;
 
     /// <summary>
     /// Which of the two preview loops is loaded. A game preset and a music preset
@@ -146,11 +175,12 @@ public sealed class AudioPreviewPlayer : IDisposable
             byte[] data = DisplayPreview.ReadAsset(AssetFor(Track));
             if (data.Length == 0)
             {
-                Failed?.Invoke("PREVIEW TRACK MISSING");
+                Failed?.Invoke(PreviewFailure.MissingAsset, "The preview recording is missing from this build");
                 return;
             }
 
             _reader = new Mp3FileReader(new MemoryStream(data, writable: false));
+            Duration = _reader.TotalTime;
             _mix = new PreviewMixProvider(_reader.ToSampleProvider())
             {
                 Volume = 0.5f
@@ -167,7 +197,7 @@ public sealed class AudioPreviewPlayer : IDisposable
         {
             TearDown();
             TraceLog.Write("AUDIO PREVIEW", ex);
-            Failed?.Invoke("PREVIEW TRACK COULD NOT BE OPENED");
+            Failed?.Invoke(PreviewFailure.Device, "No sound output is available for the preview");
         }
     }
 
@@ -205,7 +235,7 @@ public sealed class AudioPreviewPlayer : IDisposable
         {
             TearDown();
             TraceLog.Write("AUDIO PREVIEW", ex);
-            Failed?.Invoke("PREVIEW TRACK COULD NOT START");
+            Failed?.Invoke(PreviewFailure.Device, "The output device would not start the preview");
         }
     }
 
@@ -515,7 +545,7 @@ public sealed class AudioPreviewPlayer : IDisposable
         {
             _playing = false;
             TraceLog.Write("AUDIO PREVIEW FAIL", e.Exception);
-            Failed?.Invoke("PREVIEW TRACK COULD NOT BE PLAYED");
+            Failed?.Invoke(PreviewFailure.Playback, "The preview stopped: the output device did not answer");
             StateChanged?.Invoke();
             return;
         }

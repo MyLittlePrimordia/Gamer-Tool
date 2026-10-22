@@ -39,7 +39,7 @@ Boost shadow brightness to spot enemies in dark games, switch to a warm night mo
 
 ## 🎯 Crosshair notes
 
-- It is a small click-through window that only draws pixels. It never touches the game, injects anything or reads game memory. A still crosshair uses no CPU while sitting on screen: WPF keeps what was drawn and redraws only when a setting changes. The window is the size of the crosshair plus a margin - under a hundred pixels on a side - and never the size of the screen.
+- It is a small click-through window that only draws pixels. It never touches the game, injects anything or reads game memory. A still crosshair uses no CPU while sitting on screen: WPF keeps what was drawn and redraws only when a setting changes. The window is the size of the crosshair plus a margin - under a hundred pixels on a side for the presets that ship, and about 150 at the largest size with a wide effect - and never the size of the screen.
 - It shows over **borderless** and **windowed** games. A game in true **exclusive fullscreen** hides it, so switch the game to borderless.
 - Some tournaments and leagues ban any overlay. Turn it off for those.
 - **Add your own crosshair PNGs:** click **Browse pack...** on the Crosshair tab, then **Open folder**, and drop any PNG, GIF, WebP, JPG or BMP files (any file names) into it. Animated GIFs and WebPs play in the browser, so you can see a loop before choosing it. The folder is `%AppData%\GamerTool\crosshair-pack` (beside the program in portable mode) and is created on first launch from the pictures built into the exe. It is read each time the browser opens, so new files just appear. In the source tree the starter pictures live in `app\Assets\crosshairs` and are embedded at build time.
