@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Windows.Media.Imaging;
@@ -36,8 +37,15 @@ public class AssetBudgetTests
     /// <summary>
     /// Ceiling on everything embedded. Set above the current total with room to
     /// work, and below the size this app has already been shipped at by accident.
+    /// <para>
+    /// Raised from 22 MB when the starter pack's animated pictures started shipping
+    /// with the program. The pack is 6.9 MB of GIFs and without them the browser had
+    /// nothing animated to show at all, so the weight buys the feature. What the
+    /// number still guards against is the thing it was always about: one asset
+    /// quietly growing, and the whole bundle running away.
+    /// </para>
     /// </summary>
-    private const long BudgetBytes = 22L * 1024 * 1024;
+    private const long BudgetBytes = 32L * 1024 * 1024;
 
     /// <summary>Private names for the embedded clips, as DisplayPreview reads them.</summary>
     private static readonly string[] Clips =
@@ -116,6 +124,45 @@ public class AssetBudgetTests
         foreach (string clip in Clips)
         {
             Assert.Contains(clip, names);
+        }
+    }
+
+    [Fact]
+    public void TheStarterPackShipsItsAnimatedPictures()
+    {
+        // The pack folder held GIFs that were never embedded: the browser had no
+        // tile to show and the tiles it did show had nothing to animate, which from
+        // the outside looks like the feature not existing. The pack lists whatever
+        // is in the folder, so what this asserts is that the two agree.
+        Assembly app = typeof(DisplayPreview).Assembly;
+        const string Prefix = "GamerTool.pack.";
+
+        string[] pack = app.GetManifestResourceNames()
+            .Where(n => n.StartsWith(Prefix, StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.NotEmpty(pack);
+
+        string[] gifs = pack
+            .Where(n => n.EndsWith(".gif", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        Assert.NotEmpty(gifs);
+
+        // A name with a space in it, because the logical name has to survive one.
+        Assert.Contains("GamerTool.pack.Pop Cat.gif", pack);
+
+        foreach (string gif in gifs)
+        {
+            using Stream? stream = app.GetManifestResourceStream(gif);
+            Assert.NotNull(stream);
+
+            var decoder = new GifBitmapDecoder(
+                stream,
+                BitmapCreateOptions.DelayCreation,
+                BitmapCacheOption.OnLoad);
+
+            Assert.True(decoder.Frames.Count > 1, gif + " ships with one frame, so there is nothing to animate");
         }
     }
 

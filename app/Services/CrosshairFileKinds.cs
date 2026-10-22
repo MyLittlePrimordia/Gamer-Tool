@@ -16,7 +16,10 @@ public enum PictureKind
 
     Jpeg,
 
-    Bmp
+    Bmp,
+
+    /// <summary>Animated or not, like a GIF. The only one that needs its own decoder; see <see cref="WebpReader"/>.</summary>
+    WebP
 }
 
 /// <summary>
@@ -24,23 +27,26 @@ public enum PictureKind
 /// dialog, the importer and the pack browser cannot disagree about it.
 /// <para>
 /// The importer checks the file's contents against its extension as well, so a
-/// renamed file is refused rather than trusted. SVG is left out on purpose: it is
-/// a document that can pull in other files, and Windows cannot draw one without
-/// shipping a vector engine, which would break the single file, offline promise.
+/// renamed file is refused rather than trusted. WebP is here because it is the one
+/// common picture format Windows has no codec for out of the box, so the app brings
+/// its own. SVG is left out on purpose: it is a document that can pull in other
+/// files, and Windows cannot draw one without shipping a vector engine, which would
+/// break the single file, offline promise.
 /// </para>
 /// </summary>
 internal static class CrosshairFileKinds
 {
     /// <summary>For the Import button. The first filter is the one shown, so everything is one click away.</summary>
     public const string OpenFilter =
-        "Pictures (*.png;*.gif;*.jpg;*.jpeg;*.bmp)|*.png;*.gif;*.jpg;*.jpeg;*.bmp"
+        "Pictures (*.png;*.gif;*.webp;*.jpg;*.jpeg;*.bmp)|*.png;*.gif;*.webp;*.jpg;*.jpeg;*.bmp"
         + "|PNG picture (*.png)|*.png"
         + "|Animated GIF (*.gif)|*.gif"
+        + "|WebP picture (*.webp)|*.webp"
         + "|JPEG picture (*.jpg;*.jpeg)|*.jpg;*.jpeg"
         + "|Bitmap picture (*.bmp)|*.bmp";
 
     /// <summary>The extensions the pack browser lists, lower case with the dot.</summary>
-    public static readonly string[] Extensions = { ".png", ".gif", ".jpg", ".jpeg", ".bmp" };
+    public static readonly string[] Extensions = { ".png", ".gif", ".webp", ".jpg", ".jpeg", ".bmp" };
 
     public static PictureKind FromPath(string? path)
     {
@@ -53,6 +59,7 @@ internal static class CrosshairFileKinds
         {
             ".png" => PictureKind.Png,
             ".gif" => PictureKind.Gif,
+            ".webp" => PictureKind.WebP,
             ".jpg" or ".jpeg" => PictureKind.Jpeg,
             ".bmp" => PictureKind.Bmp,
             _ => PictureKind.None

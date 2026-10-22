@@ -97,6 +97,24 @@
       point of the library rule is that a dependency has to earn its place.
     -->
     <PackageReference Include="System.Management" Version="10.0.0" />
+
+    <!--
+      WebP import.
+
+      Windows can decode PNG, GIF, JPEG and BMP out of the box through WIC, but not
+      WebP: that needs the "Webp Image Extensions" package from the Store, which is
+      on some machines and not others, and an import that works on the developer's
+      laptop and fails on a user's is worse than one that is honestly unsupported.
+      So the decoder comes with the program.
+
+      Skia is MIT licensed and needs no key to build a release; that ruled out the
+      managed alternatives, which now refuse to build in Release without a paid
+      licence file. It arrives as libSkiaSharp.dll, which the single-file publish
+      already packs and extracts along with the runtime (IncludeNativeLibrariesForSelfExtract
+      above), so the one-file promise and the offline promise hold.
+    -->
+    <PackageReference Include="SkiaSharp" Version="4.153.1" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="4.153.1" />
   </ItemGroup>
 
   <ItemGroup>
@@ -135,7 +153,12 @@
          and CrosshairPack unpacks them to %AppData%\GamerTool\crosshair-pack on
          first use. -->
     <None Remove="Assets\crosshairs\**" />
+    <!-- Every kind the browser takes, not only PNGs. Naming the kinds rather than
+         a bare **\* keeps a thumbnail cache or a stray settings file out, and a
+         picture dropped into the folder ships with the next build. -->
     <EmbeddedResource Include="Assets\crosshairs\**\*.png" LogicalName="GamerTool.pack.%(RecursiveDir)%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Assets\crosshairs\**\*.gif" LogicalName="GamerTool.pack.%(RecursiveDir)%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Assets\crosshairs\**\*.webp" LogicalName="GamerTool.pack.%(RecursiveDir)%(Filename)%(Extension)" />
     <EmbeddedResource Include="Assets\fac-template.fac" LogicalName="GamerTool.assets.fac-template.fac" />
     <!-- Colour emoji. WPF cannot draw COLR/CPAL glyphs, so these are baked
          bitmaps rendered by the browser's own colour text stack. -->
@@ -145,5 +168,17 @@
   <PropertyGroup>
     <NoWarn>$(NoWarn);WFO0003</NoWarn>
   </PropertyGroup>
+
+  <!--
+    Skia ships a native PDB beside libSkiaSharp.dll, and a publish copies it into
+    the output folder: 96 MB of symbols on a release whose whole point is one file.
+    Nothing in the app reads it and it is not in the download, so it is dropped
+    here rather than deleted by hand after every publish.
+  -->
+  <Target Name="DropUnusedNativeSymbols" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Filename)%(Extension)' == 'libSkiaSharp.pdb'" />
+    </ItemGroup>
+  </Target>
 
 </Project>

@@ -17,12 +17,12 @@ namespace GamerTool.Services;
 /// profile, no decompression bomb, and a small file whatever was picked.
 /// </para>
 /// <para>
-/// PNG, GIF, JPEG and BMP are taken, each checked against its own decoder so a
-/// file merely renamed to look like one is refused. An animated GIF is stored as a
-/// strip of its frames in one PNG, with a small timing file beside it, so the
-/// overlay plays something this app made rather than re-reading the original. SVG
-/// is left out on purpose, since an SVG is a document that can reference other
-/// files, and drawing one would mean shipping a vector engine.
+/// PNG, GIF, WebP, JPEG and BMP are taken, each checked against its own decoder so
+/// a file merely renamed to look like one is refused. An animation, GIF or WebP, is
+/// stored as a strip of its frames in one PNG, with a small timing file beside it,
+/// so the overlay plays something this app made rather than re-reading the
+/// original. SVG is left out on purpose, since an SVG is a document that can
+/// reference other files, and drawing one would mean shipping a vector engine.
 /// </para>
 /// <para>
 /// Presets refer to a picture by its file name inside this folder, never by a
@@ -137,7 +137,7 @@ public static class CrosshairImageStore
             PictureKind kind = CrosshairFileKinds.FromPath(sourcePath);
             if (kind == PictureKind.None)
             {
-                problem = "Pick a PNG, GIF, JPG or BMP picture";
+                problem = "Pick a PNG, GIF, WebP, JPG or BMP picture";
                 return null;
             }
 
@@ -154,12 +154,21 @@ public static class CrosshairImageStore
                 return null;
             }
 
-            // Held open for the whole import: the decoder may read frames lazily.
-            using var stream = new MemoryStream(File.ReadAllBytes(sourcePath));
-            BitmapDecoder decoder = OpenDecoder(stream, kind);
+            byte[] file = File.ReadAllBytes(sourcePath);
 
             Directory.CreateDirectory(folder);
             string name = "custom-" + Guid.NewGuid().ToString("N")[..8] + ".png";
+
+            // WebP is the one kind Windows cannot decode, so it takes its own route
+            // and its own decoder. Everything below this is WIC.
+            if (kind == PictureKind.WebP)
+            {
+                return StoreWebp(file, name, folder);
+            }
+
+            // Held open for the whole import: the decoder may read frames lazily.
+            using var stream = new MemoryStream(file);
+            BitmapDecoder decoder = OpenDecoder(stream, kind);
 
             if (decoder is GifBitmapDecoder gif && gif.Frames.Count > 1)
             {
@@ -880,9 +889,93 @@ public static class CrosshairImageStore
                 }
             });
 
-        int stripWidth = side * kept.Count;
-        byte[] strip = new byte[stripWidth * side * 4];
+        return WriteAnimation(folder, name, squares, side, kept);
+    }
+
+    /// <summary>
+    /// Take a WebP in. A still goes through the same square, shrunk form as every
+    /// other picture; an animation becomes a strip with its timings beside it.
+    /// <para>
+    /// Its frames come from Skia rather than WIC, whole and already composed, so
+    /// unlike a GIF there is no rectangle to draw over a canvas - each frame is the
+    /// picture a viewer would show. They are read in order because that is the order
+    /// the decoder walks them in without rewinding, and only the frames the
+    /// animation plan kept are shrunk and stored.
+    /// </para>
+    /// </summary>
+    private static StoredPicture StoreWebp(byte[] file, string name, string folder)
+    {
+        using WebpReader reader = WebpReader.Open(file)
+            ?? throw new ImportProblem("That file is not the kind of picture its name says");
+
+        if (reader.Width < 4 || reader.Height < 4)
+        {
+            throw new ImportProblem("That picture is too small to use");
+        }
+
+        if (reader.Width > MaxPixels || reader.Height > MaxPixels)
+        {
+            throw new ImportProblem("That picture is too large, keep it under 4096 pixels");
+        }
+
+        if (reader.FrameCount == 1)
+        {
+            byte[] pixels = reader.Frame(0) ?? throw new ImportProblem("That file could not be read as a picture");
+            bool ownColours = HasOwnColours(pixels);
+            byte[] square = PixelResize.FitSquare(pixels, reader.Width, reader.Height, StoredSide, out int side);
+            File.WriteAllBytes(Path.Combine(folder, name), EncodePng(square, side, side));
+            return new StoredPicture(name, ownColours);
+        }
+
+        if (!AnimationPlan.WithinBudget(reader.Width, reader.Height, reader.FrameCount))
+        {
+            throw new ImportProblem("That animation is too large, keep it under 1024 pixels and 60 frames or so");
+        }
+
+        List<(int Index, int DelayMs)> kept = AnimationPlan.Reduce(reader.DelaysMs, AnimationPlan.MaxFrames);
+        Dictionary<int, int> slotOf = new();
         for (int k = 0; k < kept.Count; k++)
+        {
+            slotOf[kept[k].Index] = k;
+        }
+
+        byte[]?[] squares = new byte[kept.Count][];
+        int frameSide = 0;
+
+        for (int i = 0; i < reader.FrameCount; i++)
+        {
+            byte[]? canvas = reader.Frame(i)
+                ?? throw new ImportProblem("That file could not be read as a picture");
+
+            if (slotOf.TryGetValue(i, out int slot))
+            {
+                squares[slot] = PixelResize.FitSquare(canvas, reader.Width, reader.Height, AnimatedSide, out frameSide);
+            }
+        }
+
+        return WriteAnimation(folder, name, squares, frameSide, kept);
+    }
+
+    /// <summary>
+    /// Write an animation in the form it is drawn from: every frame side by side in
+    /// one PNG, and how long each lasts in a file beside it.
+    /// <para>
+    /// The strip is the whole animation as it will reach the screen, so it is what
+    /// decides whether this one has colours worth keeping. Deciding on the frames
+    /// before they are shrunk would count pixels that never get drawn.
+    /// </para>
+    /// </summary>
+    private static StoredPicture WriteAnimation(
+        string folder,
+        string name,
+        IReadOnlyList<byte[]?> squares,
+        int side,
+        IReadOnlyList<(int Index, int DelayMs)> kept)
+    {
+        int stripWidth = side * squares.Count;
+        byte[] strip = new byte[stripWidth * side * 4];
+
+        for (int k = 0; k < squares.Count; k++)
         {
             byte[] square = squares[k] ?? throw new InvalidDataException("A frame of the animation could not be built.");
             for (int y = 0; y < side; y++)
@@ -891,11 +984,7 @@ public static class CrosshairImageStore
             }
         }
 
-        // The strip is the whole animation in the form it will be drawn from, so it
-        // is what decides whether this one has colours worth keeping. Deciding on the
-        // frames before they are shrunk would count pixels that never reach the screen.
         bool ownColours = HasOwnColours(strip);
-
         string stripPath = Path.Combine(folder, name);
 
         // Timing first and picture second: a crash between the two leaves a timing

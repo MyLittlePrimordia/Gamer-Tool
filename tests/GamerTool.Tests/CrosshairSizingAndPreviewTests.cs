@@ -443,6 +443,34 @@ public sealed class CrosshairPackPreviewTests : IDisposable
     }
 
     [Fact]
+    public void A_shipped_pack_animation_plays_in_its_tile()
+    {
+        // One of the pack's own GIFs rather than a made up two frame one. They were
+        // in the source folder but not in the published program once, so the grid had
+        // no tile for them and nothing to animate: this is the check that a picture
+        // that ships is a picture that plays.
+        const string resource = "GamerTool.pack.Pop Cat.gif";
+
+        using Stream? shipped = typeof(DisplayPreview).Assembly.GetManifestResourceStream(resource);
+        Assert.NotNull(shipped);
+
+        Directory.CreateDirectory(_folder);
+        string path = Path.Combine(_folder, "Pop Cat.gif");
+        using (FileStream file = File.Create(path))
+        {
+            shipped!.CopyTo(file);
+        }
+
+        CrosshairPackPreview? preview = Build(path, side: 64, tint: null);
+
+        Assert.NotNull(preview);
+        Assert.True(preview!.Frames.Count > 1, "the tile should have frames to play");
+        Assert.Equal(preview.Frames.Count, preview.DelaysMs.Count);
+        Assert.All(preview.DelaysMs, delay => Assert.InRange(
+            delay, AnimationPlan.MinDelayMs, AnimationPlan.MaxDelayMs));
+    }
+
+    [Fact]
     public void A_still_is_not_a_preview()
     {
         string png = Path.Combine(_folder, "still.png");

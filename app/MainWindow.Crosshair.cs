@@ -1445,10 +1445,9 @@ public partial class MainWindow
     // ---------------------------------------------------------------- import
 
     private void OnXhImportClick(object sender, RoutedEventArgs e)
-    {
-        var dialog = new Microsoft.Win32.OpenFileDialog
+    {            var dialog = new Microsoft.Win32.OpenFileDialog
         {
-            Title = "Choose a crosshair picture or animated GIF",
+            Title = "Choose a crosshair picture or animation",
             Filter = CrosshairFileKinds.OpenFilter,
             CheckFileExists = true,
             Multiselect = false
@@ -1539,6 +1538,9 @@ public partial class MainWindow
 
     /// <summary>How often the browser's clock steps its tiles, in milliseconds.</summary>
     private const int PackPreviewTickMs = 40;
+
+    /// <summary>Longest side of a tile's first frame, in pixels. The tile draws it at 46.</summary>
+    private const int PackThumbSide = 96;
 
     /// <summary>Tiles that are playing, with the frame each is on.</summary>
     private readonly List<PackPreviewPlayer> _xhPackPlayers = new();
@@ -1663,7 +1665,7 @@ public partial class MainWindow
         }
         else if (files.Count == 0)
         {
-            XhPackEmpty.Text = "No pictures yet. Add PNG, GIF or JPG files with Open folder, then reopen.";
+            XhPackEmpty.Text = "No pictures yet. Add PNG, GIF, WebP or JPG files with Open folder, then reopen.";
         }
 
         // Masks are shown in the colour the crosshair is set to, so the grid previews
@@ -1707,14 +1709,13 @@ public partial class MainWindow
     {
         try
         {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            var thumb = new BitmapImage();
-            thumb.BeginInit();
-            thumb.CacheOption = BitmapCacheOption.OnLoad;
-            thumb.DecodePixelWidth = 96;
-            thumb.StreamSource = stream;
-            thumb.EndInit();
-            thumb.Freeze();
+            BitmapSource? thumb = PackThumbnail(path);
+            if (thumb is null)
+            {
+                // A picture no decoder here can open: left out of the grid rather
+                // than shown as an empty tile that does nothing when clicked.
+                return null;
+            }
 
             // The picture's own shape filled with the chosen colour, which is what
             // the multiply tint does to a white mask - and what the pack largely is.
@@ -1748,10 +1749,11 @@ public partial class MainWindow
             AutomationProperties.SetName(tile, "Use crosshair " + Path.GetFileNameWithoutExtension(path));
             tile.Click += OnXhPackTileClick;
 
-            // A GIF is asked for its frames in the background. Until they arrive the
-            // tile shows its first frame, which is exactly what it used to show all
-            // the time, so a slow one costs nothing but a moment of stillness.
-            if (CrosshairFileKinds.FromPath(path) == PictureKind.Gif)
+            // An animation is asked for its frames in the background. Until they
+            // arrive the tile shows its first frame, which is exactly what it used
+            // to show all the time, so a slow one costs nothing but a moment of
+            // stillness.
+            if (CrosshairFileKinds.FromPath(path) is PictureKind.Gif or PictureKind.WebP)
             {
                 StartPackPreview(tile, path, colour, ownColours, generation);
             }
@@ -1921,9 +1923,49 @@ public partial class MainWindow
     }
 
     /// <summary>
+    /// The first frame of a pack picture, small enough for its tile.
+    /// <para>
+    /// Everything WIC knows how to open is decoded by it, which is every kind but
+    /// WebP. A WebP goes through the app's own decoder instead: Windows only opens
+    /// one when a Store codec happens to be installed, and a folder the browser
+    /// could not show would look like a broken pack rather than a missing codec.
+    /// </para>
+    /// <para>
+    /// Null for a picture that will not open, which is a tile left out of the grid.
+    /// One unreadable file must not empty the browser.
+    /// </para>
+    /// </summary>
+    private static BitmapSource? PackThumbnail(string path)
+    {
+        if (CrosshairFileKinds.FromPath(path) == PictureKind.WebP)
+        {
+            if (WebpReader.ReadFirstFrame(path) is not { } frame)
+            {
+                return null;
+            }
+
+            byte[] square = PixelResize.FitSquare(frame.Pixels, frame.Width, frame.Height, PackThumbSide, out int side);
+            BitmapSource bitmap = BitmapSource.Create(
+                side, side, 96, 96, PixelFormats.Pbgra32, null, square, side * 4);
+            bitmap.Freeze();
+            return bitmap;
+        }
+
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        var thumb = new BitmapImage();
+        thumb.BeginInit();
+        thumb.CacheOption = BitmapCacheOption.OnLoad;
+        thumb.DecodePixelWidth = PackThumbSide;
+        thumb.StreamSource = stream;
+        thumb.EndInit();
+        thumb.Freeze();
+        return thumb;
+    }
+
+    /// <summary>
     /// Whether a pack picture will arrive in its own colours, by the same rule the
-    /// import uses: a photograph or bitmap always does, a PNG or GIF only if it
-    /// carries colour. Read off the thumbnail the tile is already showing rather
+    /// import uses: a photograph or bitmap always does, a PNG, GIF or WebP only if
+    /// it carries colour. Read off the thumbnail the tile is already showing rather
     /// than off the file again, so the preview and the import cannot disagree about
     /// anything but the resize.
     /// </summary>

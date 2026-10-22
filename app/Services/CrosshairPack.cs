@@ -9,8 +9,8 @@ using System.Text;
 namespace GamerTool.Services;
 
 /// <summary>
-/// The crosshair pack: a folder of pictures, PNG, GIF, JPG or BMP, that is read
-/// when the browser opens.
+/// The crosshair pack: a folder of pictures, PNG, GIF, WebP, JPG or BMP, that is
+/// read when the browser opens.
 /// <para>
 /// Nothing about the pictures is known to the program ahead of time. There is no
 /// list, no manifest and no naming scheme: any picture that is in the folder, or in a
@@ -192,8 +192,9 @@ public static class CrosshairPack
     }
 
     /// <summary>
-    /// Every picture in the pack (PNG, GIF, JPG or BMP), in a natural order: crosshair-2 before crosshair-10,
-    /// and a folder's pictures grouped together. Empty if there is no folder.
+    /// Every picture in the pack (PNG, GIF, WebP, JPG or BMP), in a natural order:
+    /// crosshair-2 before crosshair-10, and a folder's pictures grouped together.
+    /// Empty if there is no folder.
     /// </summary>
     public static List<string> List()
     {

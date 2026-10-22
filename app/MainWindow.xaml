@@ -1922,7 +1922,7 @@
                                                     AutomationProperties.Name="Browse the crosshair pack" />
                                             <Button x:Name="XhImportButton" Content="Import" Style="{StaticResource GhostButton}"
                                                     Margin="0,0,8,0" Click="OnXhImportClick"
-                                                    AutomationProperties.Name="Import a picture or animated GIF as a crosshair" />
+                                                    AutomationProperties.Name="Import a picture or animation as a crosshair" />
                                             <Button x:Name="XhExportButton" Content="Export" Style="{StaticResource GhostButton}"
                                                     Click="OnXhExportClick"
                                                     AutomationProperties.Name="Export the crosshair as a PNG" />
@@ -1963,7 +1963,7 @@
                                                         <WrapPanel x:Name="XhPackPanel" />
                                                         <TextBlock x:Name="XhPackEmpty" Style="{StaticResource CardSub}" TextWrapping="Wrap"
                                                                    Visibility="Collapsed" Margin="4,8,4,0"
-                                                                   Text="No pictures yet. Add PNG, GIF or JPG files with Open folder, then reopen." />
+                                                                   Text="No pictures yet. Add PNG, GIF, WebP or JPG files with Open folder, then reopen." />
                                                     </Grid>
                                                 </ScrollViewer>
                                             </Grid>

@@ -280,6 +280,8 @@ public class CrosshairAnimationTests
     [InlineData("a.png", PictureKind.Png)]
     [InlineData("A.PNG", PictureKind.Png)]
     [InlineData("spin.gif", PictureKind.Gif)]
+    [InlineData("art.webp", PictureKind.WebP)]
+    [InlineData("art.WEBP", PictureKind.WebP)]
     [InlineData("photo.jpg", PictureKind.Jpeg)]
     [InlineData("photo.JPEG", PictureKind.Jpeg)]
     [InlineData("old.bmp", PictureKind.Bmp)]
