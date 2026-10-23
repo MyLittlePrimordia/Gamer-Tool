@@ -218,7 +218,7 @@ RedGain = double.IsFinite(RedGain) ? Math.Clamp(RedGain, ChannelGainMin, Channel
     {
         return new DisplayPreset
         {
-            Id = "flat",
+            Id = PresetIds.Flat,
             Name = "Standard",
             Tag = "No change",
 

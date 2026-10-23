@@ -1,4 +1,5 @@
 using System;
+using GamerTool.Models;
 
 namespace GamerTool.Services;
 
@@ -30,5 +31,5 @@ public static class StartupRestore
     public static bool ShouldApply(string? presetId, bool presetExists) =>
         presetExists
         && !string.IsNullOrWhiteSpace(presetId)
-        && !string.Equals(presetId, "flat", StringComparison.OrdinalIgnoreCase);
+        && !string.Equals(presetId, PresetIds.Flat, StringComparison.OrdinalIgnoreCase);
 }

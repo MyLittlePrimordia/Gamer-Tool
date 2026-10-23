@@ -98,6 +98,22 @@ public sealed class ProfileManager
 
     private readonly string _folder;
 
+    /// <summary>Guards <see cref="_lastWrittenJson"/> and serialises the disk write.</summary>
+    private readonly object _writeGate = new();
+
+    /// <summary>
+    /// The JSON last written by this instance, or null before the first write.
+    /// <para>
+    /// Commit runs on nearly every interaction, and plenty of those change nothing
+    /// that reaches the file - pressing Apply on the preset that is already loaded,
+    /// switching tabs, re-picking the same value. Writing bytes, flushing them to the
+    /// platter and swapping the file for an identical document is a visible stall on
+    /// a slow or redirected profile and pointless wear everywhere else. Identical
+    /// output is not written again; the file on disk is already exactly that.
+    /// </para>
+    /// </summary>
+    private string? _lastWrittenJson;
+
     /// <summary>
     /// Set when the settings file is there but could not be read, which means it
     /// is not known to be damaged. Saving is held off until the next launch so
@@ -517,6 +533,19 @@ public sealed class ProfileManager
                 json = JsonSerializer.Serialize(settings, Options);
             }
 
+            lock (_writeGate)
+            {
+                // The existence check is not redundant. A portable profile can be
+                // removed while the app is running, and "the JSON I last wrote is
+                // still the JSON in memory" would then skip recreating a file that is
+                // no longer there.
+                if (File.Exists(SettingsPath)
+                    && string.Equals(_lastWrittenJson, json, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
             // Written beside the real file and swapped in, because Commit runs on
             // nearly every interaction and a plain overwrite leaves a window in
             // which a crash, a forced kill or a lost power cuts the file in half.
@@ -537,6 +566,12 @@ public sealed class ProfileManager
 
             SnapshotDaily();
             AtomicSwap(temp, SettingsPath);
+
+            lock (_writeGate)
+            {
+                _lastWrittenJson = json;
+            }
+
             return true;
         }
         catch (Exception ex)
@@ -563,6 +598,28 @@ public sealed class ProfileManager
         if (File.Exists(target))
         {
             File.Replace(temp, target, target + ".bak", ignoreMetadataErrors: true);
+            return;
+        }
+
+        File.Move(temp, target);
+    }
+
+
+    /// <summary>
+    /// The same one-step swap, for files that are derived rather than authored.
+    /// <para>
+    /// No <c>.bak</c> beside the target: a timing sidecar or a pack marker that
+    /// keeps a second copy of itself is litter, and it is regenerable - unlike
+    /// settings.json, where the previous version is the only other copy of the
+    /// user's work. Replace is still the atomic step, so a crash mid-write leaves
+    /// the old file whole rather than a truncated new one.
+    /// </para>
+    /// </summary>
+    internal static void AtomicReplace(string temp, string target)
+    {
+        if (File.Exists(target))
+        {
+            File.Replace(temp, target, destinationBackupFileName: null, ignoreMetadataErrors: true);
             return;
         }
 

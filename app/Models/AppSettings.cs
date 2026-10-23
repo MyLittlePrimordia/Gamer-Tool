@@ -39,7 +39,7 @@ public sealed class AppSettings
     /// would quietly alter the screen and the sound before the user has touched
     /// anything, which is a strange thing for a utility to do on first launch.
     /// </summary>
-    public string ActiveDisplayPresetId { get; set; } = "flat";
+    public string ActiveDisplayPresetId { get; set; } = PresetIds.Flat;
 
     /// <summary>
     /// The screen the Display tab's Apply changes, by device name, or empty for all
@@ -54,7 +54,7 @@ public sealed class AppSettings
     /// </summary>
     public string DisplayScope { get; set; } = string.Empty;
 
-    public string ActiveAudioPresetId { get; set; } = "flat";
+    public string ActiveAudioPresetId { get; set; } = PresetIds.Flat;
 
     public string OutputDeviceId { get; set; } = string.Empty;
 
@@ -467,8 +467,8 @@ public sealed class AppSettings
 
         if (Schema < 1)
         {
-            ActiveDisplayPresetId = "flat";
-            ActiveAudioPresetId = "flat";
+            ActiveDisplayPresetId = PresetIds.Flat;
+            ActiveAudioPresetId = PresetIds.Flat;
         }
 
         if (Schema < 2)

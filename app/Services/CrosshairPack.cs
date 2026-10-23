@@ -174,7 +174,13 @@ public static class CrosshairPack
         string text = PackSeedPolicy.SerializeMarker(current);
         if (!string.Equals(markerText, text, StringComparison.Ordinal))
         {
-            File.WriteAllText(marker, text);
+            // Swapped in rather than written in place. This marker is the only record
+            // of which starter pictures are the app's own and which the user changed,
+            // so a half-written one on a crash would either re-copy over the user's
+            // edits or refuse to update corrected art.
+            string temp = marker + ".tmp";
+            File.WriteAllText(temp, text);
+            ProfileManager.AtomicReplace(temp, marker);
         }
     }
 

@@ -28,8 +28,6 @@ namespace GamerTool.Tests;
 [Collection("wpf")]
 public sealed class CrosshairTabTests
 {
-    private static readonly CrosshairPreset Defaults = new();
-
     [Fact]
     public void The_tab_stands_up_on_the_saved_picture_crosshair()
     {
@@ -98,20 +96,24 @@ public sealed class CrosshairTabTests
     {
         CrosshairTab.Run(h =>
         {
+            h.Window.XhSizeSlider.Value = 44;
+            Assert.Equal(44, h.Work.Size);
+
             CrosshairTab.Click(h.Window.XhResetButton);
 
             Assert.True(h.ModalOpen);
-            Assert.Equal("Reset crosshair?", h.ModalTitle);
+            Assert.Equal("Reset to Test?", h.ModalTitle);
 
-            // It says what it will change and what it will keep, so a Reset cannot be
-            // a surprise to anyone who reads it.
+            // It names the preset and says what comes back, so a Reset cannot be a
+            // surprise to anyone who reads it.
             Assert.Contains("color", h.ModalWarning);
             Assert.Contains("size", h.ModalWarning);
-            Assert.Contains("The shape and the picture stay.", h.ModalWarning);
+            Assert.Contains("shape and picture", h.ModalWarning);
+            Assert.Contains("Any changes since then are dropped.", h.ModalWarning);
 
             // Nothing has moved yet: the dialog is a question, not a countdown.
+            Assert.Equal(44, h.Work.Size);
             Assert.Equal("#FF2BB0", h.Work.Color);
-            Assert.Equal(57, h.Work.Size);
         });
     }
 
@@ -120,51 +122,125 @@ public sealed class CrosshairTabTests
     {
         CrosshairTab.Run(h =>
         {
+            h.Window.XhSizeSlider.Value = 44;
+            h.Window.XhThicknessSlider.Value = 3;
+
             CrosshairTab.Click(h.Window.XhResetButton);
             h.CancelModal();
 
             Assert.False(h.ModalOpen);
             Assert.Equal("#FF2BB0", h.Work.Color);
-            Assert.Equal(57, h.Work.Size);
-            Assert.Equal(7, h.Work.Thickness);
+            Assert.Equal(44, h.Work.Size);
+            Assert.Equal(3, h.Work.Thickness);
             Assert.Equal(11, h.Work.PictureGap);
             Assert.True(h.Work.Glow);
         });
     }
 
     [Fact]
-    public void Confirming_the_reset_puts_the_defaults_back_and_keeps_the_picture()
+    public void Confirming_the_reset_puts_the_loaded_preset_back_including_its_picture()
     {
-        // A picture with colours of its own, so the reset's other half shows: the way
-        // out of a colour picked over a multi-coloured animation is this one button.
-        CrosshairTab.Run(
-            h =>
-            {
-                CrosshairTab.Click(h.Window.XhResetButton);
-                h.ConfirmModal();
+        CrosshairTab.Run(h =>
+        {
+            // Change every kind of thing the preset holds: colour, the numbers, a
+            // switch, the shape, and the own-colours setting that only a picture has.
+            h.Window.XhSwatch0.IsChecked = true;
+            h.Window.XhSizeSlider.Value = 30;
+            h.Window.XhThicknessSlider.Value = 2;
+            h.Window.XhGapSlider.Value = 5;
+            h.Window.XhOpacitySlider.Value = 60;
+            h.Window.XhRotationSlider.Value = 10;
+            h.Window.XhOwnColoursBox.IsChecked = true;
+            h.Window.XhCenterDotBox.IsChecked = false;
+            h.Window.XhGlowBox.IsChecked = false;
+            h.Window.XhOutlineBox.IsChecked = true;
+            h.SelectShape(CrosshairShape.Cross);
 
-                Assert.False(h.ModalOpen);
-                Assert.Equal(Defaults.Color, h.Work.Color);
-                Assert.Equal(Defaults.Size, h.Work.Size);
-                Assert.Equal(Defaults.Thickness, h.Work.Thickness);
-                Assert.Equal(Defaults.Gap, h.Work.Gap);
-                Assert.Equal(Defaults.PictureGap, h.Work.PictureGap);
-                Assert.Equal(Defaults.Opacity, h.Work.Opacity);
-                Assert.Equal(Defaults.Rotation, h.Work.Rotation);
-                Assert.Equal(Defaults.CenterDot, h.Work.CenterDot);
-                Assert.Equal(Defaults.Glow, h.Work.Glow);
-                Assert.Equal(Defaults.Outline, h.Work.Outline);
+            Assert.Equal("#FF3B3B", h.Work.Color);
+            Assert.Equal(30, h.Work.Size);
+            Assert.Equal(CrosshairShape.Cross, h.Work.ShapeKind);
 
-                Assert.Equal(CrosshairShape.Custom, h.Work.ShapeKind);
-                Assert.Equal(CrosshairTab.ColourPicture, h.Work.CustomImage);
-                Assert.True(h.Work.KeepOwnColours, "a picture with colours of its own should go back to them");
+            CrosshairTab.Click(h.Window.XhResetButton);
+            h.ConfirmModal();
 
-                // And the tab is showing the result, not just holding it.
-                Assert.Equal(Visibility.Visible, h.Window.XhTintRow.Visibility);
-                Assert.True(h.Window.XhOwnColoursBox.IsChecked == true);
-                Assert.Equal(Defaults.Size.ToString("0"), h.Window.XhSizeValue.Text.Replace(" px", string.Empty));
-            },
-            settings => settings.CustomCrosshairs[0].CustomImage = CrosshairTab.ColourPicture);
+            Assert.False(h.ModalOpen);
+
+            // The preset as it was opened: its own colour and tuning...
+            Assert.Equal("#FF2BB0", h.Work.Color);
+            Assert.Equal(57, h.Work.Size);
+            Assert.Equal(7, h.Work.Thickness);
+            Assert.Equal(11, h.Work.PictureGap);
+            Assert.Equal(35, h.Work.Opacity);
+            Assert.Equal(200, h.Work.Rotation);
+            Assert.True(h.Work.CenterDot);
+            Assert.True(h.Work.Glow);
+            Assert.False(h.Work.Outline);
+
+            // ...and its picture and shape, which came back with it.
+            Assert.Equal(CrosshairShape.Custom, h.Work.ShapeKind);
+            Assert.Equal(CrosshairTab.WhitePicture, h.Work.CustomImage);
+            Assert.False(h.Work.KeepOwnColours);
+
+            // The saved copy was put back too, so closing the tab cannot resurrect
+            // the changes the reset just dropped.
+            CrosshairPreset stored = h.Settings.CustomCrosshairs.Single(p => p.Id == "xh-test");
+            Assert.Equal(57, stored.Size);
+            Assert.Equal(7, stored.Thickness);
+            Assert.Equal(CrosshairShape.Custom, stored.ShapeKind);
+
+            // And the tab is showing the result, not just holding it.
+            Assert.Equal(Visibility.Visible, h.Window.XhTintRow.Visibility);
+            Assert.False(h.Window.XhOwnColoursBox.IsChecked == true);
+            Assert.Equal("57", h.Window.XhSizeValue.Text.Replace(" px", string.Empty));
+        });
+    }
+
+    [Fact]
+    public void Reset_an_edited_built_in_restores_that_preset_not_app_defaults()
+    {
+        CrosshairTab.Run(h =>
+        {
+            SelectPreset(h, "xh-ring");
+            Assert.Equal(26, h.Work.Size);
+
+            // The shape and the tuning both move, which is exactly the state the old
+            // Reset answered with a new crosshair's defaults.
+            h.SelectShape(CrosshairShape.Cross);
+            h.Window.XhSizeSlider.Value = 60;
+            Assert.True(h.Read<bool>("_crosshairTuned"));
+
+            CrosshairTab.Click(h.Window.XhResetButton);
+            Assert.True(h.ModalOpen);
+            Assert.Equal("Reset to Range Ring?", h.ModalTitle);
+
+            h.ConfirmModal();
+
+            Assert.False(h.ModalOpen);
+            Assert.False(h.Read<bool>("_crosshairTuned"));
+            Assert.Equal(CrosshairShape.Circle, h.Work.ShapeKind);
+            Assert.Equal(26, h.Work.Size);
+            Assert.Equal(1, h.Work.Thickness);
+            Assert.Equal(0, h.Work.Gap);
+            Assert.Equal("xh-ring", h.PresetId);
+            Assert.Equal("xh-ring", h.ShownPresetId);
+            Assert.DoesNotContain("edited", h.Window.XhPresetBox.Text);
+        });
+    }
+
+    [Fact]
+    public void Reset_a_crosshair_that_still_matches_its_preset_changes_nothing()
+    {
+        CrosshairTab.Run(h =>
+        {
+            CrosshairTab.Click(h.Window.XhResetButton);
+
+            // Nothing has been changed, so there is nothing to ask about and nothing
+            // to put back. A dialog here would have only one real answer.
+            Assert.False(h.ModalOpen);
+            Assert.Equal(57, h.Work.Size);
+            Assert.Equal(7, h.Work.Thickness);
+            Assert.Equal(CrosshairShape.Custom, h.Work.ShapeKind);
+        });
     }
 
     [Fact]
@@ -265,7 +341,7 @@ public sealed class CrosshairTabTests
             Assert.InRange(middle.G, 0xDE, 0xE2);
             Assert.InRange(middle.B, 0xFD, 0xFF);
 
-            // Reset is the way back to one colour, which is what a fresh crosshair has.
+            // Reset is the way back to one colour, which is how this preset was loaded.
             CrosshairTab.Click(h.Window.XhResetButton);
             h.ConfirmModal();
 
@@ -322,17 +398,20 @@ public sealed class CrosshairTabTests
             // And the saved copy, or the size would be gone on the next reload.
             Assert.Equal(3, h.Settings.CustomCrosshairs.Single(p => p.Id == "xh-test").CenterDotSize);
 
-            // Reset is the way back to following the line, which is what a new
-            // crosshair does. It puts the line back to two pixels as well, so the
-            // dot it inherits is three wide again.
+            // Reset puts the preset back as it was loaded: no size of its own, on its
+            // seven pixel line, so the dot it inherits is eight wide again.
             CrosshairTab.Click(h.Window.XhResetButton);
             h.ConfirmModal();
 
             Assert.False(h.Work.HasOwnCenterDotSize);
             Assert.Equal(0, h.Work.CenterDotSize);
-            Assert.Equal(3, h.Window.XhDotSizeSlider.Value);
+            Assert.Equal(7, h.Work.Thickness);
+            Assert.Equal(8, h.Window.XhDotSizeSlider.Value);
             Assert.Contains("Auto", h.Window.XhDotSizeValue.Text);
-            Assert.Contains("3 px", h.Window.XhDotSizeValue.Text);
+            Assert.Contains("8 px", h.Window.XhDotSizeValue.Text);
+
+            // The saved copy follows, or the size would be back on the next load.
+            Assert.Equal(0, h.Settings.CustomCrosshairs.Single(p => p.Id == "xh-test").CenterDotSize);
         });
     }
 
@@ -486,19 +565,22 @@ public sealed class CrosshairTabTests
             h =>
             {
                 // A slider is the gesture that tunes it, and a built-in cannot be
-                // written to, so the tab is holding an edit with no id behind it.
+                // written to, so the tab is holding an edit against that preset.
                 h.Window.XhSizeSlider.Value = 44;
 
-                Assert.Equal(string.Empty, h.PresetId);
-                Assert.Equal("Tuned", h.Work.Name);
+                // The id stays, and the box says which preset the edit belongs to.
+                Assert.Equal("xh-classic", h.PresetId);
+                Assert.Equal("xh-classic", h.ShownPresetId);
+                Assert.Equal("Standard Cross", h.Work.Name);
+                Assert.Contains("edited", h.Window.XhPresetBox.Text);
                 Assert.Equal(44, h.Work.Size);
 
-                // The only way to keep that edit: a copy, because the built-in it
-                // came from will not take it.
+                // The way to keep that edit: a copy, because the built-in it came
+                // from will not take it.
                 CrosshairTab.Click(h.Window.XhDuplicateButton);
 
                 CrosshairPreset kept = Assert.Single(h.Saved);
-                Assert.Equal("Crosshair copy", kept.Name);
+                Assert.Equal("Standard Cross copy", kept.Name);
                 Assert.Equal(44, kept.Size);
                 Assert.Equal(CrosshairShape.Cross, kept.ShapeKind);
                 Assert.Equal(kept.Id, h.Settings.ActiveCrosshairId);
@@ -612,15 +694,17 @@ public sealed class CrosshairTabTests
     {
         CrosshairTab.Run(h =>
         {
-            // A built-in cannot be written back to, so editing one leaves the tab on
-            // "Tuned", which has no preset behind it and nothing on disk.
+            // A built-in cannot be written back to, so editing one leaves the box
+            // saying that preset is edited, with the edit held on the tab.
             h.LayOut();
             SelectPreset(h, CrosshairPreset.BuiltIns[0].Id);
             Assert.Equal(CrosshairPreset.BuiltIns[0].Id, h.ShownPresetId);
             Assert.Equal(CrosshairPreset.BuiltIns[0].Id, h.PresetId);
 
             h.Window.XhSizeSlider.Value = 60;
-            Assert.Equal(string.Empty, h.PresetId);
+            Assert.Equal(CrosshairPreset.BuiltIns[0].Id, h.PresetId);
+            Assert.Equal(CrosshairPreset.BuiltIns[0].Id, h.ShownPresetId);
+            Assert.Contains("edited", h.Window.XhPresetBox.Text);
             Assert.Equal(60, h.Work.Size);
 
             // Picking another preset is where the tuning would have gone, so it is
@@ -629,8 +713,8 @@ public sealed class CrosshairTabTests
 
             Assert.True(h.ModalOpen);
             Assert.Equal("KEEP YOUR TUNING?", h.ModalTitle);
-            Assert.Equal(string.Empty, h.PresetId);
-            Assert.Equal(string.Empty, h.ShownPresetId);
+            Assert.Equal(CrosshairPreset.BuiltIns[0].Id, h.PresetId);
+            Assert.Equal(CrosshairPreset.BuiltIns[0].Id, h.ShownPresetId);
             Assert.Equal(60, h.Work.Size);
 
             // Saving puts it in a crosshair of its own, with the tuning in it, and
@@ -640,7 +724,44 @@ public sealed class CrosshairTabTests
             Assert.False(h.ModalOpen);
             Assert.Equal("xh-test", h.PresetId);
             Assert.Equal(60, h.Saved.Last().Size);
+            Assert.Equal("Standard Cross copy", h.Saved.Last().Name);
             Assert.Equal(2, h.Saved.Count);
+            Assert.Equal("xh-test", h.Settings.ActiveCrosshairId);
+        });
+    }
+
+    [Fact]
+    public void Switching_away_from_an_edited_built_in_can_drop_the_edit_instead()
+    {
+        CrosshairTab.Run(h =>
+        {
+            SelectPreset(h, CrosshairPreset.BuiltIns[0].Id);
+            h.Window.XhSizeSlider.Value = 60;
+            Assert.Equal(60, h.Work.Size);
+
+            SelectPreset(h, "xh-test");
+            Assert.True(h.ModalOpen);
+
+            // The third answer is really on the dialog, not just in the code behind
+            // it: two ways out and one way forward were what made switching a dead end.
+            Button discard = h.Read<Button>("_modalExtraButton");
+            Assert.Equal(Visibility.Visible, discard.Visibility);
+            Assert.Equal("DON'T SAVE", discard.Content?.ToString());
+
+            // Switch, and let the edit go. No preset is created.
+            h.DiscardModal();
+
+            Assert.False(h.ModalOpen);
+            Assert.Single(h.Saved);
+            Assert.Equal("xh-test", h.PresetId);
+            Assert.Equal("xh-test", h.ShownPresetId);
+            Assert.DoesNotContain("edited", h.Window.XhPresetBox.Text);
+            Assert.Equal(57, h.Work.Size);
+            Assert.Equal("Test", h.Work.Name);
+            Assert.Equal("xh-test", h.Settings.ActiveCrosshairId);
+
+            // And the built-in itself was never touched.
+            Assert.Equal(16, CrosshairPreset.BuiltIns[0].Size);
         });
     }
 
@@ -659,7 +780,9 @@ public sealed class CrosshairTabTests
 
             // Cancel is the safe half: the switch did not happen, and the edited
             // crosshair is still the one on the tab, one Save away from being kept.
-            Assert.Equal(string.Empty, h.PresetId);
+            Assert.Equal(CrosshairPreset.BuiltIns[0].Id, h.PresetId);
+            Assert.Equal(CrosshairPreset.BuiltIns[0].Id, h.ShownPresetId);
+            Assert.Contains("edited", h.Window.XhPresetBox.Text);
             Assert.Equal(60, h.Work.Size);
             Assert.Single(h.Saved);
         });

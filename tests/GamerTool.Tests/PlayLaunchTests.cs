@@ -278,7 +278,9 @@ public class PlayLaunchTests
         }
 
         Assert.NotNull(dir);
-        return File.ReadAllText(Path.Combine(dir!.FullName, "app", name));
+        string path = Path.Combine(dir!.FullName, "app", name);
+
+        return SlotsSource.IsSlotsFile(path) ? SlotsSource.ReadFolder(Path.GetDirectoryName(path)!) : File.ReadAllText(path);
     }
 
     /// <summary>The body of a method, from its signature to the brace that closes it.</summary>

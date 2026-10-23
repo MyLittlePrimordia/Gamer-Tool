@@ -31,7 +31,9 @@ public class BypassHotkeyTests
         }
 
         Assert.NotNull(dir);
-        return File.ReadAllText(Path.Combine(dir!.FullName, Path.Combine(parts)));
+        string path = Path.Combine(dir!.FullName, Path.Combine(parts));
+
+        return SlotsSource.IsSlotsFile(path) ? SlotsSource.ReadFolder(Path.GetDirectoryName(path)!) : File.ReadAllText(path);
     }
 
     private static string Slots() => Read("app", "MainWindow.Slots.cs");
@@ -217,7 +219,7 @@ public class BypassHotkeyTests
         // commits, queues the engine push and verifies it landed. Four things that
         // all have to happen together, so setting the field here instead would leave
         // the switch and the engine disagreeing.
-        string body = Body(Slots(), "private async void OnHotkeyPressed");
+        string body = Body(Slots(), "private async Task HandleHotkeyAsync");
 
         Assert.Contains("BypassTargetId", body, StringComparison.Ordinal);
         Assert.Contains("BypassBox.IsChecked = BypassBox.IsChecked != true;", body, StringComparison.Ordinal);
@@ -228,7 +230,7 @@ public class BypassHotkeyTests
     public void TheBypassKeyRefusesToPretendItWorksWithoutFxSound()
     {
         // Said plainly rather than toggling a switch whose push is going to fail.
-        string body = Body(Slots(), "private async void OnHotkeyPressed");
+        string body = Body(Slots(), "private async Task HandleHotkeyAsync");
 
         Assert.Contains("if (!_audio.IsInstalled)", body, StringComparison.Ordinal);
     }

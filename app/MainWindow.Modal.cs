@@ -65,6 +65,18 @@ public partial class MainWindow : Window
     private Button _modalCancelButton = null!;
 
 
+    /// <summary>
+    /// The middle of three answers, where a question has a third one. Only the
+    /// crosshair tab's "keep your tuning?" uses it: save the edit, drop it, or stay.
+    /// Hidden for every two button dialog, which is all the rest of them.
+    /// </summary>
+    private Button _modalExtraButton = null!;
+
+
+    /// <summary>What the middle button does. Null whenever it is hidden.</summary>
+    private Action? _modalExtra;
+
+
     /// <summary>Second action on the result dialog, where Cancel is the wrong name.</summary>
     private Action? _modalSecondary;
 
@@ -346,6 +358,41 @@ public partial class MainWindow : Window
             secondary?.Invoke();
         };
 
+        // The third answer, centred between Cancel and the confirm button. A
+        // question with two ways out and one way forward needs all three: the
+        // crosshair tab asked "save or stay?" and offered no way to switch at all.
+        Button extra = new()
+        {
+            Content = string.Empty,
+            Style = (Style)FindResource("GhostButton"),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(8, 18, 8, 0),
+            MinWidth = 104,
+            Visibility = Visibility.Collapsed
+        };
+        _modalExtraButton = extra;
+        extra.Click += (s, e) =>
+        {
+            Action? chosen = _modalExtra;
+            CloseModal();
+            chosen?.Invoke();
+        };
+
+        // Three columns, so the middle answer really sits between the other two.
+        // Sharing one cell puts it hard against the confirm button's left edge as
+        // soon as the two labels are wide enough to meet in the middle.
+        var buttons = new Grid { Margin = new Thickness(0, 4, 0, 0) };
+        buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        Grid.SetColumn(cancel, 0);
+        Grid.SetColumn(_modalExtraButton, 1);
+        Grid.SetColumn(_modalSaveButton, 2);
+        buttons.Children.Add(cancel);
+        buttons.Children.Add(_modalExtraButton);
+        buttons.Children.Add(_modalSaveButton);
+
         Border card = new()
         {
             Style = (Style)FindResource("Card"),
@@ -366,11 +413,7 @@ public partial class MainWindow : Window
                     _modalWarning,
                     _modalStatus,
                     _modalBarHost,
-                    new Grid
-                    {
-                        Margin = new Thickness(0, 4, 0, 0),
-                        Children = { cancel, _modalSaveButton }
-                    }
+                    buttons
                 }
             }
         };
@@ -418,6 +461,8 @@ public partial class MainWindow : Window
         _modalSaveButton.Content = "Save";
         _modalSaveButton.Style = (Style)FindResource("PrimaryButton");
         _modalSaveButton.IsEnabled = true;
+        _modalExtraButton.Visibility = Visibility.Collapsed;
+        _modalExtra = null;
         _modalAction = action;
         _modalConfirm = null;
         _modalSecondary = null;
@@ -448,7 +493,9 @@ public partial class MainWindow : Window
         UIElement content,
         string confirmText,
         Action action,
-        UIElement? initialFocus = null)
+        UIElement? initialFocus = null,
+        string? extraText = null,
+        Action? extraAction = null)
     {
         StopModalElapsed();
         _modalTitle.Text = title;
@@ -471,6 +518,12 @@ public partial class MainWindow : Window
         _modalCancelButton.Visibility = Visibility.Visible;
         _modalCancelButton.Content = "Cancel";
         _modalCancelButton.IsEnabled = true;
+
+        bool hasExtra = extraAction is not null && !string.IsNullOrWhiteSpace(extraText);
+        _modalExtraButton.Content = extraText ?? string.Empty;
+        _modalExtraButton.Visibility = hasExtra ? Visibility.Visible : Visibility.Collapsed;
+        _modalExtra = hasExtra ? extraAction : null;
+
         _modalAction = null;
         _modalConfirm = action;
         _modalSecondary = null;
@@ -599,6 +652,8 @@ public partial class MainWindow : Window
         _modalSaveButton.Content = "GOT IT";
         _modalSaveButton.Style = (Style)FindResource("PrimaryButton");
         _modalSaveButton.IsEnabled = true;
+        _modalExtraButton.Visibility = Visibility.Collapsed;
+        _modalExtra = null;
 
         // One button, not two. "Cancel" beside "Got it" on a dialog that asks
         // nothing implies the reader chose something.
@@ -638,6 +693,8 @@ public partial class MainWindow : Window
         _modalCancelButton.Visibility = Visibility.Visible;
         _modalCancelButton.Content = declineText ?? "Cancel";
         _modalCancelButton.IsEnabled = true;
+        _modalExtraButton.Visibility = Visibility.Collapsed;
+        _modalExtra = null;
         _modalAction = null;
         _modalConfirm = action;
         _modalSecondary = null;
@@ -675,6 +732,8 @@ public partial class MainWindow : Window
         _modalBarHost.Visibility = Visibility.Visible;
         _modalSaveButton.Visibility = Visibility.Collapsed;
         _modalCancelButton.Visibility = Visibility.Collapsed;
+        _modalExtraButton.Visibility = Visibility.Collapsed;
+        _modalExtra = null;
         _modalAction = null;
         _modalConfirm = null;
         _modalSecondary = null;
@@ -719,6 +778,8 @@ public partial class MainWindow : Window
         _modalCancelButton.Visibility = Visibility.Visible;
         _modalCancelButton.Content = secondaryText;
         _modalCancelButton.IsEnabled = true;
+        _modalExtraButton.Visibility = Visibility.Collapsed;
+        _modalExtra = null;
         _modalAction = null;
         _modalConfirm = primary;
         _modalSecondary = secondary;
@@ -958,18 +1019,21 @@ public partial class MainWindow : Window
         IInputElement? from = Keyboard.FocusedElement;
 
         // The dialog is built once and has a known, fixed set of things that can
-        // take focus: the name box where there is one, and the two buttons. So
-        // "first" and "last" are answered directly rather than by walking a tree
-        // that is three elements deep. Tab from the last wraps to the first and
-        // Shift Tab from the first wraps to the last; anything in between is left
-        // alone, so ordinary tabbing inside the dialog still behaves normally.
+        // take focus: the name box where there is one, the two buttons, and the
+        // middle one on the few questions that have a third answer. So "first" and
+        // "last" are answered directly rather than by walking a tree that is four
+        // elements deep. Tab from the last wraps to the first and Shift Tab from
+        // the first wraps to the last; anything in between is left alone, so
+        // ordinary tabbing inside the dialog still behaves normally.
         IInputElement? first = _modalInput.Visibility == Visibility.Visible
             ? _modalInput
-            : _modalSaveButton;
+            : _modalCancelButton.Visibility == Visibility.Visible
+                ? _modalCancelButton
+                : _modalSaveButton;
 
-        IInputElement? last = _modalCancelButton.Visibility == Visibility.Visible
-            ? _modalCancelButton
-            : _modalSaveButton;
+        IInputElement? last = _modalSaveButton.Visibility == Visibility.Visible
+            ? _modalSaveButton
+            : _modalCancelButton;
 
         if (backwards && ReferenceEquals(from, first))
         {
@@ -1004,6 +1068,8 @@ public partial class MainWindow : Window
         _modalAction = null;
         _modalConfirm = null;
         _modalSecondary = null;
+        _modalExtra = null;
+        _modalExtraButton.Visibility = Visibility.Collapsed;
         _modalKeepOpen = false;
         _modalSaveButton.Content = "Save";
         StopModalBar();

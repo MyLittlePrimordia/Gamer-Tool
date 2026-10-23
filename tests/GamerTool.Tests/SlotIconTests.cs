@@ -41,7 +41,7 @@ public class SlotIconTests
         // Falling through to a read is the floor, and it is what makes the picker
         // able to get its own icons rather than depending on a race it does not
         // control - which is the version that shipped and showed nothing.
-        string source = File.ReadAllText(FindRepoFile(Path.Combine("app", "MainWindow.Slots.cs")));
+        string source = SlotsSource.ReadNear(FindRepoFile(Path.Combine("app", "MainWindow.Slots.cs")));
 
         int method = source.IndexOf("private static void ResolveAppIcons(List<AppCandidate> candidates)", StringComparison.Ordinal);
         Assert.True(method > 0, "the icon resolve is no longer a plain method");
@@ -64,7 +64,7 @@ public class SlotIconTests
     [Fact]
     public void The_dropdown_resolve_is_the_thing_the_open_handler_calls()
     {
-        string source = File.ReadAllText(FindRepoFile(Path.Combine("app", "MainWindow.Slots.cs")));
+        string source = SlotsSource.ReadNear(FindRepoFile(Path.Combine("app", "MainWindow.Slots.cs")));
 
         Assert.Contains("box.DropDownOpened += (_, _) => ResolveAppIcons(choices);", source);
     }
@@ -72,7 +72,7 @@ public class SlotIconTests
     [Fact]
     public void The_slow_read_happens_once_at_scan_time_on_a_background_thread()
     {
-        string source = File.ReadAllText(FindRepoFile(Path.Combine("app", "MainWindow.Slots.cs")));
+        string source = SlotsSource.ReadNear(FindRepoFile(Path.Combine("app", "MainWindow.Slots.cs")));
 
         int scan = source.IndexOf("_appList = (await System.Threading.Tasks.Task.Run(() => _library.Scan()))", StringComparison.Ordinal);
         int warm = source.IndexOf("WarmAppIcons();", StringComparison.Ordinal);
@@ -192,7 +192,7 @@ public class SlotIconTests
         // until the dropdown opens. Left to the dropdown's own resolve, and while
         // that could only read a warm cache, the games actually being played came up
         // blank while the installed ones did not.
-        string source = File.ReadAllText(FindRepoFile(Path.Combine("app", "MainWindow.Slots.cs")));
+        string source = SlotsSource.ReadNear(FindRepoFile(Path.Combine("app", "MainWindow.Slots.cs")));
 
         int at = source.IndexOf("private async System.Threading.Tasks.Task AddRunningAppsAsync(", StringComparison.Ordinal);
         Assert.True(at > 0, "the running-apps handler is gone");

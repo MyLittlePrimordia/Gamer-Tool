@@ -990,7 +990,15 @@ public static class CrosshairImageStore
         // Timing first and picture second: a crash between the two leaves a timing
         // file with no picture, which is pruned, rather than a strip with no timing,
         // which would show as one very wide still.
-        File.WriteAllText(TimingPathFor(stripPath), new AnimationInfo(side, kept.Select(f => f.DelayMs).ToArray()).ToJson());
+        //
+        // Written through a temp file and swapped in, because the sidecar is what
+        // makes the strip an animation: a crash part way through a plain write left
+        // a truncated JSON file, which reads as no timing at all. The picture itself
+        // is already whole-or-absent by construction.
+        string timingPath = TimingPathFor(stripPath);
+        string timingTemp = timingPath + ".tmp";
+        File.WriteAllText(timingTemp, new AnimationInfo(side, kept.Select(f => f.DelayMs).ToArray()).ToJson());
+        ProfileManager.AtomicReplace(timingTemp, timingPath);
         File.WriteAllBytes(stripPath, EncodePng(strip, stripWidth, side));
 
         return new StoredPicture(name, ownColours);

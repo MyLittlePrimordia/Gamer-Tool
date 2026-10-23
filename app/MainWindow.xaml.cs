@@ -746,7 +746,7 @@ public partial class MainWindow : Window
         // state that lives in the load, not in a field anything could read.
         _tray.MenuOpening += () =>
         {
-            _tray.SetCrosshairs(_xhVisible, BuildTrayCrosshairEntries());
+            _tray.SetCrosshairs(_crosshairVisible, BuildTrayCrosshairEntries());
 
             _tray.SetToggleStates(
                 effectsOn: BypassToggle.IsEngaged(_settings.EffectsEnabled),

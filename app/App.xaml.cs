@@ -117,7 +117,7 @@ public partial class App : Application
         // Opened as early as it can be, so the first line in the file is the one that
         // explains a start that never got any further. It cannot be first: the
         // single-instance claim above can block or throw, and that comment
-        // that comment claimed a guarantee the code did not keep.
+        // claimed a guarantee the code did not keep.
         AppLog.Info("start " + (typeof(App).Assembly.GetName().Version?.ToString() ?? "?")
             + " build " + BuildIdentity.Id
             + " on " + Environment.OSVersion.VersionString

@@ -1011,7 +1011,12 @@ public partial class MainWindow : Window
     {
         if (_audio.IsInstalled)
         {
-            _audio.StartEngine();
+            // Through the queue, not by calling StartEngine here. Starting the
+            // engine launches a child process and waits on it, which AudioService.Run
+            // refuses to do on the dispatcher - and the apply that follows starts the
+            // engine anyway, inside the queue, on the pool. This used to be a direct
+            // StartEngine call, which froze the window for up to four seconds in a
+            // release build and threw on the dispatcher in a debug one.
             ApplyAudio(_workAudio.Copy(), false);
             _ = RefreshFxStateAsync(true);
         }

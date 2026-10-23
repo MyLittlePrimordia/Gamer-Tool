@@ -85,8 +85,8 @@ new HotkeySlot
         {
             Id = "slot_desktop",
             Name = "Desktop",
-            DisplayPresetId = "flat",
-            AudioPresetId = "flat",
+            DisplayPresetId = PresetIds.Flat,
+            AudioPresetId = PresetIds.Flat,
             Hotkey = string.Empty,
             AppExePath = null,
             AppName = null,

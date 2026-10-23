@@ -35,8 +35,12 @@ public class RecoveryPathTests
         return dir!.FullName;
     }
 
-    private static string Read(string relative) =>
-        File.ReadAllText(Path.Combine(AppRoot(), relative.Replace('/', Path.DirectorySeparatorChar)));
+    private static string Read(string relative)
+    {
+        string path = Path.Combine(AppRoot(), relative.Replace('/', Path.DirectorySeparatorChar));
+
+        return SlotsSource.IsSlotsFile(path) ? SlotsSource.ReadFolder(Path.GetDirectoryName(path)!) : File.ReadAllText(path);
+    }
 
     /// <summary>The body of a method, from its signature to the brace that closes it.</summary>
     private static string Body(string source, string signature)

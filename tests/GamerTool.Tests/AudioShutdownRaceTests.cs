@@ -192,7 +192,7 @@ public class AudioShutdownRaceTests
         // newest-wins rule. Only the four quit paths call EmergencyReset, and only
         // those needed the stop.
         string slots = Read("app/MainWindow.Slots.cs");
-        string body = BodyAfter(slots, "private async void OnHotkeyPressed");
+        string body = BodyAfter(slots, "private async Task HandleHotkeyAsync");
 
         Assert.Contains("GoSoundNeutralAsync()", body, StringComparison.Ordinal);
         Assert.DoesNotContain("EmergencyReset", body, StringComparison.Ordinal);
@@ -224,6 +224,8 @@ public class AudioShutdownRaceTests
         }
 
         Assert.NotNull(dir);
-        return File.ReadAllText(Path.Combine(dir!.FullName, relative.Replace('/', Path.DirectorySeparatorChar)));
+        string path = Path.Combine(dir!.FullName, relative.Replace('/', Path.DirectorySeparatorChar));
+
+        return SlotsSource.IsSlotsFile(path) ? SlotsSource.ReadFolder(Path.GetDirectoryName(path)!) : File.ReadAllText(path);
     }
 }

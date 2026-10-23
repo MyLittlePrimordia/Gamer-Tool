@@ -531,7 +531,7 @@ public sealed class BackupService
             sounds.Add(preset.Id);
         }
 
-        // A slot's crosshair has to name one that exists. The built in five are
+        // A slot's crosshair has to name one that exists. The built-in presets are
         // always there; the rest travel in the backup, so one that is missing was
         // deleted before the backup was made.
         settings.CustomCrosshairs ??= new List<CrosshairPreset>();

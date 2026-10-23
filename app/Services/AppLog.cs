@@ -163,22 +163,22 @@ public static class AppLog
                 // is always whole and the previous one is still there beside it.
                 if (File.Exists(Path_) && new FileInfo(Path_).Length > MaxBytes)
                 {
+                    // The oldest file that is kept when the shift is done, so it is
+                    // the one that falls off. Deleted before the shift rather than
+                    // after, because the shift would otherwise overwrite it and the
+                    // oldest run would sit there forever.
                     string previous = System.IO.Path.Combine(Folder, "app." + (KeptFiles - 1) + ".log");
                     if (File.Exists(previous))
                     {
                         File.Delete(previous);
                     }
 
-                    // The shift loop. It never ran: with KeptFiles at 2 the loop starts at 0 and the
-                    // condition is >= 1, so it had no body. The rotation is correct
-                    // without it - the explicit delete of app.1.log above plus the
-                    // move of app.log at the end is the whole mechanism at this
-                    // setting - but the dead loop sat there looking like the part
-                    // that did the work, and would silently do nothing if KeptFiles
-                    // were ever raised to 3. Written so that it is true at any
-                    // setting: from the oldest kept file down to 1, each moving up
-                    // one slot.
-                    for (int i = KeptFiles - 1; i >= 1; i--)
+                    // The shift loop. It used to start at KeptFiles - 1, which moved
+                    // the oldest kept file up into app.{KeptFiles}.log - a file the
+                    // delete above never removes - so raising KeptFiles left an
+                    // orphan behind. Starting one below the oldest kept slot is what
+                    // makes app.{KeptFiles-1}.log the last file after the shift.
+                    for (int i = KeptFiles - 2; i >= 1; i--)
                     {
                         string from = System.IO.Path.Combine(Folder, "app." + i + ".log");
                         string to = System.IO.Path.Combine(Folder, "app." + (i + 1) + ".log");

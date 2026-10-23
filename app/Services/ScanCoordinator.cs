@@ -12,7 +12,7 @@ namespace GamerTool.Services;
 /// Out here rather than inside the window for one reason: this is the whole of the
 /// app-list scan's state and all of its concurrency, and it is the part that cannot
 /// be checked by reading it. The scan walks the real Steam libraries and the real
-/// uninstall registry, so while this lived in <c>MainWindow.Slots.cs</c> the only
+/// uninstall registry, so while this lived in the window's slot partial the only
 /// evidence that the coalescing worked was that somebody had thought about it
 /// carefully.
 /// <para>

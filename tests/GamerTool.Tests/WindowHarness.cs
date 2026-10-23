@@ -284,7 +284,7 @@ internal sealed class WindowHarness : IDisposable
             // would then write to a folder that has been deleted.
             foreach (string name in new[]
                      {
-                         "_xhSaveTimer", "_xhPackClock", "_modalElapsed", "_previewTimer", "_liveTuneTimer"
+                         "_crosshairSaveTimer", "_crosshairPackClock", "_modalElapsed", "_previewTimer", "_liveTuneTimer"
                      })
             {
                 if (typeof(MainWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(Window)

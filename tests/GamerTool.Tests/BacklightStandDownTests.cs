@@ -114,10 +114,12 @@ public class BacklightStandDownTests
     [Fact]
     public void The_panic_key_is_a_hard_reset()
     {
-        // Anchored on the panic branch, not on the name: OnHotkeyPressed also
-        // contains the slot branch and the file contains other neutral calls.
+        // Anchored on the panic branch, not on the name: the routing method also
+        // contains the slot branch and the file contains other neutral calls. The
+        // event handler is a one-line adapter, so the body is the task-shaped
+        // method it delegates to.
         string slots = Source("MainWindow.Slots.cs");
-        string body = BodyAfter(slots, "private async void OnHotkeyPressed");
+        string body = BodyAfter(slots, "private async Task HandleHotkeyAsync");
 
         // Named, not bare: the panic key is the one caller that passes
         // emergency: true, which is what stops the night filter being re-asserted on
@@ -353,6 +355,8 @@ public class BacklightStandDownTests
         }
 
         Assert.NotNull(dir);
-        return File.ReadAllText(Path.Combine(dir!.FullName, "app", fileName));
+        string path = Path.Combine(dir!.FullName, "app", fileName);
+
+        return SlotsSource.IsSlotsFile(path) ? SlotsSource.ReadFolder(Path.GetDirectoryName(path)!) : File.ReadAllText(path);
     }
 }

@@ -253,6 +253,17 @@ public static class EmergencyReset
     /// </remarks>
     private const int ShutdownWaitMs = 1200;
 
+    /// <summary>
+    /// How long the whole restore may take on the way out, across every command.
+    /// <para>
+    /// The per-command budget bounds one wait; it does not bound the sequence, and
+    /// the flat path issues several commands plus a power-off. Four seconds is long
+    /// enough for the ordinary case and short enough that Windows does not decide the
+    /// process has hung while it is still putting the user's sound back.
+    /// </para>
+    /// </summary>
+    private const int ShutdownBudgetMs = 4000;
+
     /// <summary>Set once the backlight has been put back, so a second exit hook does not repeat it.</summary>
     private static int _backlightRestored;
 
@@ -364,6 +375,16 @@ public static class EmergencyReset
                     bool wasBypassed = audio.EffectsEnabled;
                     audio.EffectsEnabled = true;
 
+                    // One deadline for the whole sequence. Each command is bounded
+                    // by ShutdownWaitMs, but the flat path issues several of them,
+                    // so the exit could still sit there for the sum. Once the
+                    // budget is gone the remaining waits are zero: every command is
+                    // still started, it is simply not waited on, which is the best
+                    // available answer when the process is about to go away.
+                    long deadline = Environment.TickCount64 + ShutdownBudgetMs;
+                    int Budget() => (int)Math.Clamp(
+                        deadline - Environment.TickCount64, 0L, ShutdownWaitMs);
+
                     try
                     {
                         if (restore is not null)
@@ -377,7 +398,7 @@ public static class EmergencyReset
                             // selecting while the engine is off does nothing.
                             foreach (string command in BuildRestoreCommands(restore))
                             {
-                                audio.Run(command, ShutdownWaitMs);
+                                audio.Run(command, Budget());
                             }
 
                             TraceLog.Write("FX RESTORED " + restore.Preset);
@@ -406,10 +427,10 @@ public static class EmergencyReset
                                 string.Empty,
                                 wroteCurve))
                             {
-                                audio.Run(command, ShutdownWaitMs);
+                                audio.Run(command, Budget());
                             }
 
-                            audio.Run("--power=0", ShutdownWaitMs);
+                            audio.Run("--power=0", Budget());
                         }
                     }
                     finally

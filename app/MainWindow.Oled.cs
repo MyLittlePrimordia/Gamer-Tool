@@ -27,20 +27,20 @@ namespace GamerTool;
 public partial class MainWindow
 {
     /// <summary>When the crosshair on the screen was put there, for the "on screen" reading.</summary>
-    private DateTime? _xhShownAt;
+    private DateTime? _crosshairShownAt;
 
     /// <summary>True when the guard, rather than the user, is the reason nothing is showing.</summary>
-    private bool _xhGuarded;
+    private bool _crosshairGuarded;
 
     /// <summary>Whether the guarded crosshair was put up by a slot, so it goes back the same way.</summary>
-    private bool _xhGuardedBySlot;
+    private bool _crosshairGuardedBySlot;
 
     private DispatcherTimer? _oledWatch;
 
     /// <summary>The switch itself: remembered in the profile and applied to the next crosshair too.</summary>
     private void OnXhOledChanged(object sender, RoutedEventArgs e)
     {
-        if (_xhUpdating || !_xhReady)
+        if (_crosshairUpdating || !_crosshairReady)
         {
             return;
         }
@@ -50,11 +50,11 @@ public partial class MainWindow
 
         // Turning it off while it is holding a crosshair back has to give it back, or the
         // switch would leave the screen empty with nothing left running to fill it.
-        if (!_settings.OledGuard && _xhGuarded)
+        if (!_settings.OledGuard && _crosshairGuarded)
         {
-            bool bySlot = _xhGuardedBySlot;
-            _xhGuarded = false;
-            _xhGuardedBySlot = false;
+            bool bySlot = _crosshairGuardedBySlot;
+            _crosshairGuarded = false;
+            _crosshairGuardedBySlot = false;
             ShowCrosshair(bySlot);
             return;
         }
@@ -70,7 +70,7 @@ public partial class MainWindow
     /// </summary>
     private void SyncOledWatch()
     {
-        bool wanted = _xhVisible || _xhGuarded;
+        bool wanted = _crosshairVisible || _crosshairGuarded;
         if (!wanted)
         {
             StopOledWatch();
@@ -83,7 +83,7 @@ public partial class MainWindow
             _oledWatch.Tick += OnOledTick;
         }
 
-        _oledWatch.Interval = _xhGuarded ? TimeSpan.FromSeconds(1) : TimeSpan.FromSeconds(15);
+        _oledWatch.Interval = _crosshairGuarded ? TimeSpan.FromSeconds(1) : TimeSpan.FromSeconds(15);
         if (!_oledWatch.IsEnabled)
         {
             _oledWatch.Start();
@@ -110,7 +110,7 @@ public partial class MainWindow
 
             TimeSpan idle = IdleTime();
 
-            if (_xhGuarded)
+            if (_crosshairGuarded)
             {
                 if (!OledGuard.ShouldWake(rested: true, idle))
                 {
@@ -119,25 +119,25 @@ public partial class MainWindow
 
                 // Back the way it went: a slot's crosshair is still a slot's crosshair,
                 // and one the user turned on by hand is still theirs.
-                bool bySlot = _xhGuardedBySlot;
-                _xhGuarded = false;
-                _xhGuardedBySlot = false;
+                bool bySlot = _crosshairGuardedBySlot;
+                _crosshairGuarded = false;
+                _crosshairGuardedBySlot = false;
                 ShowCrosshair(bySlot);
                 return;
             }
 
             if (!OledGuard.ShouldRest(
-                    _settings.OledGuard, _xhVisible, GameIsFullscreen(), idle))
+                    _settings.OledGuard, _crosshairVisible, GameIsFullscreen(), idle))
             {
                 return;
             }
 
-            _xhGuardedBySlot = _xhBySlot;
+            _crosshairGuardedBySlot = _crosshairBySlot;
 
             // Set before the hide, because the hide is what decides whether the watch
             // keeps running: it stops it for a crosshair the user took down, and this
             // one has to come back.
-            _xhGuarded = true;
+            _crosshairGuarded = true;
             HideCrosshair();
             SyncOledWatch();
             UpdateXhStatus();

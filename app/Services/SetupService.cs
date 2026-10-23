@@ -270,10 +270,15 @@ public sealed class SetupService
                 return new FxUpdateResult { Outcome = FxUpdateOutcome.Failed };
             }
 
-            (int exitCode, string log) = RunWingetAsync(
+            // Awaited, not blocked on. This method is already async, and the block
+            // parked a pool thread for up to 45 seconds; it only happened to be safe
+            // because the one caller wraps the whole check in Task.Run. On a caller
+            // with a synchronisation context it would have frozen the window for the
+            // duration of a winget query.
+            (int exitCode, string log) = await RunWingetAsync(
                 "show --id " + WingetId + " -e --source winget --accept-source-agreements --disable-interactivity",
                 TimeSpan.FromSeconds(45),
-                CancellationToken.None).GetAwaiter().GetResult();
+                CancellationToken.None).ConfigureAwait(false);
 
             if (exitCode != 0)
             {

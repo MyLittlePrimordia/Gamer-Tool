@@ -872,6 +872,12 @@ public sealed class AppLibraryService
     {
         List<AppCandidate> found = new();
         HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+
+        // One bad uninstall key is normal; a whole hive this account cannot read is
+        // not, and it looks exactly the same from here - no games found. Counted so
+        // the two can be told apart in the log instead of both reading as an empty
+        // scan.
+        int unreadable = 0;
         try
         {
             foreach (string hive in new[]
@@ -908,8 +914,9 @@ public sealed class AppLibraryService
                             string loc = (k.GetValue("InstallLocation") as string) ?? string.Empty;
                             AddLauncherEntry(found, seen, loc, name, source);
                         }
-                        catch
+                        catch (Exception)
                         {
+                            unreadable++;
                         }
                     }
                 }
@@ -918,6 +925,13 @@ public sealed class AppLibraryService
         catch (Exception ex)
         {
             TraceLog.Write(logTag, ex);
+        }
+
+        if (unreadable > 0)
+        {
+            AppLog.Warn(logTag + " could not read "
+                + unreadable.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + " uninstall key(s); those apps are missing from the scan");
         }
 
         return found;

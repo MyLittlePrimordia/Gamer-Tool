@@ -70,7 +70,7 @@ public class SlotRowFitsTests
         }
 
         Assert.NotNull(dir);
-        return File.ReadAllText(Path.Combine(dir!.FullName, "app", "MainWindow.Slots.cs"));
+        return SlotsSource.ReadFolder(Path.Combine(dir!.FullName, "app"));
     }
 
     /// <summary>
@@ -198,6 +198,101 @@ public class SlotRowFitsTests
 
         Assert.NotNull(row[12]);
         Assert.Null(row[14]);
+    }
+
+    /// <summary>
+    /// A control added to a card without a column of its own.
+    /// </summary>
+    /// <remarks>
+    /// The tests above only add up the widths that are declared, so they stay
+    /// green while a tenth control is dropped into the row: the new control either
+    /// lands in a column another control already occupies, which stacks two boxes
+    /// in one cell, or past the end of <c>SlotColumns</c>, where the grid puts it
+    /// wherever the layout engine feels like. Neither shows up in a build, and
+    /// neither shows up on a wide screen. Both show up as the game picker
+    /// shrinking on a 1200 pixel window, which is the overflow this file exists to
+    /// catch.
+    /// </remarks>
+    [Fact]
+    public void Every_control_on_a_card_occupies_a_column_of_its_own()
+    {
+        string card = CardBody();
+
+        MatchCollection placed = Regex.Matches(card, @"Grid\.SetColumn\((\w+), (\d+)\);");
+        MatchCollection added = Regex.Matches(card, @"row\.Children\.Add\((\w+)\);");
+
+        string[] placedNames = placed.Select(m => m.Groups[1].Value)
+            .OrderBy(name => name, StringComparer.Ordinal).ToArray();
+        string[] addedNames = added.Select(m => m.Groups[1].Value)
+            .OrderBy(name => name, StringComparer.Ordinal).ToArray();
+        int[] columns = placed
+            .Select(m => int.Parse(m.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture))
+            .ToArray();
+        double?[] widths = Columns("SlotColumns");
+
+        // Placed and added have to be the same set. A control that is added and
+        // never placed sits in column 0, on top of the name plate; one that is
+        // placed and never added is not on the card at all.
+        Assert.True(
+            placedNames.SequenceEqual(addedNames),
+            "the card places " + placedNames.Length + " controls in a column and adds "
+            + addedNames.Length + " to the row. Every control needs both, and the two "
+            + "sets have to match: [" + string.Join(", ", placedNames) + "] placed, ["
+            + string.Join(", ", addedNames) + "] added.");
+
+        // One control per column. Two in the same cell draw over each other, and
+        // the one underneath cannot be clicked.
+        Assert.Equal(columns.Length, columns.Distinct().Count());
+
+        // Even indexes are controls and odd ones are the 6px gaps between them, so
+        // a control in an odd column is a control half a gap wide.
+        foreach (int column in columns)
+        {
+            Assert.True(
+                column % 2 == 0,
+                "a control is in column " + column + ", which is one of the gaps rather "
+                + "than a control column. The control columns are the even ones.");
+        }
+
+        // And every one of them needs a width. This is the assertion a tenth
+        // control fails: its column index is one past the end of SlotColumns,
+        // because that array is what decides how many controls the row holds.
+        int widest = columns.Max();
+        Assert.True(
+            widest < widths.Length,
+            "a control is in column " + widest + " and SlotColumns declares " + widths.Length
+            + ". That control has no width, so the row is now wider than the columns it "
+            + "was measured against - add its width and a gap to SlotColumns, then redo "
+            + "the arithmetic the widths above are checked with.");
+
+        // The same mistake from the other direction: a width nobody uses is a
+        // column of the row spent on nothing, and it comes out of the game picker.
+        Assert.True(
+            (widths.Length + 1) / 2 == columns.Length,
+            "SlotColumns declares " + ((widths.Length + 1) / 2) + " control columns and the card "
+            + "places " + columns.Length + ". A width that no control sits in is a column of the "
+            + "row spent on nothing.");
+    }
+
+    /// <summary>
+    /// The card's own method, bounded at its closing brace.
+    /// <para>
+    /// Bounded that way rather than at the next declaration because the card is the
+    /// last member of its partial, so the next declaration in the joined source is
+    /// in another file.
+    /// </para>
+    /// </summary>
+    private static string CardBody()
+    {
+        string source = Source();
+
+        int at = source.IndexOf("private UIElement SlotCard(", StringComparison.Ordinal);
+        Assert.True(at > 0, "SlotCard is gone");
+
+        int end = source.IndexOf("\n    }", at, StringComparison.Ordinal);
+        Assert.True(end > at, "SlotCard has no end");
+
+        return source.Substring(at, end - at);
     }
 
     [Fact]

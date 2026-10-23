@@ -31,54 +31,69 @@ namespace GamerTool;
 /// </para>
 /// <para>
 /// Editing a crosshair you saved updates that one in place. Editing one that
-/// ships leaves it alone and the box reads "Tuned" until it is saved under a new
-/// name with the plus button, so a built in can never be damaged by a stray
-/// slider.
+/// ships leaves it alone and marks it "edited", so a built in can never be
+/// damaged by a stray slider: the edit lives on the tab until it is kept as a
+/// crosshair of the user's own, or dropped when they switch away and say so.
 /// </para>
 /// </summary>
 public partial class MainWindow
 {
-    private CrosshairOverlay? _xhOverlay;
+    private CrosshairOverlay? _crosshairOverlay;
 
     private CrosshairPreset _workCrosshair = CrosshairPreset.Default();
 
-    /// <summary>Id selected in the box. Empty while the crosshair is tuned and unsaved.</summary>
-    private string _xhPresetId = string.Empty;
-
-    private bool _xhReady;
-
-    private bool _xhUpdating;
-
-    private bool _xhVisible;
-
-    /// <summary>True when a slot put the crosshair up, so standing the slot down takes it away.</summary>
-    private bool _xhBySlot;
-
-    private bool _xhNight;
-
-    private int _xhCentreX;
-
-    private int _xhCentreY;
-
-    private BitmapSource? _xhDayImage;
-
-    private BitmapSource? _xhNightImage;
-
-    private readonly Dictionary<CrosshairShape, RadioButton> _xhTiles = new();
-
-    private CrosshairView? _xhCustomTileView;
-
-    private TextBlock? _xhCustomTileHint;
-
-    /// <summary>Saving to disk waits for the slider to stop moving.</summary>
-    private readonly DispatcherTimer _xhSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
+    /// <summary>
+    /// The preset as it was when the tab loaded it, for Reset.
+    /// <para>
+    /// A built-in can be read again from the shipped list, but a saved crosshair
+    /// writes its edits through as they are made, so the only thing that can put it
+    /// back the way it was opened is a copy taken at that moment. Both go through
+    /// here, so Reset means the same thing whichever kind is loaded.
+    /// </para>
+    /// </summary>
+    private CrosshairPreset _crosshairBase = CrosshairPreset.Default();
 
     /// <summary>
-    /// True while the working crosshair is an edited built-in, which has no preset of
-    /// its own behind it. Nothing is written to disk in that state, so the next preset
-    /// picked would drop the work without a word - the switching paths ask first.
+    /// Id of the preset the working crosshair came from. Kept while a built-in is
+    /// edited as well, so the box can still say which preset the edit belongs to
+    /// and dropping the edit has somewhere to go back to.
     /// </summary>
-    private bool _xhTuned;
+    private string _crosshairPresetId = string.Empty;
+
+    private bool _crosshairReady;
+
+    private bool _crosshairUpdating;
+
+    private bool _crosshairVisible;
+
+    /// <summary>True when a slot put the crosshair up, so standing the slot down takes it away.</summary>
+    private bool _crosshairBySlot;
+
+    private bool _crosshairNight;
+
+    private int _crosshairCentreX;
+
+    private int _crosshairCentreY;
+
+    private BitmapSource? _crosshairDayImage;
+
+    private BitmapSource? _crosshairNightImage;
+
+    private readonly Dictionary<CrosshairShape, RadioButton> _crosshairTiles = new();
+
+    private CrosshairView? _crosshairCustomTileView;
+
+    private TextBlock? _crosshairCustomTileHint;
+
+    /// <summary>Saving to disk waits for the slider to stop moving.</summary>
+    private readonly DispatcherTimer _crosshairSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
+
+    /// <summary>
+    /// True while the working crosshair is an edited built-in. Nothing is written to
+    /// disk in that state, so the next preset picked would drop the work without a
+    /// word - the switching paths ask first, and offer to keep it or drop it.
+    /// </summary>
+    private bool _crosshairTuned;
 
     /// <summary>
     /// Build the tab and load the crosshair it opens on.
@@ -108,8 +123,8 @@ public partial class MainWindow
                 _ = Task.Run(CrosshairPack.EnsureFolder);
             }
 
-            _xhDayImage = LoadCrosshairScene("crosshair_day.png");
-            _xhNightImage = LoadCrosshairScene("crosshair_night.png");
+            _crosshairDayImage = LoadCrosshairScene("crosshair_day.png");
+            _crosshairNightImage = LoadCrosshairScene("crosshair_night.png");
 
             if (!headless)
             {
@@ -118,11 +133,12 @@ public partial class MainWindow
 
             CrosshairPreset start = FindCrosshair(_settings.ActiveCrosshairId) ?? CrosshairPreset.Default();
             _workCrosshair = start.Copy().Sanitised();
-            _xhPresetId = start.Id;
+            _crosshairBase = _workCrosshair.Copy();
+            _crosshairPresetId = start.Id;
 
-            _xhSaveTimer.Tick += (s, e) =>
+            _crosshairSaveTimer.Tick += (s, e) =>
             {
-                _xhSaveTimer.Stop();
+                _crosshairSaveTimer.Stop();
                 Commit();
             };
 
@@ -134,7 +150,7 @@ public partial class MainWindow
                 Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnXhDisplaySettingsChanged;
             }
 
-            _xhReady = true;
+            _crosshairReady = true;
             RefreshCrosshairBox();
             UpdateXhControls();            RenderCrosshairPreview();
             UpdateXhStatus();
@@ -261,8 +277,8 @@ public partial class MainWindow
             if (shape == CrosshairShape.Custom)
             {
                 // Empty until a picture is imported: the tile says what it is for.
-                _xhCustomTileView = view;
-                _xhCustomTileHint = new TextBlock
+                _crosshairCustomTileView = view;
+                _crosshairCustomTileHint = new TextBlock
                 {
                     Text = "PIC",
                     FontSize = 11,
@@ -275,7 +291,7 @@ public partial class MainWindow
 
                 var grid = new Grid { Width = 44, Height = 44 };
                 grid.Children.Add(view);
-                grid.Children.Add(_xhCustomTileHint);
+                grid.Children.Add(_crosshairCustomTileHint);
                 content = grid;
             }
 
@@ -291,7 +307,7 @@ public partial class MainWindow
             AutomationProperties.SetName(tile, tip + " crosshair");
             tile.Click += OnXhTileClick;
             XhTilePanel.Children.Add(tile);
-            _xhTiles[shape] = tile;
+            _crosshairTiles[shape] = tile;
         }
     }
 
@@ -324,48 +340,48 @@ public partial class MainWindow
 
     private void RefreshCrosshairBox()
     {
-        if (!_xhReady)
+        if (!_crosshairReady)
         {
             return;
         }
 
-        _xhUpdating = true;
+        _crosshairUpdating = true;
         try
         {
             List<PresetChoice> items = new();
 
-            if (_xhPresetId.Length == 0)
-            {
-                // BuiltIn only because that is what hides the "YOURS" chip. This
-                // row is not a preset, it is the unsaved state.
-                items.Add(new PresetChoice { Kind = "crosshair", Id = string.Empty, Name = "Tuned", BuiltIn = true });
-            }
-
             HashSet<string> builtIn = CrosshairPreset.BuiltIns.Select(p => p.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (CrosshairPreset preset in AllCrosshairs())
             {
+                // The entry the tab is editing says so, in the list and on the
+                // closed box. It is the preset itself, not a separate entry: the
+                // box still selects by id, and Rename and Delete stay off for a
+                // built-in because that is what it is.
+                bool edited = _crosshairTuned
+                    && string.Equals(preset.Id, _crosshairPresetId, StringComparison.OrdinalIgnoreCase);
+
                 items.Add(new PresetChoice
                 {
                     Kind = "crosshair",
                     Id = preset.Id,
-                    Name = preset.Name,
+                    Name = edited ? preset.Name + " \u00B7 edited" : preset.Name,
                     BuiltIn = builtIn.Contains(preset.Id)
                 });
             }
 
             XhPresetBox.ItemsSource = items;
             XhPresetBox.SelectedItem = items.FirstOrDefault(
-                i => string.Equals(i.Id, _xhPresetId, StringComparison.OrdinalIgnoreCase));
+                i => string.Equals(i.Id, _crosshairPresetId, StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
-            _xhUpdating = false;
+            _crosshairUpdating = false;
         }
     }
 
     private void OnXhPresetSelected(object sender, SelectionChangedEventArgs e)
     {
-        if (_xhUpdating || !_xhReady)
+        if (_crosshairUpdating || !_crosshairReady)
         {
             return;
         }
@@ -381,7 +397,7 @@ public partial class MainWindow
             return;
         }
 
-        if (!_xhTuned)
+        if (!_crosshairTuned)
         {
             SwitchToCrosshair(preset);
             return;
@@ -390,54 +406,77 @@ public partial class MainWindow
         AskToKeepTuning(() => SwitchToCrosshair(preset));
 
         // The box is already showing the preset that was clicked, and the switch it
-        // shows is the one being questioned. Put it back on the tuning.
+        // shows is the one being questioned. Put it back on the edited preset until
+        // the user answers, because nothing has been loaded yet either way.
         RefreshCrosshairBox();
     }
 
-    /// <summary>Pick a preset from the dropdown: load it, make it the active one and save.</summary>
-    private void SwitchToCrosshair(CrosshairPreset preset)
+    /// <summary>
+    /// Pick a preset from the dropdown: load it, make it the active one and save.
+    /// Returns whether the profile reached the disk, so a caller that is about to
+    /// say something was saved can tell the truth.
+    /// </summary>
+    private bool SwitchToCrosshair(CrosshairPreset preset)
     {
         LoadCrosshair(preset);
         _settings.ActiveCrosshairId = preset.Id;
-        Commit();
+        return Commit();
     }
 
     /// <summary>
-    /// Ask before a switch throws away tuning, and save it as the user's own preset
-    /// if that is what they choose.
+    /// Ask what to do with an edited built-in before a switch drops it.
     /// <para>
-    /// Cancel deliberately means "keep working": it closes the question and leaves
-    /// the tuned crosshair on the tab, rather than switching to the preset and
-    /// losing it. Saving here is the same one-press copy Duplicate makes, because an
-    /// edited built-in cannot be written back to itself - a copy is the only place
-    /// that edit can live.
+    /// Three answers, because there are three things a person can want. Keeping it
+    /// is the same one-press copy Duplicate makes, since a built-in cannot be written
+    /// back to itself - a copy is the only place that edit can live. Dropping it is a
+    /// real answer, not a Cancel: the switch happens and the edit goes. Cancel stays
+    /// on the tab with the edit, which is the safe way out.
+    /// </para>
+    /// <para>
+    /// This used to have only two answers, so an edited built-in could not be left
+    /// for another preset at all without saving it first. A Cancel that keeps the
+    /// work is not the same thing as permission to throw it away, and the switch the
+    /// user asked for never happened.
     /// </para>
     /// </summary>
-    private void AskToKeepTuning(Action proceed)
+    private void AskToKeepTuning(Func<bool> proceed)
     {
         StackPanel content = new() { Margin = new Thickness(4, 0, 4, 0) };
         content.Children.Add(new TextBlock
         {
             Style = (Style)FindResource("CardSub"),
-            Text = "The crosshair on this tab has changes that are not saved yet. Built in crosshairs cannot be written back to, so picking another one would drop them.",
+            Text = "The crosshair on this tab has changes that are not saved yet. Built in crosshairs cannot be written back to, so switching would drop them.",
             TextWrapping = TextWrapping.Wrap,
             LineHeight = 18,
         });
         content.Children.Add(new TextBlock
         {
             Style = (Style)FindResource("CardSub"),
-            Text = "Save and keep puts them in a new crosshair of your own, then switches. Cancel stays here with them.",
+            Text = "Save and switch keeps them as a new crosshair of your own. Don't save switches and drops the changes. Cancel stays here with them.",
             TextWrapping = TextWrapping.Wrap,
             LineHeight = 18,
             Foreground = (Brush)FindResource("TextMid"),
             Margin = new Thickness(0, 8, 0, 0),
         });
 
-        ShowCustomModal("KEEP YOUR TUNING?", content, "SAVE AND KEEP", () =>
-        {
-            SaveTunedAsPreset();
-            proceed();
-        });
+        ShowCustomModal(
+            "KEEP YOUR TUNING?",
+            content,
+            "SAVE AND SWITCH",
+            () =>
+            {
+                CrosshairPreset kept = SaveTunedAsPreset();
+
+                // The switch still goes to the preset that was picked. What the
+                // copy does is keep the edit, not take the tab.
+                bool saved = proceed();
+                if (saved)
+                {
+                    Flash(kept.Name + " saved");
+                }
+            },
+            extraText: "DON'T SAVE",
+            extraAction: () => proceed());
     }
 
     /// <summary>The tab's crosshair as a new preset of the user's own, name and all.</summary>
@@ -448,7 +487,7 @@ public partial class MainWindow
         copy.Name = FreeCrosshairName(copy.Name);
 
         _settings.CustomCrosshairs.Add(copy);
-        _xhTuned = false;
+        _crosshairTuned = false;
         return copy;
     }
 
@@ -456,8 +495,9 @@ public partial class MainWindow
     private void LoadCrosshair(CrosshairPreset preset)
     {
         _workCrosshair = preset.Copy().Sanitised();
-        _xhPresetId = preset.Id;
-        _xhTuned = false;
+        _crosshairBase = _workCrosshair.Copy();
+        _crosshairPresetId = preset.Id;
+        _crosshairTuned = false;
         RefreshCrosshairBox();
         UpdateXhControls();
         UpdateXhStatus();
@@ -483,8 +523,8 @@ public partial class MainWindow
     /// </summary>
     private void UpdateXhColorUi()
     {
-        bool was = _xhUpdating;
-        _xhUpdating = true;
+        bool was = _crosshairUpdating;
+        _crosshairUpdating = true;
         try
         {
             CrosshairPreset p = _workCrosshair;
@@ -509,19 +549,19 @@ public partial class MainWindow
         }
         finally
         {
-            _xhUpdating = was;
+            _crosshairUpdating = was;
         }
     }
 
     /// <summary>Set every control on the tab from the working crosshair.</summary>
     private void UpdateXhControls()
     {
-        if (!_xhReady)
+        if (!_crosshairReady)
         {
             return;
         }
 
-        _xhUpdating = true;
+        _crosshairUpdating = true;
         try
         {
             CrosshairPreset p = _workCrosshair;
@@ -542,7 +582,7 @@ public partial class MainWindow
             XhOwnColoursBox.IsChecked = p.KeepOwnColours;
             XhOledBox.IsChecked = _settings.OledGuard;
 
-            foreach (KeyValuePair<CrosshairShape, RadioButton> tile in _xhTiles)
+            foreach (KeyValuePair<CrosshairShape, RadioButton> tile in _crosshairTiles)
             {
                 tile.Value.IsChecked = tile.Key == p.ShapeKind;
             }
@@ -593,7 +633,7 @@ public partial class MainWindow
         }
         finally
         {
-            _xhUpdating = false;
+            _crosshairUpdating = false;
         }
 
         UpdateCycleNextLabel();
@@ -641,7 +681,7 @@ public partial class MainWindow
 
     private void RefreshCustomTile()
     {
-        if (_xhCustomTileView is null || _xhCustomTileHint is null)
+        if (_crosshairCustomTileView is null || _crosshairCustomTileHint is null)
         {
             return;
         }
@@ -650,14 +690,14 @@ public partial class MainWindow
             ? null
             : CrosshairImageStore.Load(_workCrosshair.CustomImage);
 
-        _xhCustomTileView.Image = image;
-        _xhCustomTileView.InvalidateVisual();
-        _xhCustomTileHint.Visibility = image is null ? Visibility.Visible : Visibility.Collapsed;
+        _crosshairCustomTileView.Image = image;
+        _crosshairCustomTileView.InvalidateVisual();
+        _crosshairCustomTileHint.Visibility = image is null ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void OnXhTileClick(object sender, RoutedEventArgs e)
     {
-        if (!_xhReady || sender is not RadioButton { Tag: CrosshairShape shape })
+        if (!_crosshairReady || sender is not RadioButton { Tag: CrosshairShape shape })
         {
             return;
         }
@@ -680,7 +720,7 @@ public partial class MainWindow
 
     private void OnXhSwatchChecked(object sender, RoutedEventArgs e)
     {
-        if (_xhUpdating || !_xhReady || sender is not RadioButton box || box.Tag is not string tag)
+        if (_crosshairUpdating || !_crosshairReady || sender is not RadioButton box || box.Tag is not string tag)
         {
             return;
         }
@@ -700,7 +740,7 @@ public partial class MainWindow
 
     private void OnXhCustomSwatchClick(object sender, RoutedEventArgs e)
     {
-        if (!_xhReady)
+        if (!_crosshairReady)
         {
             return;
         }
@@ -723,7 +763,7 @@ public partial class MainWindow
 
     private void SetXhColorFromPicker(string hex)
     {
-        if (!_xhReady)
+        if (!_crosshairReady)
         {
             return;
         }
@@ -810,7 +850,7 @@ public partial class MainWindow
     /// </summary>
     private void UpdateXhDotUi()
     {
-        if (!_xhReady)
+        if (!_crosshairReady)
         {
             return;
         }
@@ -826,7 +866,7 @@ public partial class MainWindow
 
     private void UpdateXhCenterDotColorUi()
     {
-        if (!_xhReady)
+        if (!_crosshairReady)
         {
             return;
         }
@@ -852,7 +892,7 @@ public partial class MainWindow
 
     private void OnXhDotColorClick(object sender, RoutedEventArgs e)
     {
-        if (!_xhReady)
+        if (!_crosshairReady)
         {
             return;
         }
@@ -875,7 +915,7 @@ public partial class MainWindow
 
     private void SetXhCenterDotColor(string hex)
     {
-        if (!_xhReady)
+        if (!_crosshairReady)
         {
             return;
         }
@@ -946,7 +986,7 @@ public partial class MainWindow
 
     private void OnXhSliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (_xhUpdating || !_xhReady)
+        if (_crosshairUpdating || !_crosshairReady)
         {
             return;
         }
@@ -976,7 +1016,7 @@ public partial class MainWindow
     }
 
     private void OnXhToggleChanged(object sender, RoutedEventArgs e)
-    {        if (_xhUpdating || !_xhReady)
+    {        if (_crosshairUpdating || !_crosshairReady)
         {
             return;
         }
@@ -994,7 +1034,7 @@ public partial class MainWindow
 
     private void OnXhEffectChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_xhUpdating || !_xhReady)
+        if (_crosshairUpdating || !_crosshairReady)
         {
             return;
         }
@@ -1018,7 +1058,7 @@ public partial class MainWindow
             _workCrosshair.EffectSpeed = speed;
             _workCrosshair.EffectAmount = amount;
 
-            _xhUpdating = true;
+            _crosshairUpdating = true;
             try
             {
                 XhEffectSpeedSlider.Value = speed;
@@ -1026,7 +1066,7 @@ public partial class MainWindow
             }
             finally
             {
-                _xhUpdating = false;
+                _crosshairUpdating = false;
             }
 
             UpdateXhValueLabels();
@@ -1038,7 +1078,7 @@ public partial class MainWindow
 
     private void OnXhEffectSliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (_xhUpdating || !_xhReady)
+        if (_crosshairUpdating || !_crosshairReady)
         {
             return;
         }
@@ -1051,34 +1091,35 @@ public partial class MainWindow
 
     /// <summary>
     /// Something on the tab changed the working crosshair. Keep the saved copy
-    /// in step if it is one the user made, otherwise call it Tuned, then redraw
-    /// the preview and anything on the screen.
+    /// in step if it is one the user made; otherwise mark the built-in it came from
+    /// as edited, then redraw the preview and anything on the screen.
     /// </summary>
     private void OnXhEdited()
     {
-        if (!_xhReady)
+        if (!_crosshairReady)
         {
             return;
         }
 
-        int index = _xhPresetId.Length == 0 ? -1 : CustomCrosshairIndex(_xhPresetId);
+        int index = _crosshairPresetId.Length == 0 ? -1 : CustomCrosshairIndex(_crosshairPresetId);
         if (index >= 0)
         {
             CrosshairPreset stored = _workCrosshair.Copy();
             stored.Id = _settings.CustomCrosshairs[index].Id;
             stored.Name = _settings.CustomCrosshairs[index].Name;
             _settings.CustomCrosshairs[index] = stored;
-            _xhSaveTimer.Stop();
-            _xhSaveTimer.Start();
+            _crosshairSaveTimer.Stop();
+            _crosshairSaveTimer.Start();
         }
-        else if (_xhPresetId.Length > 0)
+        else if (_crosshairPresetId.Length > 0 && !_crosshairTuned)
         {
-            _xhTuned = true;
-            _xhPresetId = string.Empty;
-            _workCrosshair.Id = string.Empty;
-            _workCrosshair.Name = "Tuned";
+            // The id stays, the name stays, and the box says "edited". That is what
+            // makes Discard possible and Reset able to mean "back to this preset".
+            // Only the first edit has to relabel the box; the rest leave it alone.
+            _crosshairTuned = true;
             RefreshCrosshairBox();
             UpdateXhStatus();
+            UpdateCycleNextLabel();
         }
 
         RenderCrosshairPreview();
@@ -1089,7 +1130,7 @@ public partial class MainWindow
 
     private void RenderCrosshairPreview()
     {
-        if (!_xhReady)
+        if (!_crosshairReady)
         {
             return;
         }
@@ -1098,14 +1139,14 @@ public partial class MainWindow
         XhPreview.Picture = picture;
         XhPreview.Preset = effective;
         XhPreview.InvalidateVisual();
-        XhPreviewImage.Source = _xhNight ? _xhNightImage : _xhDayImage;
+        XhPreviewImage.Source = _crosshairNight ? _crosshairNightImage : _crosshairDayImage;
     }
 
     private void OnXhSceneClick(object sender, RoutedEventArgs e)
     {
-        _xhNight = !_xhNight;
-        XhSceneGlyph.Glyph = _xhNight ? "moon" : "sun";
-        XhSceneButton.ToolTip = _xhNight ? "Night scene" : "Day scene";
+        _crosshairNight = !_crosshairNight;
+        XhSceneGlyph.Glyph = _crosshairNight ? "moon" : "sun";
+        XhSceneButton.ToolTip = _crosshairNight ? "Night scene" : "Day scene";
         RenderCrosshairPreview();
     }
 
@@ -1132,7 +1173,7 @@ public partial class MainWindow
 
     private void OnXhShowClick(object sender, RoutedEventArgs e)
     {
-        if (_xhVisible)
+        if (_crosshairVisible)
         {
             HideCrosshair();
         }
@@ -1145,7 +1186,7 @@ public partial class MainWindow
     /// <summary>The global key. Works with the window hidden, which is the point of it.</summary>
     private void ToggleCrosshairFromKey()
     {
-        if (_xhVisible)
+        if (_crosshairVisible)
         {
             HideCrosshair();
             Flash("Crosshair off");
@@ -1162,31 +1203,31 @@ public partial class MainWindow
         try
         {
             CrosshairPreset effective = EffectiveCrosshair(_workCrosshair, out CrosshairPicture? picture);
-            (_xhCentreX, _xhCentreY) = CrosshairPlacement.ForegroundMonitorCentre();
+            (_crosshairCentreX, _crosshairCentreY) = CrosshairPlacement.ForegroundMonitorCentre();
 
-            _xhOverlay ??= new CrosshairOverlay();
-            _xhOverlay.ShowAt(effective, picture, _xhCentreX, _xhCentreY);
+            _crosshairOverlay ??= new CrosshairOverlay();
+            _crosshairOverlay.ShowAt(effective, picture, _crosshairCentreX, _crosshairCentreY);
 
-            _xhVisible = true;
-            _xhBySlot = bySlot;
+            _crosshairVisible = true;
+            _crosshairBySlot = bySlot;
         }
         catch (Exception ex)
         {
             AppLog.Error("CROSSHAIR SHOW", ex);
             // Exclusive fullscreen games cannot be overlaid by any ordinary window;
             // borderless / windowed works. Keep the button state truthful.
-            _xhVisible = false;
-            _xhBySlot = false;
+            _crosshairVisible = false;
+            _crosshairBySlot = false;
             Flash("Could not show crosshair — use borderless or windowed mode", true);
         }
 
-        if (_xhVisible)
+        if (_crosshairVisible)
         {
             // Whatever put it up - the button, the key, a slot, or the guard giving it
             // back - this is the moment it appeared, and the reading on the tab counts
             // from here.
-            _xhGuarded = false;
-            _xhShownAt = DateTime.UtcNow;
+            _crosshairGuarded = false;
+            _crosshairShownAt = DateTime.UtcNow;
         }
 
         SyncOledWatch();
@@ -1197,16 +1238,16 @@ public partial class MainWindow
     {
         try
         {
-            _xhOverlay?.HideOverlay();
+            _crosshairOverlay?.HideOverlay();
         }
         catch (Exception ex)
         {
             AppLog.Error("CROSSHAIR HIDE", ex);
         }
 
-        _xhVisible = false;
-        _xhBySlot = false;
-        _xhShownAt = null;
+        _crosshairVisible = false;
+        _crosshairBySlot = false;
+        _crosshairShownAt = null;
 
         // Stopped for a crosshair the user took down, kept for one the guard took: the
         // guard has to stay awake to notice them come back.
@@ -1220,7 +1261,7 @@ public partial class MainWindow
     /// </summary>
     private void HideSlotCrosshair()
     {
-        if (_xhVisible && _xhBySlot)
+        if (_crosshairVisible && _crosshairBySlot)
         {
             HideCrosshair();
         }
@@ -1229,7 +1270,7 @@ public partial class MainWindow
     /// <summary>Redraw what is on the screen after an edit, in the place it already is.</summary>
     private void PushCrosshairToOverlay()
     {
-        if (!_xhVisible || _xhOverlay is null)
+        if (!_crosshairVisible || _crosshairOverlay is null)
         {
             return;
         }
@@ -1237,7 +1278,7 @@ public partial class MainWindow
         try
         {
             CrosshairPreset effective = EffectiveCrosshair(_workCrosshair, out CrosshairPicture? picture);
-            _xhOverlay.ShowAt(effective, picture, _xhCentreX, _xhCentreY);
+            _crosshairOverlay.ShowAt(effective, picture, _crosshairCentreX, _crosshairCentreY);
         }
         catch (Exception ex)
         {
@@ -1265,7 +1306,7 @@ public partial class MainWindow
 
         LoadCrosshair(preset);
         ShowCrosshair(bySlot: true);
-        return _xhVisible;
+        return _crosshairVisible;
     }
 
     private void OnXhDisplaySettingsChanged(object? sender, EventArgs e)
@@ -1275,33 +1316,33 @@ public partial class MainWindow
         // anything while a crosshair is up.
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (!_xhVisible || _xhOverlay is null)
+            if (!_crosshairVisible || _crosshairOverlay is null)
             {
                 return;
             }
 
-            (_xhCentreX, _xhCentreY) = CrosshairPlacement.ForegroundMonitorCentre();
-            _xhOverlay.Recentre(_xhCentreX, _xhCentreY);
+            (_crosshairCentreX, _crosshairCentreY) = CrosshairPlacement.ForegroundMonitorCentre();
+            _crosshairOverlay.Recentre(_crosshairCentreX, _crosshairCentreY);
         }));
     }
 
     private void UpdateXhStatus()
     {
-        if (!_xhReady)
+        if (!_crosshairReady)
         {
             return;
         }
 
-        XhShowButton.Content = _xhVisible ? "Hide crosshair" : "Show on screen";
+        XhShowButton.Content = _crosshairVisible ? "Hide crosshair" : "Show on screen";
 
         // How long it has been up. The point of the number is to make an afternoon on
         // the screen visible as a fact rather than as something to remember, because
         // that is the part of OLED wear no setting can undo.
-        if (_xhVisible)
+        if (_crosshairVisible)
         {
-            XhStatusText.Text = "On screen \u00B7 " + OledGuard.OnScreenFor(_xhShownAt, DateTime.UtcNow);
+            XhStatusText.Text = "On screen \u00B7 " + OledGuard.OnScreenFor(_crosshairShownAt, DateTime.UtcNow);
         }
-        else if (_xhGuarded)
+        else if (_crosshairGuarded)
         {
             XhStatusText.Text = "Hidden while idle";
         }
@@ -1310,12 +1351,12 @@ public partial class MainWindow
             XhStatusText.Text = "Hidden";
         }
 
-        XhLiveDot.Fill = (Brush)FindResource(_xhVisible ? "Green" : "TextLow");
+        XhLiveDot.Fill = (Brush)FindResource(_crosshairVisible ? "Green" : "TextLow");
 
-        // Built-ins that have been edited become "Tuned" (empty id). Rename and
-        // Delete only make sense for a saved custom preset.
-        bool canEditMeta = _xhPresetId.Length > 0
-            && !CrosshairPreset.BuiltIns.Any(p => string.Equals(p.Id, _xhPresetId, StringComparison.OrdinalIgnoreCase));
+        // An edited built-in is still that built-in: the box says so, and Rename and
+        // Delete stay off because those only make sense for a saved custom preset.
+        bool canEditMeta = _crosshairPresetId.Length > 0
+            && !CrosshairPreset.BuiltIns.Any(p => string.Equals(p.Id, _crosshairPresetId, StringComparison.OrdinalIgnoreCase));
         XhRenameButton.IsEnabled = canEditMeta;
         XhDeleteButton.IsEnabled = canEditMeta;
     }
@@ -1327,10 +1368,10 @@ public partial class MainWindow
         {
             Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnXhDisplaySettingsChanged;
             StopOledWatch();
-            _xhSaveTimer.Stop();
-            _xhOverlay?.Close();
-            _xhOverlay = null;
-            _xhVisible = false;
+            _crosshairSaveTimer.Stop();
+            _crosshairOverlay?.Close();
+            _crosshairOverlay = null;
+            _crosshairVisible = false;
         }
         catch (Exception ex)
         {
@@ -1341,7 +1382,7 @@ public partial class MainWindow
     /// <summary>After a backup restore replaced the settings underneath the tab.</summary>
     private void ReloadCrosshairFromSettings()
     {
-        if (!_xhReady)
+        if (!_crosshairReady)
         {
             return;
         }
@@ -1365,8 +1406,9 @@ public partial class MainWindow
             _settings.CustomCrosshairs.Add(preset);
 
             _workCrosshair = preset.Copy();
-            _xhPresetId = preset.Id;
-            _xhTuned = false;
+            _crosshairBase = _workCrosshair.Copy();
+            _crosshairPresetId = preset.Id;
+            _crosshairTuned = false;
             _settings.ActiveCrosshairId = preset.Id;
             bool saved = Commit();
             RefreshCrosshairBox();
@@ -1403,8 +1445,9 @@ public partial class MainWindow
 
         _settings.CustomCrosshairs.Add(copy);
         _workCrosshair = copy.Copy();
-        _xhPresetId = copy.Id;
-        _xhTuned = false;
+        _crosshairBase = _workCrosshair.Copy();
+        _crosshairPresetId = copy.Id;
+        _crosshairTuned = false;
         _settings.ActiveCrosshairId = copy.Id;
         Commit();
         RefreshCrosshairBox();
@@ -1424,9 +1467,9 @@ public partial class MainWindow
     /// <para>
     /// A suffix already on the name is dropped first, so copying a copy gives
     /// "GREEN copy 3" rather than "GREEN copy copy 2": the suffix says which number
-    /// this one is, it is not part of the name being copied. "Tuned" is the tab's
-    /// name for an unsaved state rather than a name anyone chose, so a copy of that
-    /// starts from "Crosshair" instead of reading "Tuned copy".
+    /// this one is, it is not part of the name being copied. A blank name, or one
+    /// that is only the word "Tuned", starts from "Crosshair": that was the tab's
+    /// old name for an unsaved state and reads as no name at all.
     /// </para>
     /// </summary>
     private string FreeCrosshairName(string name)
@@ -1462,7 +1505,7 @@ public partial class MainWindow
 
     private void OnXhRenameClick(object sender, RoutedEventArgs e)
     {
-        int index = _xhPresetId.Length == 0 ? -1 : CustomCrosshairIndex(_xhPresetId);
+        int index = _crosshairPresetId.Length == 0 ? -1 : CustomCrosshairIndex(_crosshairPresetId);
         if (index < 0)
         {
             Flash("Built in crosshairs cannot be renamed", true);
@@ -1482,7 +1525,7 @@ public partial class MainWindow
 
     private void OnXhDeleteClick(object sender, RoutedEventArgs e)
     {
-        int index = _xhPresetId.Length == 0 ? -1 : CustomCrosshairIndex(_xhPresetId);
+        int index = _crosshairPresetId.Length == 0 ? -1 : CustomCrosshairIndex(_crosshairPresetId);
         if (index < 0)
         {
             Flash("Built in crosshairs stay put", true);
@@ -1606,7 +1649,7 @@ public partial class MainWindow
     // ------------------------------------------------------------- the pack
 
     /// <summary>Counts up each time the browser fills, so a fill that was interrupted knows to stop.</summary>
-    private int _xhPackLoad;
+    private int _crosshairPackLoad;
 
     /// <summary>
     /// Side of a tile's animation frame, in pixels. Larger than the tile itself so a
@@ -1628,35 +1671,49 @@ public partial class MainWindow
     private const int PackThumbSide = 96;
 
     /// <summary>Tiles that are playing, with the frame each is on.</summary>
-    private readonly List<PackPreviewPlayer> _xhPackPlayers = new();
+    private readonly List<PackPreviewPlayer> _crosshairPackPlayers = new();
 
     /// <summary>Two decodes at a time: enough to fill in quickly, few enough to leave the UI responsive.</summary>
-    private readonly SemaphoreSlim _xhPackPreviewSlots = new(2);
+    private readonly SemaphoreSlim _crosshairPackPreviewSlots = new(2);
 
-    private DispatcherTimer? _xhPackClock;
+    private DispatcherTimer? _crosshairPackClock;
 
     /// <summary>Tiles whose preview has been started but not attached yet, so the cap counts them.</summary>
-    private int _xhPackPreviewsPending;
+    private int _crosshairPackPreviewsPending;
 
     /// <summary>
     /// The folder listing taken when the browser opened. Typing in the filter box
     /// narrows this rather than reading the disk again on every keystroke. Null
     /// while the listing is still being read, and after the browser has closed.
     /// </summary>
-    private List<string>? _xhPackFiles;
+    private List<string>? _crosshairPackFiles;
 
     private async void OnXhPackClick(object sender, RoutedEventArgs e)
     {
-        if (!_xhReady)
+        if (!_crosshairReady)
         {
             return;
         }
 
+        // Guarded like every other async handler. This one was the exception, and
+        // it awaits a folder read and then decodes thumbnails: a deleted folder, a
+        // locked picture or a torn-down panel would escape to the dispatcher's
+        // unhandled path and put a modal over whatever was on screen.
+        await UiGuard.RunAsync(
+            "CROSSHAIR PACK",
+            ShowXhPackAsync,
+            _ => Flash("Could not open the picture pack", true));
+    }
+
+
+    /// <summary>Opens the pack flyout and fills it from the folder on a worker.</summary>
+    private async Task ShowXhPackAsync()
+    {
         // Open first and read after. The first launch unpacks the starter pictures
         // in the background, and EnsureFolder waits for that copy, so doing it on
         // this thread would freeze the window for as long as the copy takes.
-        int generation = ++_xhPackLoad;
-        _xhPackFiles = null;
+        int generation = ++_crosshairPackLoad;
+        _crosshairPackFiles = null;
         XhPackPanel.Children.Clear();
         XhPackCount.Text = string.Empty;
         XhPackEmpty.Text = "Loading pack...";
@@ -1665,21 +1722,21 @@ public partial class MainWindow
 
         List<string> files = await Task.Run(CrosshairPack.List);
 
-        if (generation != _xhPackLoad)
+        if (generation != _crosshairPackLoad)
         {
             // Closed (or reopened) while the folder was being read.
             return;
         }
 
-        _xhPackFiles = files;
+        _crosshairPackFiles = files;
         FillXhPack();
     }
 
     private void OnXhPackClosed(object? sender, EventArgs e)
     {
         // Let go of every thumbnail. They are rebuilt from the folder next time.
-        _xhPackLoad++;
-        _xhPackFiles = null;
+        _crosshairPackLoad++;
+        _crosshairPackFiles = null;
         ClearPackPreviews();
         XhPackPanel.Children.Clear();
         if (XhPackFilter is not null)
@@ -1718,7 +1775,7 @@ public partial class MainWindow
     {
         // Nothing to filter until the listing has arrived; FillXhPack runs then
         // and reads the box as it stands.
-        if (XhPackPopup.IsOpen && _xhPackFiles is not null)
+        if (XhPackPopup.IsOpen && _crosshairPackFiles is not null)
         {
             FillXhPack();
         }
@@ -1726,11 +1783,11 @@ public partial class MainWindow
 
     private void FillXhPack()
     {
-        int generation = ++_xhPackLoad;
+        int generation = ++_crosshairPackLoad;
         ClearPackPreviews();
         XhPackPanel.Children.Clear();
 
-        List<string> files = _xhPackFiles is null ? new List<string>() : new List<string>(_xhPackFiles);
+        List<string> files = _crosshairPackFiles is null ? new List<string>() : new List<string>(_crosshairPackFiles);
         string filter = (XhPackFilter?.Text ?? string.Empty).Trim();
         if (filter.Length > 0)
         {
@@ -1766,7 +1823,7 @@ public partial class MainWindow
 
         void Batch()
         {
-            if (generation != _xhPackLoad)
+            if (generation != _crosshairPackLoad)
             {
                 return;
             }
@@ -1861,12 +1918,12 @@ public partial class MainWindow
     /// </summary>
     private void StartPackPreview(Button tile, string path, Color colour, bool ownColours, int generation)
     {
-        if (_xhPackPlayers.Count + _xhPackPreviewsPending >= MaxAnimatedPackTiles)
+        if (_crosshairPackPlayers.Count + _crosshairPackPreviewsPending >= MaxAnimatedPackTiles)
         {
             return;
         }
 
-        _xhPackPreviewsPending++;
+        _crosshairPackPreviewsPending++;
         _ = AttachPackPreviewAsync(tile, path, colour, ownColours, generation);
     }
 
@@ -1879,12 +1936,12 @@ public partial class MainWindow
     {
         CrosshairPackPreview? preview = null;
 
-        await _xhPackPreviewSlots.WaitAsync();
+        await _crosshairPackPreviewSlots.WaitAsync();
         try
         {
             // Rechecked inside the slot: the browser may have been closed or refilled
             // while this one was queued, and decoding then is pure waste.
-            if (generation == _xhPackLoad)
+            if (generation == _crosshairPackLoad)
             {
                 preview = await Task.Run(() => CrosshairPackPreview.Build(
                     path, PackPreviewSide, ownColours ? null : colour));
@@ -1896,8 +1953,8 @@ public partial class MainWindow
         }
         finally
         {
-            _xhPackPreviewSlots.Release();
-            _xhPackPreviewsPending--;
+            _crosshairPackPreviewSlots.Release();
+            _crosshairPackPreviewsPending--;
         }
 
         // The generation is the browser's own answer to "is this still wanted":
@@ -1905,7 +1962,7 @@ public partial class MainWindow
         // close handler clears the players. That is why there is no second check on
         // the popup being open here - two guards for one fact is how the two come to
         // disagree, and it is what made this attach untestable without a real popup.
-        if (preview is null || generation != _xhPackLoad)
+        if (preview is null || generation != _crosshairPackLoad)
         {
             return;
         }
@@ -1921,7 +1978,7 @@ public partial class MainWindow
         };
 
         tile.Content = image;
-        _xhPackPlayers.Add(new PackPreviewPlayer(image, preview.Frames, preview.DelaysMs));
+        _crosshairPackPlayers.Add(new PackPreviewPlayer(image, preview.Frames, preview.DelaysMs));
         StartPackClock();
     }
 
@@ -1932,22 +1989,22 @@ public partial class MainWindow
     /// </summary>
     private void StartPackClock()
     {
-        if (_xhPackClock is null)
+        if (_crosshairPackClock is null)
         {
-            _xhPackClock = new DispatcherTimer(DispatcherPriority.Background)
+            _crosshairPackClock = new DispatcherTimer(DispatcherPriority.Background)
             {
                 Interval = TimeSpan.FromMilliseconds(PackPreviewTickMs)
             };
 
-            _xhPackClock.Tick += OnPackClockTick;
+            _crosshairPackClock.Tick += OnPackClockTick;
         }
 
-        _xhPackClock.Start();
+        _crosshairPackClock.Start();
     }
 
     private void OnPackClockTick(object? sender, EventArgs e)
     {
-        foreach (PackPreviewPlayer player in _xhPackPlayers)
+        foreach (PackPreviewPlayer player in _crosshairPackPlayers)
         {
             player.Advance(PackPreviewTickMs);
         }
@@ -1960,8 +2017,8 @@ public partial class MainWindow
     /// </summary>
     private void ClearPackPreviews()
     {
-        _xhPackClock?.Stop();
-        _xhPackPlayers.Clear();
+        _crosshairPackClock?.Stop();
+        _crosshairPackPlayers.Clear();
     }
 
     /// <summary>
@@ -2192,34 +2249,54 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Put the crosshair back to how a new one starts: default colour, size,
-    /// thickness, gap, opacity, rotation, outline, glow and center dot. The shape,
-    /// the picture and the name stay.
+    /// Put the crosshair back the way the loaded preset was, including its shape and
+    /// picture. A built-in is read again from the shipped list; a saved crosshair is
+    /// put back from the copy taken when it was opened, because its edits write through
+    /// as they are made and there is nothing older on disk to read.
     /// <para>
-    /// A picture that has colours of its own goes back to them, which is the way out
-    /// of a colour picked over a multi-coloured animation. That is read off the stored
-    /// picture rather than remembered from the import, because the file may have been
-    /// restored from a backup or imported before this setting existed.
+    /// When nothing has changed there is nothing to put back, so the button says so
+    /// instead of opening a question with only one answer. The old behaviour reset to
+    /// a new crosshair's defaults, which for an edited built-in was neither that
+    /// preset nor anything the user had chosen.
     /// </para>
     /// </summary>
     private void OnXhResetClick(object sender, RoutedEventArgs e)
     {
-        if (!_xhReady)
+        if (!_crosshairReady)
         {
             return;
         }
 
+        string name = string.IsNullOrWhiteSpace(_crosshairBase.Name) ? "this crosshair" : _crosshairBase.Name;
+
+        if (_workCrosshair.SameLook(_crosshairBase))
+        {
+            Flash("Already at " + name);
+            return;
+        }
+
         ShowConfirmModal(
-            "Reset crosshair?",
-            "The color, size, thickness, gap, opacity, rotation, outline, glow and center dot go back to their defaults. The shape and the picture stay.",
+            "Reset to " + name + "?",
+            "The color, size, thickness, gap, opacity, rotation, outline, glow, center dot, effect, shape and picture go back to how "
+                + name + " was when you loaded it. Any changes since then are dropped.",
             "Reset",
             () =>
             {
-                _workCrosshair.ResetTuning();
-                _workCrosshair.KeepOwnColours = CrosshairImageStore.PictureHasOwnColours(_workCrosshair.CustomImage);
-                OnXhEdited();
-                UpdateXhControls();
-                Flash("Crosshair reset");
+                CrosshairPreset? builtIn = CrosshairPreset.BuiltIns.FirstOrDefault(
+                    p => string.Equals(p.Id, _crosshairPresetId, StringComparison.OrdinalIgnoreCase));
+
+                if (builtIn is not null)
+                {
+                    LoadCrosshair(builtIn);
+                }
+                else
+                {
+                    _workCrosshair = _crosshairBase.Copy();
+                    OnXhEdited();
+                    UpdateXhControls();
+                }
+
+                Flash(name + " restored");
             });
     }
 
@@ -2232,11 +2309,11 @@ public partial class MainWindow
     /// </summary>
     private void CycleCrosshairFromKey()
     {
-        // A key press cannot stop to ask, and stepping on would drop tuning that has
-        // no preset behind it. Keep it and say so; the tab is one click away.
-        if (_xhTuned)
+        // A key press cannot stop to ask, and stepping on would drop the edit. Keep
+        // it and say so; the tab is one click away.
+        if (_crosshairTuned)
         {
-            Flash("Unsaved tuning kept \u00B7 save it in Crosshair to cycle", true);
+            Flash("Unsaved tuning kept \u00B7 keep or drop it in Crosshair to cycle", true);
             return;
         }
 
@@ -2248,10 +2325,10 @@ public partial class MainWindow
 
         LoadCrosshair(next);
         _settings.ActiveCrosshairId = next.Id;
-        _xhSaveTimer.Stop();
-        _xhSaveTimer.Start();
+        _crosshairSaveTimer.Stop();
+        _crosshairSaveTimer.Start();
 
-        if (!_xhVisible)
+        if (!_crosshairVisible)
         {
             ShowCrosshair(bySlot: false);
         }
@@ -2278,9 +2355,9 @@ public partial class MainWindow
             return null;
         }
 
-        int at = _xhPresetId.Length == 0
+        int at = _crosshairPresetId.Length == 0
             ? -1
-            : all.FindIndex(p => string.Equals(p.Id, _xhPresetId, StringComparison.OrdinalIgnoreCase));
+            : all.FindIndex(p => string.Equals(p.Id, _crosshairPresetId, StringComparison.OrdinalIgnoreCase));
 
         return all[(at + 1) % all.Count];
     }
@@ -2291,6 +2368,15 @@ public partial class MainWindow
     {
         if (XhCycleNextText is null)
         {
+            return;
+        }
+
+        // An edited built-in stops the key before it looks at the list, so naming the
+        // next preset here would promise something the key does not do.
+        if (_crosshairTuned)
+        {
+            XhCycleNextText.Text = "UNSAVED";
+            CrosshairCycleKeyBox.ToolTip = "Key for next crosshair - keep or drop the tuning first";
             return;
         }
 
@@ -2315,7 +2401,7 @@ public partial class MainWindow
                 Id = preset.Id,
                 Label = string.IsNullOrWhiteSpace(preset.Name) ? "Unnamed" : preset.Name.Trim(),
                 Detail = "Use this crosshair",
-                Active = string.Equals(preset.Id, _xhPresetId, StringComparison.OrdinalIgnoreCase)
+                Active = string.Equals(preset.Id, _crosshairPresetId, StringComparison.OrdinalIgnoreCase)
             });
         }
 
@@ -2336,10 +2422,10 @@ public partial class MainWindow
 
         LoadCrosshair(preset);
         _settings.ActiveCrosshairId = preset.Id;
-        _xhSaveTimer.Stop();
-        _xhSaveTimer.Start();
+        _crosshairSaveTimer.Stop();
+        _crosshairSaveTimer.Start();
 
-        if (!_xhVisible)
+        if (!_crosshairVisible)
         {
             ShowCrosshair(bySlot: false);
         }

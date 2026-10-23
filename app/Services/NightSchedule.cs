@@ -185,7 +185,13 @@ public static class NightSchedule
 
         int start = SnapToStep(startMinutes);
         int end = SnapToStep(endMinutes);
-        int minute = (int)now.TotalMinutes;
+
+        // Normalised, not truncated. A TimeSpan at or past 24 hours, or negative
+        // because a caller passed an offset rather than a time of day, used to land
+        // outside the day and be compared as if it were a real minute - which made
+        // the window question answer confidently wrong. NightFade already wraps
+        // this way; the two must agree on what a moment means.
+        int minute = (int)(((now.TotalMinutes % MinutesPerDay) + MinutesPerDay) % MinutesPerDay);
 
         // The same time in both boxes is not a zero length window. It is either a
         // filter meant to run all day, or two boxes filled in without noticing,

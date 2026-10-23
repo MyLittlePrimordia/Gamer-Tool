@@ -390,7 +390,7 @@ public sealed class AudioPreset
             : bandCount;
         return new AudioPreset
         {
-            Id = "flat",
+            Id = PresetIds.Flat,
             Name = "Flat",
             Tag = "No change",
             Bands = new double[bands],

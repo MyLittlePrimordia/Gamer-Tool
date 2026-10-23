@@ -317,6 +317,8 @@ public class FocusPauseTests
         }
 
         Xunit.Assert.NotNull(dir);
-        return File.ReadAllText(Path.Combine(dir!.FullName, Path.Combine(parts)));
+        string path = Path.Combine(dir!.FullName, Path.Combine(parts));
+
+        return SlotsSource.IsSlotsFile(path) ? SlotsSource.ReadFolder(Path.GetDirectoryName(path)!) : File.ReadAllText(path);
     }
 }

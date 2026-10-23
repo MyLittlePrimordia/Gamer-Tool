@@ -92,7 +92,7 @@ public sealed class WindowHarnessTests
                 // counted the slots yet.
                 Assert.Equal("SLOTS", h.Window.SlotCountText.Text);
                 Assert.Empty(h.Window.SlotList.Children);
-                Assert.False(h.Read<bool>("_xhReady"));
+                Assert.False(h.Read<bool>("_crosshairReady"));
             },
             WithTune);
     }

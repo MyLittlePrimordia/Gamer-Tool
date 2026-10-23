@@ -6,7 +6,7 @@ using System.Text.Json.Serialization;
 namespace GamerTool.Models;
 
 /// <summary>
-/// The shapes the crosshair tab offers. Six minimal designs and one slot for an
+/// The shapes the crosshair tab offers. Eight minimal designs and one slot for an
 /// image the user brings, and deliberately no more: the point of the feature is
 /// that every combination is a good one.
 /// </summary>

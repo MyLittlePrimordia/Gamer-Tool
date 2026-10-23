@@ -55,8 +55,11 @@ internal sealed class CrosshairTab
     /// <summary>The saved presets, in the order the dropdown lists them.</summary>
     public IReadOnlyList<CrosshairPreset> Saved => Settings.CustomCrosshairs;
 
-    /// <summary>The preset the tab is editing; empty while it reads "Tuned".</summary>
-    public string PresetId => _harness.Read<string>("_xhPresetId");
+    /// <summary>
+    /// The preset the tab is editing. It stays set while a built-in is edited, so it
+    /// names the preset the box says is edited rather than going blank.
+    /// </summary>
+    public string PresetId => _harness.Read<string>("_crosshairPresetId");
 
     /// <summary>The preset the dropdown is showing, which is what the user reads.</summary>
     public string ShownPresetId => WindowHarness.SelectedPresetId(Window.XhPresetBox);
@@ -72,13 +75,13 @@ internal sealed class CrosshairTab
     public string ModalWarning => _harness.Read<TextBlock>("_modalWarningText").Text;
 
     /// <summary>How many pack tiles are playing an animation right now.</summary>
-    public int AnimatedTiles => ((IList)_harness.Peek("_xhPackPlayers")!).Count;
+    public int AnimatedTiles => ((IList)_harness.Peek("_crosshairPackPlayers")!).Count;
 
     public bool PackClockRunning
     {
         get
         {
-            var clock = (DispatcherTimer?)_harness.Peek("_xhPackClock");
+            var clock = (DispatcherTimer?)_harness.Peek("_crosshairPackClock");
             return clock?.IsEnabled == true;
         }
     }
@@ -182,7 +185,7 @@ internal sealed class CrosshairTab
     /// <summary>Fill the pack browser from the given files instead of the user's pack folder.</summary>
     public void FillPack(params string[] paths)
     {
-        Field("_xhPackFiles").SetValue(Window, paths.ToList());
+        Field("_crosshairPackFiles").SetValue(Window, paths.ToList());
         Invoke("FillXhPack");
     }
 
@@ -198,6 +201,9 @@ internal sealed class CrosshairTab
     public void ConfirmModal() => Click(_harness.Read<Button>("_modalSaveButton"));
 
     public void CancelModal() => Click(_harness.Read<Button>("_modalCancelButton"));
+
+    /// <summary>The middle answer, on the one question that has three.</summary>
+    public void DiscardModal() => Click(_harness.Read<Button>("_modalExtraButton"));
 
     /// <summary>
     /// Run the dispatcher until <paramref name="condition"/> holds. The pack browser

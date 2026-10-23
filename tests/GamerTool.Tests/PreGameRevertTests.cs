@@ -104,8 +104,15 @@ public class PreGameRevertTests
         int panic = slots.IndexOf("private async Task HandleHotkeyAsync", StringComparison.Ordinal);
 
         Assert.True(panic >= 0);
-        Assert.Contains("GoSoundNeutralAsync()", slots[panic..], StringComparison.Ordinal);
-        Assert.DoesNotContain("RevertToPreGame", slots[panic..], StringComparison.Ordinal);
+
+        // Bounded to the handler, not to everything after it. The slots source is
+        // several partials joined in file-name order now, so "the rest of the source"
+        // runs on into the play partials, where RevertToPreGame legitimately lives.
+        int end = slots.IndexOf("\n    private ", panic + 1, StringComparison.Ordinal);
+        string body = end < 0 ? slots[panic..] : slots[panic..end];
+
+        Assert.Contains("GoSoundNeutralAsync()", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("RevertToPreGame", body, StringComparison.Ordinal);
     }
 
     private static string AppSource(string name)
@@ -118,6 +125,8 @@ public class PreGameRevertTests
         }
 
         Assert.NotNull(dir);
-        return File.ReadAllText(Path.Combine(dir!.FullName, "app", name));
+        string path = Path.Combine(dir!.FullName, "app", name);
+
+        return SlotsSource.IsSlotsFile(path) ? SlotsSource.ReadFolder(Path.GetDirectoryName(path)!) : File.ReadAllText(path);
     }
 }

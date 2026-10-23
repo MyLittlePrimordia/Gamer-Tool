@@ -203,7 +203,7 @@ public class ToastPlacementTests
         // launcher or this app. Losing the argument here would put the toast back
         // on the screen the game is not about to open on, and nothing else would
         // notice.
-        string source = File.ReadAllText(RepoFile(Path.Combine("app", "MainWindow.Slots.cs")));
+        string source = SlotsSource.ReadNear(RepoFile(Path.Combine("app", "MainWindow.Slots.cs")));
 
         Assert.Contains("Flash(slot.Name + \" loaded\", ScreenForSlot(slot));", source);
         Assert.Contains("Flash(message, warn, ScreenForSlot(slot));", source);

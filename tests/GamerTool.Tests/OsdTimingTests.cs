@@ -174,7 +174,7 @@ public class OsdTimingTests
         // write, so a slot key did nothing visible for a beat. The order is
         // asserted rather than the timing, because this is the only part of it
         // that a person watching a screen would call a delay.
-        string source = System.IO.File.ReadAllText(FindRepoFile(System.IO.Path.Combine("app", "MainWindow.Slots.cs")));
+        string source = SlotsSource.ReadNear(FindRepoFile(System.IO.Path.Combine("app", "MainWindow.Slots.cs")));
 
         int announce = source.IndexOf("Flash(slot.Name + \" loaded\"", StringComparison.Ordinal);
         int apply = source.IndexOf("ApplyAudioToDevice(audio.Copy(), false, slot);", StringComparison.Ordinal);
@@ -197,7 +197,7 @@ public class OsdTimingTests
     {
         // Said up front is a claim, not a report. The amber correction is what
         // keeps it honest, so it has to still be there.
-        string source = System.IO.File.ReadAllText(FindRepoFile(System.IO.Path.Combine("app", "MainWindow.Slots.cs")));
+        string source = SlotsSource.ReadNear(FindRepoFile(System.IO.Path.Combine("app", "MainWindow.Slots.cs")));
 
         Assert.Contains("SCREEN BLOCKED", source);
         Assert.Contains("loaded, screen did not take it", source);

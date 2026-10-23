@@ -26,7 +26,7 @@ public class UndoLoadTests
         }
 
         Assert.NotNull(dir);
-        return File.ReadAllText(Path.Combine(dir!.FullName, "app", "MainWindow.Slots.cs"));
+        return SlotsSource.ReadFolder(Path.Combine(dir!.FullName, "app"));
     }
 
     private static string Read(string name)

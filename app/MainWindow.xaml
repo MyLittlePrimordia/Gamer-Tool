@@ -1284,7 +1284,12 @@
                             </Grid>
                             <Border Grid.Row="0" Style="{StaticResource Hairline}" VerticalAlignment="Bottom" Margin="18,0" />
 
-                            <ScrollViewer Grid.Row="1" x:Name="SlotScroll" Padding="18,16,6,0"
+                            <!-- 8 at the bottom, not the 16 the top has: every card carries its
+                                 own 8px bottom margin, so 8 here is what gives the last card the
+                                 same 16px below it that the first caption has above. 16 here was
+                                 a 24px gap at the end of the list and nothing at all before the
+                                 card margin was counted. -->
+                            <ScrollViewer Grid.Row="1" x:Name="SlotScroll" Padding="18,16,6,8"
                                           VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                                 <ScrollViewer.Resources>
                                     <Style TargetType="ScrollBar" BasedOn="{StaticResource SlimScroll}" />
@@ -2363,8 +2368,8 @@
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                     <Button x:Name="XhResetButton" Content="Reset" Style="{StaticResource GhostButton}"
                                             Margin="0,0,10,0" Click="OnXhResetClick"
-                                            ToolTip="Back to the default color and tuning, keeping this shape and picture"
-                                            AutomationProperties.Name="Reset the crosshair to its defaults" />
+                                            ToolTip="Back to this preset as you loaded it"
+                                            AutomationProperties.Name="Reset the crosshair to its preset" />
                                     <Button x:Name="XhShowButton" Content="Show on screen" Style="{StaticResource PrimaryButtonCrosshair}" MinWidth="150"
                                             VerticalAlignment="Center" Click="OnXhShowClick" AutomationProperties.Name="Show or hide the crosshair" />
                                 </StackPanel>

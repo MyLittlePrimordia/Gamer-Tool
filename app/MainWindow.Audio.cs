@@ -920,8 +920,14 @@ public partial class MainWindow : Window
                         gateVersion = (info.ProductVersion ?? string.Empty).Split(' ')[0].Trim();
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    // Logged rather than swallowed: this probe only fails when the
+                    // installed binary cannot be read, and the gate note below is the
+                    // one thing that tells the user their engine is too old for EQ
+                    // control. A silent failure here left them with no explanation
+                    // for controls the engine was ignoring.
+                    TraceLog.Write("FX VERSION PROBE", ex);
                 }
             }
 
@@ -1140,15 +1146,15 @@ public partial class MainWindow : Window
                 Dashed = true
             };
 
-        // A band at 0 dB is flat, so that is where its magnet sits.
-        SliderSnap.SetNeutral(slider, 0.0);
+            // A band at 0 dB is flat, so that is where its magnet sits.
+            SliderSnap.SetNeutral(slider, 0.0);
 
-        // Half a step, so the magnet only takes hold of a value that is genuinely
-        // nearer zero than the finest real setting. It used to be 0.4, which was
-        // right for a half decibel step and quietly ate the quarter ones: 0.25 is
-        // within 0.4 of zero, so +0.25 and -0.25 both snapped back to flat and the
-        // finer step could not be reached at all.
-        SliderSnap.SetThreshold(slider, 0.125);
+            // Half a step, so the magnet only takes hold of a value that is genuinely
+            // nearer zero than the finest real setting. It used to be 0.4, which was
+            // right for a half decibel step and quietly ate the quarter ones: 0.25 is
+            // within 0.4 of zero, so +0.25 and -0.25 both snapped back to flat and the
+            // finer step could not be reached at all.
+            SliderSnap.SetThreshold(slider, 0.125);
 
             slider.ValueChanged += OnBandChanged;
 
@@ -2016,7 +2022,7 @@ public partial class MainWindow : Window
         // playing - and the next launch reloaded the untouched original, so the
         // edit looked like it had been thrown away. A tune the user has not given
         // a name to is not a preset, and says so.
-        bool isNamedPreset = !string.Equals(preset.Id, "flat", StringComparison.OrdinalIgnoreCase)
+        bool isNamedPreset = !string.Equals(preset.Id, PresetIds.Flat, StringComparison.OrdinalIgnoreCase)
             && FindAudio(preset.Id) is not null;
 
         if (isNamedPreset)
@@ -2384,14 +2390,14 @@ public partial class MainWindow : Window
                 }
 
                 SessionState.Current.AudioTouched = false;
-                _activeAudioId = "flat";
+                _activeAudioId = PresetIds.Flat;
 
                 // Persisted as well as set in memory, for the same reason the screen
                 // reset does it. Reached by the Reset button, the panic key, a slot
                 // being switched off, and a game exiting, and without this the sound
                 // went to Flat on screen while the profile went on remembering the
                 // preset that was applied before it.
-                _settings.ActiveAudioPresetId = "flat";
+                _settings.ActiveAudioPresetId = PresetIds.Flat;
 
                 // Read here rather than before the wait, so it is the band count
                 // the panel has now rather than the one it had several seconds ago.
@@ -2411,16 +2417,14 @@ public partial class MainWindow : Window
 
     private async void OnResetSoundClick(object sender, RoutedEventArgs e)
     {
-        try
-        {
-            await GoSoundNeutralAsync();
-            Flash("Sound back to normal");
-        }
-        catch (Exception ex)
-        {
-            TraceLog.Write("RESET SOUND CLICK", ex);
-            Flash("Could not reset the sound. Details are in the log.", true);
-        }
+        await UiGuard.RunAsync(
+            "RESET SOUND CLICK",
+            async () =>
+            {
+                await GoSoundNeutralAsync();
+                Flash("Sound back to normal");
+            },
+            _ => Flash("Could not reset the sound. Details are in the log.", true));
     }
 
 

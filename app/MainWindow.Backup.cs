@@ -68,15 +68,10 @@ public partial class MainWindow : Window
 
     private async void OnRestoreClick(object sender, RoutedEventArgs e)
     {
-        try
-        {
-            await PickAndRestoreAsync();
-        }
-        catch (Exception ex)
-        {
-            TraceLog.Write("RESTORE CLICK", ex);
-            Flash("Could not restore that backup. Details are in the log.", true);
-        }
+        await UiGuard.RunAsync(
+            "RESTORE CLICK",
+            () => PickAndRestoreAsync(),
+            _ => Flash("Could not restore that backup. Details are in the log.", true));
     }
 
     /// <summary>

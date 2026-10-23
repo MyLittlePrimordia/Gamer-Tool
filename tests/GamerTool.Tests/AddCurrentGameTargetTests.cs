@@ -238,7 +238,11 @@ public class AddCurrentGameWiringTests
         }
 
         Assert.NotNull(dir);
-        return System.IO.File.ReadAllText(System.IO.Path.Combine(dir!.FullName, "app", file));
+        string path = System.IO.Path.Combine(dir!.FullName, "app", file);
+
+        return SlotsSource.IsSlotsFile(path)
+            ? SlotsSource.ReadFolder(System.IO.Path.GetDirectoryName(path)!)
+            : System.IO.File.ReadAllText(path);
     }
 
     private static string Body(string source, string signature)

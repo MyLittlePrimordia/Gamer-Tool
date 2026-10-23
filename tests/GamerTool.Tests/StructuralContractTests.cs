@@ -34,7 +34,16 @@ public class StructuralContractTests
     private static readonly string[] WindowPartials =
     {
         "MainWindow.xaml.cs",
-        "MainWindow.Slots.cs",
+        "MainWindow.Slots.Apps.cs",
+        "MainWindow.Slots.Board.cs",
+        "MainWindow.Slots.Keys.cs",
+        "MainWindow.Slots.Pickers.cs",
+        "MainWindow.Slots.Play.cs",
+        "MainWindow.Slots.Play.Launch.cs",
+        "MainWindow.Slots.Play.Undo.cs",
+        "MainWindow.Slots.Watch.cs",
+        "MainWindow.Slots.Routing.cs",
+        "MainWindow.Slots.Rows.cs",
         "MainWindow.Audio.cs",
         "MainWindow.Display.cs",
         "MainWindow.Night.cs",
@@ -117,15 +126,15 @@ public class StructuralContractTests
     [InlineData("MainWindow.xaml.cs", "private void UpdateLiveLabels()")]
     [InlineData("MainWindow.xaml.cs", "private void RefreshTraySlots()")]
     [InlineData("MainWindow.xaml.cs", "internal static TimeSpan FxPollInterval(bool onScreen)")]
-    [InlineData("MainWindow.Slots.cs", "private void PlaySlot(")]
-    [InlineData("MainWindow.Slots.cs", "private void BuildSlots()")]
-    [InlineData("MainWindow.Slots.cs", "private void RegisterHotkeys()")]
-    [InlineData("MainWindow.Slots.cs", "private async void OnHotkeyPressed(HotkeyBinding binding)")]
-    [InlineData("MainWindow.Slots.cs", "private void WireKeycap(TextBox box, KeycapCapture which)")]
+    [InlineData("MainWindow.Slots.Play.cs", "private void PlaySlot(")]
+    [InlineData("MainWindow.Slots.Rows.cs", "private void BuildSlots()")]
+    [InlineData("MainWindow.Slots.Keys.cs", "private void RegisterHotkeys()")]
+    [InlineData("MainWindow.Slots.Keys.cs", "private async void OnHotkeyPressed(HotkeyBinding binding)")]
+    [InlineData("MainWindow.Slots.Keys.cs", "private void WireKeycap(TextBox box, KeycapCapture which)")]
     [InlineData("Services/SlotService.cs", "public static string NameForCurrentGame(WatchedWindow window)")]
-    [InlineData("MainWindow.Slots.cs", "internal static bool ShouldPauseForFocusLoss(")]
-    [InlineData("MainWindow.Slots.cs", "private static void ResolveAppIcons(List<AppCandidate> candidates)")]
-    [InlineData("MainWindow.Slots.cs", "private void WarmAppIcons()")]
+    [InlineData("MainWindow.Slots.Watch.cs", "internal static bool ShouldPauseForFocusLoss(")]
+    [InlineData("MainWindow.Slots.Apps.cs", "private static void ResolveAppIcons(List<AppCandidate> candidates)")]
+    [InlineData("MainWindow.Slots.Apps.cs", "private void WarmAppIcons()")]
     [InlineData("MainWindow.Audio.cs", "private void QueueLiveTune()")]
     [InlineData("MainWindow.Audio.cs", "private void PushLiveTune()")]
     [InlineData("MainWindow.Audio.cs", "private void ApplyEngineState(FxSoundState state)")]
@@ -143,15 +152,21 @@ public class StructuralContractTests
     }
 
     [Fact]
-    public void TheUndoFlagIsStillDeclaredInTheSlotPartial()
+    public void TheUndoFlagIsStillDeclaredInTheSlotPlayPartials()
     {
         // Pinned on its own because it is the one private *field* a test reads by
         // name, and because it is the field a refactor of the undo state would most
-        // naturally move. Whatever ends up owning the value, the declaration has to
-        // stay here: UndoLoadTests reads this file and asserts on this exact text.
-        string slots = File.ReadAllText(Path.Combine(AppRoot(), "MainWindow.Slots.cs"));
+        // naturally move. The undo state belongs to the play flow, which is now
+        // three files, so this reads them all in file-name order rather than naming
+        // one: the declaration has to stay somewhere in the play partials, and
+        // UndoLoadTests reads the same joined source for this exact text.
+        string play = string.Join(
+            "\n",
+            Directory.GetFiles(AppRoot(), "MainWindow.Slots.Play*.cs")
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .Select(File.ReadAllText));
 
-        Assert.Contains("private bool _undoAvailable;", slots, StringComparison.Ordinal);
+        Assert.Contains("private bool _undoAvailable;", play, StringComparison.Ordinal);
     }
 
     /// <summary>

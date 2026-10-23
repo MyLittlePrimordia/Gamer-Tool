@@ -1276,7 +1276,7 @@ public partial class MainWindow : Window
         _appliedMonitor = string.Empty;
         UpdateScreenHdrNote();
         _liveDisplayName = "STANDARD";
-        _activeDisplayId = "flat";
+        _activeDisplayId = PresetIds.Flat;
 
         // Persisted as well as set in memory. This path is reached by the Reset
         // button, the panic key, and switching a loaded slot off, and all three of
@@ -1286,7 +1286,7 @@ public partial class MainWindow : Window
         // the app came back up on the previous preset. A reset that does not
         // survive a restart is the exact behaviour the remember-last-used setting
         // is supposed to prevent.
-        _settings.ActiveDisplayPresetId = "flat";
+        _settings.ActiveDisplayPresetId = PresetIds.Flat;
 
         // Everything the app was holding on the user's behalf, released in one
         // named step. It is a separate method because three of its five parts are
